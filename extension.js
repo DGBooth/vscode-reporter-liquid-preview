@@ -3,6 +3,73 @@ const vscode = require('vscode');
 const liquid = require('liquidjs');
 const liquidEngine = new liquid();
 
+// register custom Liquid tags used in templates
+registerCustomTags(liquidEngine);
+
+function registerCustomTags(engine) {
+    // optional tag simply renders its inner content
+    engine.registerTag('optional', {
+        parse(tagToken, remainTokens) {
+            this.templates = [];
+            const stream = this.liquid.parser.parseStream(remainTokens)
+                .on('tag:endoptional', () => stream.stop())
+                .on('template', tpl => this.templates.push(tpl))
+                .on('end', () => { throw new Error('optional tag not closed'); });
+            stream.start();
+        },
+        render(ctx) {
+            return this.liquid.renderer.renderTemplates(this.templates, ctx);
+        }
+    });
+
+    // editor tag renders the default text between editor/endeditor
+    engine.registerTag('editor', {
+        parse(tagToken, remainTokens) {
+            this.templates = [];
+            // first quoted argument is the tag id
+            const match = tagToken.args && tagToken.args.match(/"([^"]+)"|'([^']+)'/);
+            this.id = match && (match[1] || match[2]);
+
+            const stream = this.liquid.parser.parseStream(remainTokens)
+                .on('tag:endeditor', () => stream.stop())
+                .on('template', tpl => this.templates.push(tpl))
+                .on('end', () => { throw new Error('editor tag not closed'); });
+            stream.start();
+        },
+        async render(ctx) {
+            const value = await this.liquid.renderer.renderTemplates(this.templates, ctx);
+            // expose default value using fields object keyed by tag id
+            if (this.id) {
+                let fields = ctx.get('fields');
+                if (!fields) {
+                    fields = {};
+                    ctx.set('fields', fields);
+                }
+                fields[this.id] = value;
+            }
+            return value;
+        }
+    });
+
+    // choice tag supports multiple blocks separated by 'or'.
+    // The preview simply renders the first block.
+    engine.registerTag('choice', {
+        parse(tagToken, remainTokens) {
+            this.parts = [[]];
+            const stream = this.liquid.parser.parseStream(remainTokens)
+                .on('tag:or', () => this.parts.push([]))
+                .on('tag:endchoice', () => stream.stop())
+                .on('template', tpl => this.parts[this.parts.length - 1].push(tpl))
+                .on('end', () => { throw new Error('choice tag not closed'); });
+            stream.start();
+            this.templates = this.parts[0];
+        },
+        render(ctx) {
+            return this.liquid.renderer.renderTemplates(this.templates, ctx);
+        }
+    });
+}
+
 function activate(context) {
     let templateStatusBarItem;
     let dataStatusBarItem;
