@@ -26,7 +26,8 @@
         "Live Preview"
     ],
     "activationEvents": [
-        "onCommand:shopifyLiquidPreview.preview"
+        "onCommand:shopifyLiquidPreview.preview",
+        "onCommand:shopifyLiquidPreview.htmlPreview"
     ],
     "main": "./extension.js",
     "contributes": {
@@ -42,12 +43,21 @@
             {
                 "command": "shopifyLiquidPreview.preview",
                 "title": "Shopify Liquid: Open Preview to the Side"
+            },
+            {
+                "command": "shopifyLiquidPreview.htmlPreview",
+                "title": "Shopify Liquid: Open HTML Preview to the Side"
             }
         ],
         "keybindings": [
             {
                 "command": "shopifyLiquidPreview.preview",
                 "key": "ctrl+k v",
+                "when": "editorLangId == liquid"
+            },
+            {
+                "command": "shopifyLiquidPreview.htmlPreview",
+                "key": "ctrl+k h",
                 "when": "editorLangId == liquid"
             }
         ]

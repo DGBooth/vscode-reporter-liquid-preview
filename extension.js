@@ -121,7 +121,34 @@ function activate(context) {
         }
     }));
 
-    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument((textDocumentChangeEvent) => {
+    // HTML preview panels, keyed by preview id
+    let htmlPreviews = {};
+
+    context.subscriptions.push(vscode.commands.registerCommand('shopifyLiquidPreview.htmlPreview', async () => {
+        let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+        if (document) {
+            let preview = createNewPreview(document);
+            await updatePreviewDataFile(preview);
+
+            let panel = vscode.window.createWebviewPanel(
+                'shopifyLiquidHtmlPreview',
+                'HTML Preview: ' + path.basename(document.fileName),
+                vscode.ViewColumn.Beside,
+                { enableScripts: false }
+            );
+
+            htmlPreviews[preview.id] = { preview, panel };
+
+            await refreshHtmlPanel(preview, panel);
+
+            panel.onDidDispose(() => {
+                delete htmlPreviews[preview.id];
+            });
+        }
+    }));
+
+    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async (textDocumentChangeEvent) => {
+        // Update text previews
         let documentPreviews = getDocumentPreviews(previewContentProvider, textDocumentChangeEvent.document);
         for (let documentPreview of documentPreviews) {
             if (documentPreview.isTemplate || documentPreview.isData) {
@@ -129,6 +156,18 @@ function activate(context) {
                 documentPreview.preview.dataDirty = documentPreview.isData;
 
                 previewContentProvider.onDidChangeEmitter.fire(documentPreview.preview.uri());
+            }
+        }
+
+        // Update HTML previews
+        for (let id in htmlPreviews) {
+            let { preview, panel } = htmlPreviews[id];
+            let isTemplate = preview.templateUri === textDocumentChangeEvent.document.fileName;
+            let isData = preview.dataUri === textDocumentChangeEvent.document.fileName;
+            if (isTemplate || isData) {
+                preview.templateDirty = isTemplate;
+                preview.dataDirty = isData;
+                await refreshHtmlPanel(preview, panel);
             }
         }
     }));
@@ -140,6 +179,41 @@ function activate(context) {
     dataStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
     dataStatusBarItem.show();
     context.subscriptions.push(dataStatusBarItem);
+}
+
+async function refreshHtmlPanel(preview, panel) {
+    if (preview.templateUri && preview.templateDirty) {
+        try {
+            let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
+            preview.template = liquidEngine.parse(templateDocument.getText());
+            preview.templateDirty = false;
+        } catch (err) {
+            panel.webview.html = buildErrorHtml('Template error', err.message);
+            return;
+        }
+    }
+
+    if (preview.dataUri && preview.dataDirty) {
+        try {
+            let dataDocument = await vscode.workspace.openTextDocument(preview.dataUri);
+            preview.data = JSON.parse(dataDocument.getText());
+            preview.dataDirty = false;
+        } catch (err) {
+            panel.webview.html = buildErrorHtml('Data error', err.message);
+            return;
+        }
+    }
+
+    try {
+        let rendered = await liquidEngine.render(preview.template, preview.data);
+        panel.webview.html = rendered;
+    } catch (err) {
+        panel.webview.html = buildErrorHtml('Render error', err.message);
+    }
+}
+
+function buildErrorHtml(title, message) {
+    return `<!DOCTYPE html><html><body><h3 style="color:red">${title}</h3><pre>${message}</pre></body></html>`;
 }
 
 function createNewPreview(document) {
