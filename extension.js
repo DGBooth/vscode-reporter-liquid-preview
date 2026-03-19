@@ -107,9 +107,9 @@ function activate(context) {
     }
     context.subscriptions.push(previewContentProvider);
 
-    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('shopify-liquid-preview', previewContentProvider));
+    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('reporter-liquid-preview', previewContentProvider));
 
-    context.subscriptions.push(vscode.commands.registerCommand('shopifyLiquidPreview.preview', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.preview', async () => {
         let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
         if (document) {
             let preview = createNewPreview(document);
@@ -124,7 +124,7 @@ function activate(context) {
     // HTML preview panels, keyed by preview id
     let htmlPreviews = {};
 
-    context.subscriptions.push(vscode.commands.registerCommand('shopifyLiquidPreview.htmlPreview', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.htmlPreview', async () => {
         let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
         if (document) {
             let preview = createNewPreview(document);
@@ -261,7 +261,7 @@ function createNewPreview(document) {
             let dataFileString = dataFile ? dataFile + ' + ' : '';
             let previewFile = 'Preview ' + dataFileString + templateFile + '?id=' + id;
 
-            return vscode.Uri.parse('shopify-liquid-preview:' + previewFile);
+            return vscode.Uri.parse('reporter-liquid-preview:' + previewFile);
         },
         templateUri: document.fileName,
         templateDirty: true,
