@@ -136,6 +136,9 @@ function activate(context) {
     // HTML preview panels, keyed by preview id
     let htmlPreviews = {};
 
+    // Full HTML preview panels (liquid-stripped), keyed by preview id
+    let htmlFullPreviews = {};
+
     context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.htmlPreview', async () => {
         let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
         if (document) {
@@ -156,6 +159,29 @@ function activate(context) {
 
             panel.onDidDispose(() => {
                 delete htmlPreviews[preview.id];
+            });
+        }
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.fullHtmlPreview', async () => {
+        let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+        if (document) {
+            let preview = createNewPreview(document);
+
+            let workspaceFolders = (vscode.workspace.workspaceFolders || []).map(f => f.uri);
+            let panel = vscode.window.createWebviewPanel(
+                'shopifyLiquidFullHtmlPreview',
+                'Full HTML Preview: ' + path.basename(document.fileName),
+                vscode.ViewColumn.Beside,
+                { enableScripts: false, localResourceRoots: workspaceFolders }
+            );
+
+            htmlFullPreviews[preview.id] = { preview, panel };
+
+            await refreshHtmlFullPanel(preview, panel);
+
+            panel.onDidDispose(() => {
+                delete htmlFullPreviews[preview.id];
             });
         }
     }));
@@ -183,6 +209,14 @@ function activate(context) {
                 await refreshHtmlPanel(preview, panel);
             }
         }
+
+        // Update full HTML previews
+        for (let id in htmlFullPreviews) {
+            let { preview, panel } = htmlFullPreviews[id];
+            if (preview.templateUri === textDocumentChangeEvent.document.fileName) {
+                await refreshHtmlFullPanel(preview, panel);
+            }
+        }
     }));
 
     templateStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
@@ -192,6 +226,31 @@ function activate(context) {
     dataStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
     dataStatusBarItem.show();
     context.subscriptions.push(dataStatusBarItem);
+}
+
+function stripLiquid(text) {
+    // Remove all liquid tags {% ... %} and output expressions {{ ... }}
+    // leaving only the raw HTML content from every branch
+    return text
+        .replace(/\{%-?[\s\S]*?-?%\}/g, '')
+        .replace(/\{\{-?[\s\S]*?-?\}\}/g, '');
+}
+
+async function refreshHtmlFullPanel(preview, panel) {
+    let errors = [];
+    let content = '';
+
+    try {
+        let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
+        content = stripLiquid(templateDocument.getText());
+        preview.lastRenderedHtml = content;
+    } catch (err) {
+        errors.push({ title: 'Template error', message: err.message });
+        content = preview.lastRenderedHtml || '';
+    }
+
+    let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
+    panel.webview.html = buildPreviewHtml(cssLinks, content, errors);
 }
 
 async function refreshHtmlPanel(preview, panel) {

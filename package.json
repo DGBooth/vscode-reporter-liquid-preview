@@ -27,7 +27,8 @@
     ],
     "activationEvents": [
         "onCommand:reporterLiquidPreview.preview",
-        "onCommand:reporterLiquidPreview.htmlPreview"
+        "onCommand:reporterLiquidPreview.htmlPreview",
+        "onCommand:reporterLiquidPreview.fullHtmlPreview"
     ],
     "main": "./extension.js",
     "contributes": {
@@ -47,6 +48,10 @@
             {
                 "command": "reporterLiquidPreview.htmlPreview",
                 "title": "Reporter Liquid: Open HTML Preview to the Side"
+            },
+            {
+                "command": "reporterLiquidPreview.fullHtmlPreview",
+                "title": "Reporter Liquid: Open Full HTML Preview to the Side"
             }
         ],
         "keybindings": [
@@ -58,6 +63,11 @@
             {
                 "command": "reporterLiquidPreview.htmlPreview",
                 "key": "ctrl+k h",
+                "when": "editorLangId == liquid"
+            },
+            {
+                "command": "reporterLiquidPreview.fullHtmlPreview",
+                "key": "ctrl+k f",
                 "when": "editorLangId == liquid"
             }
         ]
