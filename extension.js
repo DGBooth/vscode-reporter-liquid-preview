@@ -229,11 +229,55 @@ function activate(context) {
 }
 
 function stripLiquid(text) {
-    // Remove all liquid tags {% ... %} and output expressions {{ ... }}
-    // leaving only the raw HTML content from every branch
-    return text
-        .replace(/\{%-?[\s\S]*?-?%\}/g, '')
-        .replace(/\{\{-?[\s\S]*?-?\}\}/g, '');
+    let optionCount = 0;
+
+    // choice / or / endchoice → numbered option boxes
+    text = text.replace(/\{%-?\s*(choice|or|endchoice)\s*-?%\}/g, (_, tag) => {
+        if (tag === 'choice') {
+            optionCount = 1;
+            return '<div class="lp-choice-block"><div class="lp-option"><span class="lp-label">Option 1</span>';
+        } else if (tag === 'or') {
+            optionCount++;
+            return `</div><div class="lp-option"><span class="lp-label">Option ${optionCount}</span>`;
+        } else {
+            return '</div></div>';
+        }
+    });
+
+    // optional / endoptional → styled optional box
+    text = text.replace(/\{%-?\s*optional\s*-?%\}/g,
+        '<div class="lp-optional"><span class="lp-label">Optional</span>');
+    text = text.replace(/\{%-?\s*endoptional\s*-?%\}/g, '</div>');
+
+    // editor / endeditor → styled editor box
+    text = text.replace(/\{%-?\s*editor\s*-?%\}/g,
+        '<div class="lp-editor"><span class="lp-label">Editable</span>');
+    text = text.replace(/\{%-?\s*endeditor\s*-?%\}/g, '</div>');
+
+    // if / elsif / else / endif → styled branch boxes
+    text = text.replace(/\{%-?\s*if\s+(.*?)-?%\}/g, (_, cond) =>
+        `<div class="lp-if-block"><div class="lp-branch"><span class="lp-label">If: ${escapeHtml(cond.trim())}</span>`);
+    text = text.replace(/\{%-?\s*elsif\s+(.*?)-?%\}/g, (_, cond) =>
+        `</div><div class="lp-branch"><span class="lp-label">Else if: ${escapeHtml(cond.trim())}</span>`);
+    text = text.replace(/\{%-?\s*else\s*-?%\}/g,
+        '</div><div class="lp-branch"><span class="lp-label">Else</span>');
+    text = text.replace(/\{%-?\s*endif\s*-?%\}/g, '</div></div>');
+
+    // unless / endunless → styled branch box
+    text = text.replace(/\{%-?\s*unless\s+(.*?)-?%\}/g, (_, cond) =>
+        `<div class="lp-if-block"><div class="lp-branch"><span class="lp-label">Unless: ${escapeHtml(cond.trim())}</span>`);
+    text = text.replace(/\{%-?\s*endunless\s*-?%\}/g, '</div></div>');
+
+    // for / endfor → styled loop box
+    text = text.replace(/\{%-?\s*for\s+(.*?)-?%\}/g, (_, expr) =>
+        `<div class="lp-loop"><span class="lp-label">For: ${escapeHtml(expr.trim())}</span>`);
+    text = text.replace(/\{%-?\s*endfor\s*-?%\}/g, '</div>');
+
+    // Strip all remaining liquid tags and output expressions
+    text = text.replace(/\{%-?[\s\S]*?-?%\}/g, '');
+    text = text.replace(/\{\{-?[\s\S]*?-?\}\}/g, '');
+
+    return text;
 }
 
 async function refreshHtmlFullPanel(preview, panel) {
@@ -249,8 +293,25 @@ async function refreshHtmlFullPanel(preview, panel) {
         content = preview.lastRenderedHtml || '';
     }
 
+    const fullPreviewStyles = `
+  .lp-choice-block { border: 2px solid #1976d2; border-radius: 4px; margin: 8px 0; overflow: hidden; }
+  .lp-option { border-left: 4px solid #1976d2; background: #e3f2fd; padding: 6px 10px; }
+  .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
+  .lp-optional { border: 2px dashed #388e3c; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: #f1f8e9; }
+  .lp-editor { border: 2px solid #f57c00; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: #fff8e1; }
+  .lp-if-block { border: 2px solid #7b1fa2; border-radius: 4px; margin: 8px 0; overflow: hidden; }
+  .lp-branch { border-left: 4px solid #7b1fa2; background: #f3e5f5; padding: 6px 10px; }
+  .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
+  .lp-loop { border: 2px solid #00796b; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: #e0f2f1; }
+  .lp-label { display: inline-block; font-size: 10px; font-weight: bold; font-family: sans-serif; color: white; padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+  .lp-choice-block .lp-label { background: #1976d2; }
+  .lp-optional .lp-label { background: #388e3c; }
+  .lp-editor .lp-label { background: #f57c00; }
+  .lp-if-block .lp-label { background: #7b1fa2; }
+  .lp-loop .lp-label { background: #00796b; }`;
+
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, content, errors);
+    panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles);
 }
 
 async function refreshHtmlPanel(preview, panel) {
@@ -324,7 +385,7 @@ function buildCssLinks(templateUri, webview) {
         .join('\n');
 }
 
-function buildPreviewHtml(cssLinks, rendered, errors) {
+function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
     const haserrors = errors.length > 0;
     const errorPaneHtml = haserrors ? `
 <div id="error-pane">
@@ -341,7 +402,7 @@ function buildPreviewHtml(cssLinks, rendered, errors) {
   .error-block { margin-bottom: 6px; }
   .error-block:last-child { margin-bottom: 0; }
   .error-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #f14c4c; margin-bottom: 2px; }
-  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #f48771; white-space: pre-wrap; word-break: break-word; }
+  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #f48771; white-space: pre-wrap; word-break: break-word; }${extraStyles}
 </style>
 ${cssLinks}
 </head>
