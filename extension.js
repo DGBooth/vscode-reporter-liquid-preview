@@ -195,14 +195,16 @@ function activate(context) {
 }
 
 async function refreshHtmlPanel(preview, panel) {
+    let errors = [];
+
     if (preview.templateUri && preview.templateDirty) {
         try {
             let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
             preview.template = liquidEngine.parse(templateDocument.getText());
             preview.templateDirty = false;
         } catch (err) {
-            panel.webview.html = buildErrorHtml('Template error', err.message);
-            return;
+            // Keep the previously parsed template so rendering can still proceed
+            errors.push({ title: 'Template error', message: err.message });
         }
     }
 
@@ -212,18 +214,22 @@ async function refreshHtmlPanel(preview, panel) {
             preview.data = JSON.parse(dataDocument.getText());
             preview.dataDirty = false;
         } catch (err) {
-            panel.webview.html = buildErrorHtml('Data error', err.message);
-            return;
+            // Keep the previously parsed data so rendering can still proceed
+            errors.push({ title: 'Data error', message: err.message });
         }
     }
 
+    let rendered;
     try {
-        let rendered = await liquidEngine.render(preview.template, preview.data);
-        let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-        panel.webview.html = '<style>body { background-color: white; color: black; } h1, h2, h3, h4, h5, h6 { color: black; }</style>\n' + cssLinks + rendered;
+        rendered = await liquidEngine.render(preview.template, preview.data);
+        preview.lastRenderedHtml = rendered;
     } catch (err) {
-        panel.webview.html = buildErrorHtml('Render error', err.message);
+        errors.push({ title: 'Render error', message: err.message });
+        rendered = preview.lastRenderedHtml || '';
     }
+
+    let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
+    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors);
 }
 
 function buildCssLinks(templateUri, webview) {
@@ -259,8 +265,40 @@ function buildCssLinks(templateUri, webview) {
         .join('\n');
 }
 
-function buildErrorHtml(title, message) {
-    return `<!DOCTYPE html><html><body><h3 style="color:red">${title}</h3><pre>${message}</pre></body></html>`;
+function buildPreviewHtml(cssLinks, rendered, errors) {
+    const haserrors = errors.length > 0;
+    const errorPaneHtml = haserrors ? `
+<div id="error-pane">
+  ${errors.map(e => `<div class="error-block"><span class="error-title">&#9888; ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`).join('')}
+</div>` : '';
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { background-color: white; color: black; margin: 0; padding: 8px; ${haserrors ? 'padding-bottom: 160px;' : ''} box-sizing: border-box; }
+  h1, h2, h3, h4, h5, h6 { color: black; }
+  #error-pane { position: fixed; bottom: 0; left: 0; right: 0; background: #2d1515; border-top: 2px solid #f14c4c; padding: 6px 12px; max-height: 150px; overflow-y: auto; z-index: 9999; }
+  .error-block { margin-bottom: 6px; }
+  .error-block:last-child { margin-bottom: 0; }
+  .error-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #f14c4c; margin-bottom: 2px; }
+  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #f48771; white-space: pre-wrap; word-break: break-word; }
+</style>
+${cssLinks}
+</head>
+<body>
+${rendered}
+${errorPaneHtml}
+</body>
+</html>`;
+}
+
+function escapeHtml(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 
 function createNewPreview(document) {
@@ -280,7 +318,8 @@ function createNewPreview(document) {
         template: [],
         dataUri: null,
         dataDirty: false,
-        data: {}
+        data: {},
+        lastRenderedHtml: ''
     };
     return preview;
 }
