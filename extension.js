@@ -107,9 +107,9 @@ function activate(context) {
     }
     context.subscriptions.push(previewContentProvider);
 
-    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('shopify-liquid-preview', previewContentProvider));
+    context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('reporter-liquid-preview', previewContentProvider));
 
-    context.subscriptions.push(vscode.commands.registerCommand('shopifyLiquidPreview.preview', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.preview', async () => {
         let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
         if (document) {
             let preview = createNewPreview(document);
@@ -124,17 +124,18 @@ function activate(context) {
     // HTML preview panels, keyed by preview id
     let htmlPreviews = {};
 
-    context.subscriptions.push(vscode.commands.registerCommand('shopifyLiquidPreview.htmlPreview', async () => {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.htmlPreview', async () => {
         let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
         if (document) {
             let preview = createNewPreview(document);
             await updatePreviewDataFile(preview);
 
+            let workspaceFolders = (vscode.workspace.workspaceFolders || []).map(f => f.uri);
             let panel = vscode.window.createWebviewPanel(
                 'shopifyLiquidHtmlPreview',
                 'HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false }
+                { enableScripts: false, localResourceRoots: workspaceFolders }
             );
 
             htmlPreviews[preview.id] = { preview, panel };
@@ -206,10 +207,44 @@ async function refreshHtmlPanel(preview, panel) {
 
     try {
         let rendered = await liquidEngine.render(preview.template, preview.data);
-        panel.webview.html = rendered;
+        let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
+        panel.webview.html = '<style>body { background-color: white; color: black; } h1, h2, h3, h4, h5, h6 { color: black; }</style>\n' + cssLinks + rendered;
     } catch (err) {
         panel.webview.html = buildErrorHtml('Render error', err.message);
     }
+}
+
+function buildCssLinks(templateUri, webview) {
+    const fs = require('fs');
+    let cssPaths = [];
+
+    // CSS files at workspace root(s)
+    for (let folder of (vscode.workspace.workspaceFolders || [])) {
+        let rootCss = path.join(folder.uri.fsPath, 'universal.css');
+        if (fs.existsSync(rootCss)) {
+            cssPaths.push(rootCss);
+        }
+    }
+
+    // CSS files in a 'css/' folder alongside the template
+    if (templateUri) {
+        let templateDir = path.dirname(templateUri);
+        let cssDir = path.join(templateDir, 'css');
+        if (fs.existsSync(cssDir) && fs.statSync(cssDir).isDirectory()) {
+            for (let file of fs.readdirSync(cssDir)) {
+                if (file.endsWith('.css')) {
+                    cssPaths.push(path.join(cssDir, file));
+                }
+            }
+        }
+    }
+
+    return cssPaths
+        .map(p => {
+            let uri = webview.asWebviewUri(vscode.Uri.file(p));
+            return `<link rel="stylesheet" href="${uri}">`;
+        })
+        .join('\n');
 }
 
 function buildErrorHtml(title, message) {
@@ -226,7 +261,7 @@ function createNewPreview(document) {
             let dataFileString = dataFile ? dataFile + ' + ' : '';
             let previewFile = 'Preview ' + dataFileString + templateFile + '?id=' + id;
 
-            return vscode.Uri.parse('shopify-liquid-preview:' + previewFile);
+            return vscode.Uri.parse('reporter-liquid-preview:' + previewFile);
         },
         templateUri: document.fileName,
         templateDirty: true,

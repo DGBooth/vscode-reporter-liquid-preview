@@ -1,16 +1,16 @@
 {
-    "name": "shopify-liquid-preview",
-    "displayName": "Shopify Liquid Preview",
-    "description": "Live preview for Shopify Liquid templates",
-    "version": "2.0.1",
-    "publisher": "kirchner-trevor",
+    "name": "reporter-liquid-preview",
+    "displayName": "Reporter Liquid Preview",
+    "description": "Live preview for Reporter Liquid templates",
+    "version": "0.9.0",
+    "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
     },
     "icon": "icon.png",
     "repository": {
         "type": "git",
-        "url": "https://github.com/kirchner-trevor/vscode-shopify-liquid-preview"
+        "url": "https://github.com/DGBooth/vscode-reporter-liquid-preview"
     },
     "galleryBanner": {
         "color": "#0F6378",
@@ -20,14 +20,14 @@
         "Other"
     ],
     "keywords": [
-        "Shopify",
+        "Reporter",
         "Liquid",
         "Template",
         "Live Preview"
     ],
     "activationEvents": [
-        "onCommand:shopifyLiquidPreview.preview",
-        "onCommand:shopifyLiquidPreview.htmlPreview"
+        "onCommand:reporterLiquidPreview.preview",
+        "onCommand:reporterLiquidPreview.htmlPreview"
     ],
     "main": "./extension.js",
     "contributes": {
@@ -41,22 +41,22 @@
         ],
         "commands": [
             {
-                "command": "shopifyLiquidPreview.preview",
-                "title": "Shopify Liquid: Open Preview to the Side"
+                "command": "reporterLiquidPreview.preview",
+                "title": "Reporter Liquid: Open Preview to the Side"
             },
             {
-                "command": "shopifyLiquidPreview.htmlPreview",
-                "title": "Shopify Liquid: Open HTML Preview to the Side"
+                "command": "reporterLiquidPreview.htmlPreview",
+                "title": "Reporter Liquid: Open HTML Preview to the Side"
             }
         ],
         "keybindings": [
             {
-                "command": "shopifyLiquidPreview.preview",
+                "command": "reporterLiquidPreview.preview",
                 "key": "ctrl+k v",
                 "when": "editorLangId == liquid"
             },
             {
-                "command": "shopifyLiquidPreview.htmlPreview",
+                "command": "reporterLiquidPreview.htmlPreview",
                 "key": "ctrl+k h",
                 "when": "editorLangId == liquid"
             }
