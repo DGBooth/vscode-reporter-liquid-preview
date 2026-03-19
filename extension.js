@@ -273,6 +273,10 @@ function stripLiquid(text) {
         `<div class="lp-loop"><span class="lp-label">For: ${escapeHtml(expr.trim())}</span>`);
     text = text.replace(/\{%-?\s*endfor\s*-?%\}/g, '</div>');
 
+    // comment / endcomment → muted comment box (content preserved but visually distinct)
+    text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) =>
+        `<div class="lp-comment"><span class="lp-label">Comment</span>${escapeHtml(body.trim())}</div>`);
+
     // Strip all remaining liquid tags and output expressions
     text = text.replace(/\{%-?[\s\S]*?-?%\}/g, '');
     text = text.replace(/\{\{-?[\s\S]*?-?\}\}/g, '');
@@ -308,7 +312,9 @@ async function refreshHtmlFullPanel(preview, panel) {
   .lp-optional .lp-label { background: #388e3c; }
   .lp-editor .lp-label { background: #f57c00; }
   .lp-if-block .lp-label { background: #7b1fa2; }
-  .lp-loop .lp-label { background: #00796b; }`;
+  .lp-loop .lp-label { background: #00796b; }
+  .lp-comment { border: 1px dashed #9e9e9e; border-radius: 4px; padding: 4px 10px; margin: 4px 0; background: #f5f5f5; color: #616161; font-style: italic; }
+  .lp-comment .lp-label { background: #9e9e9e; font-style: normal; }`;
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
     panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles);
