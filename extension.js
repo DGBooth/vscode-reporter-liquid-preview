@@ -228,8 +228,64 @@ function activate(context) {
     context.subscriptions.push(dataStatusBarItem);
 }
 
+function stripLiquidFromHtmlTags(text) {
+    // Remove liquid tags/expressions that appear inside HTML element open/close tags
+    // (attribute-level liquid). Uses a character scanner so that '>' inside liquid
+    // conditions (e.g. {% if x > 3 %}) does not prematurely end the HTML tag match.
+    let result = '';
+    let i = 0;
+    let inHtmlTag = false;
+    let inQuote = null; // '"' or "'" when inside a quoted attribute value
+
+    while (i < text.length) {
+        const ch = text[i];
+        if (!inHtmlTag && ch === '<' && /[a-zA-Z\/!]/.test(text[i + 1] || '')) {
+            inHtmlTag = true;
+            result += ch; i++;
+        } else if (inHtmlTag && inQuote === null && ch === '>') {
+            inHtmlTag = false;
+            result += ch; i++;
+        } else if (inHtmlTag && inQuote === null && (ch === '"' || ch === "'")) {
+            inQuote = ch;
+            result += ch; i++;
+        } else if (inHtmlTag && inQuote !== null && ch === inQuote) {
+            inQuote = null;
+            result += ch; i++;
+        } else if (inHtmlTag && inQuote === null && ch === '{' && (text[i + 1] === '%' || text[i + 1] === '{')) {
+            // Liquid tag or expression inside an HTML tag – discard it entirely
+            const closeSeq = text[i + 1] === '%' ? '%}' : '}}';
+            i += 2;
+            if (text[i] === '-') i++; // optional leading whitespace-strip dash
+            while (i < text.length) {
+                if (text[i] === '-' && text[i + 1] === closeSeq[0] && text[i + 2] === closeSeq[1]) { i += 3; break; }
+                if (text[i] === closeSeq[0] && text[i + 1] === closeSeq[1]) { i += 2; break; }
+                i++;
+            }
+        } else {
+            result += ch; i++;
+        }
+    }
+    return result;
+}
+
 function stripLiquid(text) {
     let optionCount = 0;
+
+    // Step 1: remove liquid embedded within HTML element tags (attribute-level logic).
+    // These modify HTML structure rather than producing standalone output.
+    text = stripLiquidFromHtmlTags(text);
+
+    // Step 2: remove non-output block tags that never produce HTML content directly.
+    // capture/endcapture – captures rendered output into a variable
+    text = text.replace(/\{%-?\s*capture\b.*?-?%\}[\s\S]*?\{%-?\s*endcapture\s*-?%\}/g, '');
+    // assign, increment, decrement – variable manipulation, no output
+    // render, include – render a sub-template; its output isn't meaningful here
+    text = text.replace(/\{%-?\s*(assign|increment|decrement|render|include)\b.*?-?%\}/g, '');
+
+    // comment / endcomment → muted comment box (processed first so its body is not
+    // mistaken for other liquid constructs)
+    text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) =>
+        `<div class="lp-comment"><span class="lp-label">Comment</span>${escapeHtml(body.trim())}</div>`);
 
     // choice / or / endchoice → numbered option boxes
     text = text.replace(/\{%-?\s*(choice|or|endchoice)\s*-?%\}/g, (_, tag) => {
@@ -272,10 +328,6 @@ function stripLiquid(text) {
     text = text.replace(/\{%-?\s*for\s+(.*?)-?%\}/g, (_, expr) =>
         `<div class="lp-loop"><span class="lp-label">For: ${escapeHtml(expr.trim())}</span>`);
     text = text.replace(/\{%-?\s*endfor\s*-?%\}/g, '</div>');
-
-    // comment / endcomment → muted comment box (content preserved but visually distinct)
-    text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) =>
-        `<div class="lp-comment"><span class="lp-label">Comment</span>${escapeHtml(body.trim())}</div>`);
 
     // Strip all remaining liquid tags and output expressions
     text = text.replace(/\{%-?[\s\S]*?-?%\}/g, '');
