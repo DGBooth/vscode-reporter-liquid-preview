@@ -208,7 +208,7 @@ async function refreshHtmlPanel(preview, panel) {
     try {
         let rendered = await liquidEngine.render(preview.template, preview.data);
         let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-        panel.webview.html = '<style>body { background-color: white; color: black; }</style>\n' + cssLinks + rendered;
+        panel.webview.html = '<style>body { background-color: white; color: black; } h1, h2, h3, h4, h5, h6 { color: black; }</style>\n' + cssLinks + rendered;
     } catch (err) {
         panel.webview.html = buildErrorHtml('Render error', err.message);
     }
