@@ -6,6 +6,18 @@ const liquidEngine = new liquid();
 // register custom Liquid tags used in templates
 registerCustomTags(liquidEngine);
 
+function registerCustomFilters(engine) {
+    // money filter: rounds to 2 decimal places or appends .00 if no decimals
+    engine.registerFilter('money', value => {
+        const num = parseFloat(value);
+        if (isNaN(num)) return value;
+        return num.toFixed(2);
+    });
+}
+
+// register custom Liquid filters used in templates
+registerCustomFilters(liquidEngine);
+
 function registerCustomTags(engine) {
     // optional tag simply renders its inner content
     engine.registerTag('optional', {
