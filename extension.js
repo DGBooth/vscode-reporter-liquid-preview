@@ -6,6 +6,22 @@ const liquidEngine = new liquid();
 // register custom Liquid tags used in templates
 registerCustomTags(liquidEngine);
 
+// Parse a Liquid tag argument string into an object.
+// e.g. '"fieldName", title: "My Title", lines: 1' → { name: "fieldName", title: "My Title", lines: 1 }
+function parseTagArgs(argsStr) {
+    const result = {};
+    if (!argsStr) return result;
+    const nameMatch = argsStr.match(/^\s*['"]([^'"]+)['"]/);
+    if (nameMatch) result.name = nameMatch[1];
+    const kvRegex = /(\w+):\s*(?:"([^"]*)"|'([^']*)'|(\d+(?:\.\d+)?))/g;
+    let m;
+    while ((m = kvRegex.exec(argsStr)) !== null) {
+        const key = m[1];
+        result[key] = m[4] !== undefined ? parseFloat(m[4]) : (m[2] !== undefined ? m[2] : m[3]);
+    }
+    return result;
+}
+
 function registerCustomFilters(engine) {
     // money filter: rounds to 2 decimal places or appends .00 if no decimals
     engine.registerFilter('money', value => {
@@ -19,9 +35,10 @@ function registerCustomFilters(engine) {
 registerCustomFilters(liquidEngine);
 
 function registerCustomTags(engine) {
-    // optional tag simply renders its inner content
+    // optional tag: renders a checkbox wrapper with inner content
     engine.registerTag('optional', {
         parse(tagToken, remainTokens) {
+            this.args = parseTagArgs(tagToken.args);
             this.templates = [];
             const stream = this.liquid.parser.parseStream(remainTokens)
                 .on('tag:endoptional', () => stream.stop())
@@ -29,14 +46,19 @@ function registerCustomTags(engine) {
                 .on('end', () => { throw new Error('optional tag not closed'); });
             stream.start();
         },
-        render(ctx) {
-            return this.liquid.renderer.renderTemplates(this.templates, ctx);
+        async render(ctx) {
+            const name = this.args.name || '';
+            const fields = (ctx.environments && ctx.environments.fields) || {};
+            const checkedAttr = fields[name] === 'true' ? ' checked=""' : '';
+            const inner = await this.liquid.renderer.renderTemplates(this.templates, ctx);
+            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}"><label for="${name}"><input type="checkbox" id="${name}" name="${name}" data-editor-id="${name}" value="true"${checkedAttr}>${inner}</label></div>`;
         }
     });
 
-    // editor tag renders the default text between editor/endeditor
+    // editor tag: renders an input or textarea wrapped in a div
     engine.registerTag('editor', {
         parse(tagToken, remainTokens) {
+            this.args = parseTagArgs(tagToken.args);
             this.templates = [];
             const stream = this.liquid.parser.parseStream(remainTokens)
                 .on('tag:endeditor', () => stream.stop())
@@ -45,14 +67,25 @@ function registerCustomTags(engine) {
             stream.start();
         },
         render(ctx) {
-            return this.liquid.renderer.renderTemplates(this.templates, ctx);
+            const name = this.args.name || '';
+            const lines = this.args.lines !== undefined ? this.args.lines : 1;
+            const placeholder = this.args.placeholder || '';
+            const maxlength = this.args.maxlength !== undefined ? this.args.maxlength : 100;
+            const minlength = this.args.minlength !== undefined ? this.args.minlength : 0;
+            const fields = (ctx.environments && ctx.environments.fields) || {};
+            const value = fields[name] !== undefined ? String(fields[name]) : '';
+            if (lines <= 1) {
+                return `<div id="editor-wrapper-${name}" class="editor "><input type="text" id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"></div>`;
+            } else {
+                return `<div id="editor-wrapper-${name}" class="editor "><textarea id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" rows="${lines}">${escapeHtml(value)}</textarea></div>`;
+            }
         }
     });
 
-    // choice tag supports multiple blocks separated by 'or'.
-    // The preview simply renders the first block.
+    // choice tag: renders radio buttons for each 'or'-separated block
     engine.registerTag('choice', {
         parse(tagToken, remainTokens) {
+            this.args = parseTagArgs(tagToken.args);
             this.parts = [[]];
             const stream = this.liquid.parser.parseStream(remainTokens)
                 .on('tag:or', () => this.parts.push([]))
@@ -60,10 +93,20 @@ function registerCustomTags(engine) {
                 .on('template', tpl => this.parts[this.parts.length - 1].push(tpl))
                 .on('end', () => { throw new Error('choice tag not closed'); });
             stream.start();
-            this.templates = this.parts[0];
         },
-        render(ctx) {
-            return this.liquid.renderer.renderTemplates(this.templates, ctx);
+        async render(ctx) {
+            const name = this.args.name || '';
+            const title = this.args.title !== undefined ? this.args.title : '';
+            const fields = (ctx.environments && ctx.environments.fields) || {};
+            const selectedValue = fields[name] !== undefined ? String(fields[name]) : '0';
+            const titleHtml = title ? `<span class="editor-intro">${escapeHtml(title)}</span>` : '';
+            let labelsHtml = '';
+            for (let i = 0; i < this.parts.length; i++) {
+                const checkedAttr = String(i) === selectedValue ? ' checked=""' : '';
+                const inner = await this.liquid.renderer.renderTemplates(this.parts[i], ctx);
+                labelsHtml += `<label for="${name}-${i + 1}"><input type="radio" id="${name}-${i + 1}" name="${name}" data-editor-id="${name}" value="${i}"${checkedAttr}>${inner}</label>`;
+            }
+            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}">${titleHtml}${labelsHtml}</div>`;
         }
     });
 }
@@ -288,25 +331,24 @@ function stripLiquid(text) {
         `<div class="lp-comment"><span class="lp-label">Comment</span>${escapeHtml(body.trim())}</div>`);
 
     // choice / or / endchoice → numbered option boxes
-    text = text.replace(/\{%-?\s*(choice|or|endchoice)\s*-?%\}/g, (_, tag) => {
-        if (tag === 'choice') {
-            optionCount = 1;
-            return '<div class="lp-choice-block"><div class="lp-option"><span class="lp-label">Option 1</span>';
-        } else if (tag === 'or') {
-            optionCount++;
-            return `</div><div class="lp-option"><span class="lp-label">Option ${optionCount}</span>`;
-        } else {
-            return '</div></div>';
-        }
+    // 'choice' can have arguments; 'or' and 'endchoice' do not
+    text = text.replace(/\{%-?\s*choice\b.*?-?%\}/g, () => {
+        optionCount = 1;
+        return '<div class="lp-choice-block"><div class="lp-option"><span class="lp-label">Option 1</span>';
     });
+    text = text.replace(/\{%-?\s*or\s*-?%\}/g, () => {
+        optionCount++;
+        return `</div><div class="lp-option"><span class="lp-label">Option ${optionCount}</span>`;
+    });
+    text = text.replace(/\{%-?\s*endchoice\s*-?%\}/g, '</div></div>');
 
     // optional / endoptional → styled optional box
-    text = text.replace(/\{%-?\s*optional\s*-?%\}/g,
+    text = text.replace(/\{%-?\s*optional\b.*?-?%\}/g,
         '<div class="lp-optional"><span class="lp-label">Optional</span>');
     text = text.replace(/\{%-?\s*endoptional\s*-?%\}/g, '</div>');
 
     // editor / endeditor → styled editor box
-    text = text.replace(/\{%-?\s*editor\s*-?%\}/g,
+    text = text.replace(/\{%-?\s*editor\b.*?-?%\}/g,
         '<div class="lp-editor"><span class="lp-label">Editable</span>');
     text = text.replace(/\{%-?\s*endeditor\s*-?%\}/g, '</div>');
 
