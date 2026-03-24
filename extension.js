@@ -378,20 +378,7 @@ function stripLiquid(text) {
     return text;
 }
 
-async function refreshHtmlFullPanel(preview, panel) {
-    let errors = [];
-    let content = '';
-
-    try {
-        let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
-        content = stripLiquid(templateDocument.getText());
-        preview.lastRenderedHtml = content;
-    } catch (err) {
-        errors.push({ title: 'Template error', message: err.message });
-        content = preview.lastRenderedHtml || '';
-    }
-
-    const fullPreviewStyles = `
+const fullPreviewStyles = `
   .lp-choice-block { border: 2px solid #1976d2; border-radius: 4px; margin: 8px 0; overflow: hidden; }
   .lp-option { border-left: 4px solid #1976d2; background: #e3f2fd; padding: 6px 10px; }
   .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
@@ -409,6 +396,19 @@ async function refreshHtmlFullPanel(preview, panel) {
   .lp-loop .lp-label { background: #00796b; }
   .lp-comment { border: 1px dashed #9e9e9e; border-radius: 4px; padding: 4px 10px; margin: 4px 0; background: #f5f5f5; color: #616161; font-style: italic; }
   .lp-comment .lp-label { background: #9e9e9e; font-style: normal; }`;
+
+async function refreshHtmlFullPanel(preview, panel) {
+    let errors = [];
+    let content = '';
+
+    try {
+        let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
+        content = stripLiquid(templateDocument.getText());
+        preview.lastRenderedHtml = content;
+    } catch (err) {
+        errors.push({ title: 'Template error', message: err.message });
+        content = preview.lastRenderedHtml || '';
+    }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
     panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles);
@@ -449,7 +449,7 @@ async function refreshHtmlPanel(preview, panel) {
     }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors);
+    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, fullPreviewStyles);
 }
 
 function buildCssLinks(templateUri, webview) {
