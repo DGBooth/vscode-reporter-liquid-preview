@@ -378,6 +378,14 @@ function stripLiquid(text) {
     return text;
 }
 
+const htmlPreviewStyles = `
+  .editor { border-radius: 4px; padding: 8px 12px; margin: 8px 0; }
+  .editor:has(input[type="checkbox"]) { border: 2px dashed #388e3c; background: #f1f8e9; }
+  .editor:has(input[type="radio"]) { border: 2px solid #1976d2; background: #e3f2fd; }
+  .editor:has(input[type="text"]), .editor:has(textarea) { border: 2px solid #f57c00; background: #fff8e1; }
+  .editor:has(input[type="radio"]) label { display: block; padding: 2px 0; }
+  .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`;
+
 const fullPreviewStyles = `
   .lp-choice-block { border: 2px solid #1976d2; border-radius: 4px; margin: 8px 0; overflow: hidden; }
   .lp-option { border-left: 4px solid #1976d2; background: #e3f2fd; padding: 6px 10px; }
@@ -449,7 +457,7 @@ async function refreshHtmlPanel(preview, panel) {
     }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, fullPreviewStyles);
+    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles);
 }
 
 function buildCssLinks(templateUri, webview) {
