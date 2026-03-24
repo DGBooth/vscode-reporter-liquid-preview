@@ -383,7 +383,7 @@ const htmlPreviewStyles = `
   .editor:has(input[type="checkbox"]) { border: 2px dashed #388e3c; background: #f1f8e9; }
   .editor:has(input[type="radio"]) { border: 2px solid #1976d2; background: #e3f2fd; }
   .editor:has(input[type="text"]), .editor:has(textarea) { border: 2px solid #f57c00; background: #fff8e1; }
-  .editor:has(input[type="radio"]) label { display: block; padding: 2px 0; }
+  .editor:has(input[type="radio"]) label { display: block; padding: 6px 10px; margin: 4px 0; border: 1px solid #90caf9; border-radius: 3px; background: white; }
   .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`;
 
 const fullPreviewStyles = `
