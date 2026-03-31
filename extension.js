@@ -23,11 +23,11 @@ function parseTagArgs(argsStr) {
 }
 
 function registerCustomFilters(engine) {
-    // money filter: rounds to 2 decimal places or appends .00 if no decimals
+    // money filter: rounds to 2 decimal places or appends .00 if no decimals, with comma separators
     engine.registerFilter('money', value => {
         const num = parseFloat(value);
         if (isNaN(num)) return value;
-        return num.toFixed(2);
+        return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     });
 }
 
