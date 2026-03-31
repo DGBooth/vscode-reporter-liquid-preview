@@ -73,6 +73,16 @@
         ]
     },
     "scripts": {},
+    "configuration": {
+        "title": "Reporter Liquid Preview",
+        "properties": {
+            "reporterLiquidPreview.selectPdfApiKey": {
+                "type": "string",
+                "default": "",
+                "description": "SelectPDF REST API key used by the 'Save as PDF' button in the HTML preview panel."
+            }
+        }
+    },
     "devDependencies": {
         "@types/vscode": "^1.32.0"
     },

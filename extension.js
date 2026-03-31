@@ -193,12 +193,18 @@ function activate(context) {
                 'shopifyLiquidHtmlPreview',
                 'HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false, localResourceRoots: workspaceFolders }
+                { enableScripts: true, localResourceRoots: workspaceFolders }
             );
 
             htmlPreviews[preview.id] = { preview, panel };
 
             await refreshHtmlPanel(preview, panel);
+
+            panel.webview.onDidReceiveMessage(async (message) => {
+                if (message.command === 'generatePdf') {
+                    await generatePdf(preview, htmlPreviewStyles);
+                }
+            }, undefined, context.subscriptions);
 
             panel.onDidDispose(() => {
                 delete htmlPreviews[preview.id];
@@ -216,12 +222,18 @@ function activate(context) {
                 'shopifyLiquidFullHtmlPreview',
                 'Full HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false, localResourceRoots: workspaceFolders }
+                { enableScripts: true, localResourceRoots: workspaceFolders }
             );
 
             htmlFullPreviews[preview.id] = { preview, panel };
 
             await refreshHtmlFullPanel(preview, panel);
+
+            panel.webview.onDidReceiveMessage(async (message) => {
+                if (message.command === 'generatePdf') {
+                    await generatePdf(preview, fullPreviewStyles);
+                }
+            }, undefined, context.subscriptions);
 
             panel.onDidDispose(() => {
                 delete htmlFullPreviews[preview.id];
@@ -419,7 +431,7 @@ async function refreshHtmlFullPanel(preview, panel) {
     }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles);
+    panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles, true);
 }
 
 async function refreshHtmlPanel(preview, panel) {
@@ -457,7 +469,7 @@ async function refreshHtmlPanel(preview, panel) {
     }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles);
+    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles, true);
 }
 
 function buildCssLinks(templateUri, webview) {
@@ -493,12 +505,23 @@ function buildCssLinks(templateUri, webview) {
         .join('\n');
 }
 
-function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
+function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '', showPdfButton = false) {
     const haserrors = errors.length > 0;
     const errorPaneHtml = haserrors ? `
 <div id="error-pane">
   ${errors.map(e => `<div class="error-block"><span class="error-title">&#9888; ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`).join('')}
 </div>` : '';
+
+    const pdfButtonHtml = showPdfButton ? `
+<div id="pdf-toolbar" style="position:fixed;top:8px;right:8px;z-index:10000;">
+  <button id="pdf-btn" style="background:#1976d2;color:white;border:none;border-radius:4px;padding:6px 14px;cursor:pointer;font-family:sans-serif;font-size:12px;box-shadow:0 2px 4px rgba(0,0,0,0.3);">&#128462; Save as PDF</button>
+</div>
+<script>
+  const vscode = acquireVsCodeApi();
+  document.getElementById('pdf-btn').addEventListener('click', function() {
+    vscode.postMessage({ command: 'generatePdf' });
+  });
+</script>` : '';
 
     return `<!DOCTYPE html>
 <html>
@@ -516,9 +539,119 @@ ${cssLinks}
 </head>
 <body>
 ${rendered}
+${pdfButtonHtml}
 ${errorPaneHtml}
 </body>
 </html>`;
+}
+
+async function generatePdf(preview, extraStyles) {
+    const apiKey = vscode.workspace.getConfiguration('reporterLiquidPreview').get('selectPdfApiKey');
+    if (!apiKey) {
+        const action = await vscode.window.showErrorMessage(
+            'No SelectPDF API key configured. Set reporterLiquidPreview.selectPdfApiKey in your settings.',
+            'Open Settings'
+        );
+        if (action === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'reporterLiquidPreview.selectPdfApiKey');
+        }
+        return;
+    }
+
+    const defaultPath = preview.templateUri ? preview.templateUri.replace(/\.liquid$/, '.pdf') : 'output.pdf';
+    const saveUri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file(defaultPath),
+        filters: { 'PDF Files': ['pdf'] }
+    });
+    if (!saveUri) return;
+
+    await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Generating PDF via SelectPDF...' },
+        async () => {
+            try {
+                const html = buildPdfHtml(preview, extraStyles);
+                const pdfBuffer = await callSelectPdfApi(apiKey, html);
+                require('fs').writeFileSync(saveUri.fsPath, pdfBuffer);
+                const action = await vscode.window.showInformationMessage(
+                    `PDF saved: ${path.basename(saveUri.fsPath)}`,
+                    'Open'
+                );
+                if (action === 'Open') {
+                    vscode.env.openExternal(saveUri);
+                }
+            } catch (err) {
+                vscode.window.showErrorMessage('PDF generation failed: ' + err.message);
+            }
+        }
+    );
+}
+
+function buildPdfHtml(preview, extraStyles) {
+    const fs = require('fs');
+    let cssContent = '';
+
+    for (let folder of (vscode.workspace.workspaceFolders || [])) {
+        let rootCss = path.join(folder.uri.fsPath, 'universal.css');
+        if (fs.existsSync(rootCss)) {
+            cssContent += fs.readFileSync(rootCss, 'utf8') + '\n';
+        }
+    }
+
+    if (preview.templateUri) {
+        let cssDir = path.join(path.dirname(preview.templateUri), 'css');
+        if (fs.existsSync(cssDir) && fs.statSync(cssDir).isDirectory()) {
+            for (let file of fs.readdirSync(cssDir)) {
+                if (file.endsWith('.css')) {
+                    cssContent += fs.readFileSync(path.join(cssDir, file), 'utf8') + '\n';
+                }
+            }
+        }
+    }
+
+    return `<!DOCTYPE html>
+<html>
+<head>
+<style>
+  body { background-color: white; color: black; margin: 0; padding: 8px; box-sizing: border-box; }
+  h1, h2, h3, h4, h5, h6 { color: black; }${extraStyles}
+  ${cssContent}
+</style>
+</head>
+<body>
+${preview.lastRenderedHtml}
+</body>
+</html>`;
+}
+
+function callSelectPdfApi(apiKey, html) {
+    return new Promise((resolve, reject) => {
+        const https = require('https');
+        const postData = new URLSearchParams({ key: apiKey, html: html }).toString();
+        const req = https.request({
+            hostname: 'selectpdf.com',
+            port: 443,
+            path: '/api2/convert/',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        }, (res) => {
+            const chunks = [];
+            res.on('data', chunk => chunks.push(chunk));
+            res.on('end', () => {
+                const body = Buffer.concat(chunks);
+                if (res.statusCode === 200) {
+                    resolve(body);
+                } else {
+                    reject(new Error(`SelectPDF API error (${res.statusCode}): ${body.toString()}`));
+                }
+            });
+        });
+        req.on('error', reject);
+        req.write(postData);
+        req.end();
+    });
 }
 
 function escapeHtml(str) {
