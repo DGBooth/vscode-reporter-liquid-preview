@@ -8,11 +8,18 @@ registerCustomTags(liquidEngine);
 
 // Parse a Liquid tag argument string into an object.
 // e.g. '"fieldName", title: "My Title", lines: 1' → { name: "fieldName", title: "My Title", lines: 1 }
+// An unquoted first argument is treated as a Liquid variable reference → { nameVar: "varName", ... }
 function parseTagArgs(argsStr) {
     const result = {};
     if (!argsStr) return result;
     const nameMatch = argsStr.match(/^\s*['"]([^'"]+)['"]/);
-    if (nameMatch) result.name = nameMatch[1];
+    if (nameMatch) {
+        result.name = nameMatch[1];
+    } else {
+        // Unquoted first argument (not a key:value pair) is a variable whose runtime value is the name
+        const varMatch = argsStr.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\s*:)/);
+        if (varMatch) result.nameVar = varMatch[1];
+    }
     const kvRegex = /(\w+):\s*(?:"([^"]*)"|'([^']*)'|(\d+(?:\.\d+)?))/g;
     let m;
     while ((m = kvRegex.exec(argsStr)) !== null) {
@@ -20,6 +27,28 @@ function parseTagArgs(argsStr) {
         result[key] = m[4] !== undefined ? parseFloat(m[4]) : (m[2] !== undefined ? m[2] : m[3]);
     }
     return result;
+}
+
+// Resolve the tag name from parsed args: either a literal string or a variable looked up in context.
+function resolveTagName(args, ctx) {
+    if (args.name) return args.name;
+    if (args.nameVar) {
+        const envs = (ctx && ctx.environments) || {};
+        const resolved = envs[args.nameVar];
+        return resolved !== undefined ? String(resolved) : '';
+    }
+    return '';
+}
+
+// Record a tag name into the per-render duplicate tracker (injected via render context).
+function trackTagName(name, ctx) {
+    const tracker = ctx && ctx.environments && ctx.environments._rlpTracker;
+    if (!tracker || !name) return;
+    if (tracker.seen.includes(name)) {
+        if (!tracker.dupes.includes(name)) tracker.dupes.push(name);
+    } else {
+        tracker.seen.push(name);
+    }
 }
 
 function registerCustomFilters(engine) {
@@ -47,7 +76,8 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = this.args.name || '';
+            const name = resolveTagName(this.args, ctx);
+            trackTagName(name, ctx);
             const fields = (ctx.environments && ctx.environments.fields) || {};
             const checkedAttr = fields[name] === 'true' ? ' checked=""' : '';
             const inner = await this.liquid.renderer.renderTemplates(this.templates, ctx);
@@ -67,7 +97,8 @@ function registerCustomTags(engine) {
             stream.start();
         },
         render(ctx) {
-            const name = this.args.name || '';
+            const name = resolveTagName(this.args, ctx);
+            trackTagName(name, ctx);
             const lines = this.args.lines !== undefined ? this.args.lines : 1;
             const placeholder = this.args.placeholder || '';
             const maxlength = this.args.maxlength !== undefined ? this.args.maxlength : 100;
@@ -95,7 +126,8 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = this.args.name || '';
+            const name = resolveTagName(this.args, ctx);
+            trackTagName(name, ctx);
             const title = this.args.title !== undefined ? this.args.title : '';
             const fields = (ctx.environments && ctx.environments.fields) || {};
             const selectedValue = fields[name] !== undefined ? String(fields[name]) : '0';
@@ -449,8 +481,16 @@ async function refreshHtmlPanel(preview, panel) {
 
     let rendered;
     try {
-        rendered = await liquidEngine.render(preview.template, preview.data);
+        const nameTracker = { seen: [], dupes: [] };
+        const dataWithTracker = Object.assign({}, preview.data, { _rlpTracker: nameTracker });
+        rendered = await liquidEngine.render(preview.template, dataWithTracker);
         preview.lastRenderedHtml = rendered;
+        if (nameTracker.dupes.length > 0) {
+            errors.push({
+                title: 'Duplicate field names',
+                message: `The following field names are used more than once: ${nameTracker.dupes.join(', ')}`
+            });
+        }
     } catch (err) {
         errors.push({ title: 'Render error', message: err.message });
         rendered = preview.lastRenderedHtml || '';
