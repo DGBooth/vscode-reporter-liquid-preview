@@ -515,7 +515,7 @@ async function refreshHtmlPanel(preview, panel) {
                 message: `The following field names are used more than once: ${nameTracker.dupes.join(', ')}`
             });
         }
-        for (const w of _currentWarnings) {
+        for (const w of [...new Set(_currentWarnings)]) {
             errors.push({ title: 'Warning', message: w + filterLineRef(preview.templateText, w), isWarning: true });
         }
     } catch (err) {
