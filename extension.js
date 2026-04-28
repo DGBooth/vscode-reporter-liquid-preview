@@ -482,7 +482,8 @@ async function refreshHtmlPanel(preview, panel) {
     if (preview.templateUri && preview.templateDirty) {
         try {
             let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
-            preview.template = liquidEngine.parse(templateDocument.getText());
+            preview.templateText = templateDocument.getText();
+            preview.template = liquidEngine.parse(preview.templateText);
             preview.templateDirty = false;
         } catch (err) {
             // Keep the previously parsed template so rendering can still proceed
@@ -515,7 +516,7 @@ async function refreshHtmlPanel(preview, panel) {
             });
         }
         for (const w of _currentWarnings) {
-            errors.push({ title: 'Warning', message: w, isWarning: true });
+            errors.push({ title: 'Warning', message: w + filterLineRef(preview.templateText, w), isWarning: true });
         }
     } catch (err) {
         errors.push({ title: 'Render error', message: err.message });
@@ -526,6 +527,25 @@ async function refreshHtmlPanel(preview, panel) {
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
     panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles);
+}
+
+function filterLineRef(templateText, warning) {
+    if (!templateText) return '';
+    let pattern;
+    if (warning.startsWith('slice filter')) {
+        pattern = /\|\s*slice\b/;
+    } else if (warning.startsWith('where filter')) {
+        const m = warning.match(/filtering by property "([^"]+)"/);
+        const prop = m ? m[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
+        pattern = prop ? new RegExp(`\\|\\s*where\\s*:\\s*["']${prop}["']`) : /\|\s*where\b/;
+    } else {
+        return '';
+    }
+    const lines = templateText.split('\n')
+        .map((line, i) => pattern.test(line) ? i + 1 : null)
+        .filter(n => n !== null);
+    if (lines.length === 0) return '';
+    return `, line:${lines.join(', ')}`;
 }
 
 function buildCssLinks(templateUri, webview) {

@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
