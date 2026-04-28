@@ -3,6 +3,9 @@ const vscode = require('vscode');
 const liquid = require('liquidjs');
 const liquidEngine = new liquid();
 
+// Accumulates warnings during a single render pass. Set to [] before rendering, null otherwise.
+let _currentWarnings = null;
+
 // register custom Liquid tags used in templates
 registerCustomTags(liquidEngine);
 
@@ -57,6 +60,16 @@ function registerCustomFilters(engine) {
         const num = parseFloat(value);
         if (isNaN(num)) return value;
         return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    });
+
+    // slice filter: override built-in to warn instead of error when the value is missing
+    engine.registerFilter('slice', (v, begin, length = 1) => {
+        if (v == null) {
+            if (_currentWarnings) _currentWarnings.push('slice filter applied to missing variable (returned empty)');
+            return '';
+        }
+        begin = begin < 0 ? v.length + begin : begin;
+        return v.slice(begin, begin + length);
     });
 }
 
@@ -483,6 +496,7 @@ async function refreshHtmlPanel(preview, panel) {
     try {
         const nameTracker = { seen: [], dupes: [] };
         const dataWithTracker = Object.assign({}, preview.data, { _rlpTracker: nameTracker });
+        _currentWarnings = [];
         rendered = await liquidEngine.render(preview.template, dataWithTracker);
         preview.lastRenderedHtml = rendered;
         if (nameTracker.dupes.length > 0) {
@@ -491,9 +505,14 @@ async function refreshHtmlPanel(preview, panel) {
                 message: `The following field names are used more than once: ${nameTracker.dupes.join(', ')}`
             });
         }
+        for (const w of _currentWarnings) {
+            errors.push({ title: 'Warning', message: w, isWarning: true });
+        }
     } catch (err) {
         errors.push({ title: 'Render error', message: err.message });
         rendered = preview.lastRenderedHtml || '';
+    } finally {
+        _currentWarnings = null;
     }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
@@ -537,7 +556,11 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
     const haserrors = errors.length > 0;
     const errorPaneHtml = haserrors ? `
 <div id="error-pane">
-  ${errors.map(e => `<div class="error-block"><span class="error-title">&#9888; ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`).join('')}
+  ${errors.map(e => {
+      const cls = e.isWarning ? 'warning-block' : 'error-block';
+      const icon = e.isWarning ? '&#9432;' : '&#9888;';
+      return `<div class="${cls}"><span class="${cls}-title">${icon} ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`;
+  }).join('')}
 </div>` : '';
 
     return `<!DOCTYPE html>
@@ -546,11 +569,12 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
 <style>
   body { background-color: white; color: black; margin: 0; padding: 8px; ${haserrors ? 'padding-bottom: 160px;' : ''} box-sizing: border-box; }
   h1, h2, h3, h4, h5, h6 { color: black; }
-  #error-pane { position: fixed; bottom: 0; left: 0; right: 0; background: #2d1515; border-top: 2px solid #f14c4c; padding: 6px 12px; max-height: 150px; overflow-y: auto; z-index: 9999; }
-  .error-block { margin-bottom: 6px; }
-  .error-block:last-child { margin-bottom: 0; }
-  .error-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #f14c4c; margin-bottom: 2px; }
-  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #f48771; white-space: pre-wrap; word-break: break-word; }${extraStyles}
+  #error-pane { position: fixed; bottom: 0; left: 0; right: 0; background: #1e1a10; border-top: 2px solid #f14c4c; padding: 6px 12px; max-height: 150px; overflow-y: auto; z-index: 9999; }
+  .error-block, .warning-block { margin-bottom: 6px; }
+  .error-block:last-child, .warning-block:last-child { margin-bottom: 0; }
+  .error-block-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #f14c4c; margin-bottom: 2px; }
+  .warning-block-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #cca700; margin-bottom: 2px; }
+  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }${extraStyles}
 </style>
 ${cssLinks}
 </head>
