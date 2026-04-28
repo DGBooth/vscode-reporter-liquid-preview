@@ -65,7 +65,7 @@ function registerCustomFilters(engine) {
     // slice filter: override built-in to warn instead of error when the value is missing
     engine.registerFilter('slice', (v, begin, length = 1) => {
         if (v == null) {
-            if (_currentWarnings) _currentWarnings.push('slice filter applied to missing variable (returned empty)');
+            if (_currentWarnings) _currentWarnings.push(`slice filter: value is missing (returned empty)`);
             return '';
         }
         begin = begin < 0 ? v.length + begin : begin;
@@ -75,7 +75,7 @@ function registerCustomFilters(engine) {
     // where filter: override built-in to warn instead of error when the value is missing
     engine.registerFilter('where', (arr, property, value) => {
         if (arr == null) {
-            if (_currentWarnings) _currentWarnings.push('where filter applied to missing variable (returned empty)');
+            if (_currentWarnings) _currentWarnings.push(`where filter: array is missing (filtering by property "${property}")`);
             return [];
         }
         return arr.filter(obj => value === undefined ? (obj[property] !== false && obj[property] !== undefined && obj[property] !== null) : obj[property] === value);
@@ -563,13 +563,21 @@ function buildCssLinks(templateUri, webview) {
 
 function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
     const haserrors = errors.length > 0;
+    const warnings = errors.filter(e => e.isWarning);
+    const nonWarnings = errors.filter(e => !e.isWarning);
+
+    const errorBlocks = nonWarnings.map(e =>
+        `<div class="error-block"><span class="error-block-title">&#9888; ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`
+    );
+
+    if (warnings.length > 0) {
+        const items = warnings.map(w => `<li>${escapeHtml(w.message)}</li>`).join('');
+        errorBlocks.push(`<div class="warning-block"><span class="warning-block-title">&#9432; Warning</span><ul class="warning-list">${items}</ul></div>`);
+    }
+
     const errorPaneHtml = haserrors ? `
 <div id="error-pane">
-  ${errors.map(e => {
-      const cls = e.isWarning ? 'warning-block' : 'error-block';
-      const icon = e.isWarning ? '&#9432;' : '&#9888;';
-      return `<div class="${cls}"><span class="${cls}-title">${icon} ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`;
-  }).join('')}
+  ${errorBlocks.join('')}
 </div>` : '';
 
     return `<!DOCTYPE html>
@@ -583,7 +591,9 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
   .error-block:last-child, .warning-block:last-child { margin-bottom: 0; }
   .error-block-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #f14c4c; margin-bottom: 2px; }
   .warning-block-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #cca700; margin-bottom: 2px; }
-  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }${extraStyles}
+  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }
+  .warning-list { margin: 2px 0 0 0; padding-left: 16px; }
+  .warning-list li { font-family: monospace; font-size: 11px; color: #d4d4d4; }${extraStyles}
 </style>
 ${cssLinks}
 </head>
