@@ -71,6 +71,15 @@ function registerCustomFilters(engine) {
         begin = begin < 0 ? v.length + begin : begin;
         return v.slice(begin, begin + length);
     });
+
+    // where filter: override built-in to warn instead of error when the value is missing
+    engine.registerFilter('where', (arr, property, value) => {
+        if (arr == null) {
+            if (_currentWarnings) _currentWarnings.push('where filter applied to missing variable (returned empty)');
+            return [];
+        }
+        return arr.filter(obj => value === undefined ? (obj[property] !== false && obj[property] !== undefined && obj[property] !== null) : obj[property] === value);
+    });
 }
 
 // register custom Liquid filters used in templates
