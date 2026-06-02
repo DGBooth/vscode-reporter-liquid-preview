@@ -80,6 +80,58 @@ function registerCustomFilters(engine) {
         }
         return arr.filter(obj => value === undefined ? (obj[property] !== false && obj[property] !== undefined && obj[property] !== null) : obj[property] === value);
     });
+
+    // sort filter: override built-in to warn on null and support sorting by property key
+    engine.registerFilter('sort', (arr, property) => {
+        if (arr == null) {
+            if (_currentWarnings) _currentWarnings.push(`sort filter: array is missing (returned empty)`);
+            return [];
+        }
+        const sorted = [...arr];
+        if (property) {
+            sorted.sort((a, b) => {
+                const av = a == null ? null : a[property];
+                const bv = b == null ? null : b[property];
+                if (av == null && bv == null) return 0;
+                if (av == null) return 1;
+                if (bv == null) return -1;
+                if (av < bv) return -1;
+                if (av > bv) return 1;
+                return 0;
+            });
+        } else {
+            sorted.sort((a, b) => {
+                if (a == null && b == null) return 0;
+                if (a == null) return 1;
+                if (b == null) return -1;
+                if (a < b) return -1;
+                if (a > b) return 1;
+                return 0;
+            });
+        }
+        return sorted;
+    });
+
+    // sort_natural filter: case-insensitive sort, optionally by property key
+    engine.registerFilter('sort_natural', (arr, property) => {
+        if (arr == null) {
+            if (_currentWarnings) _currentWarnings.push(`sort_natural filter: array is missing (returned empty)`);
+            return [];
+        }
+        const sorted = [...arr];
+        const cmpNatural = (a, b) => {
+            if (a == null && b == null) return 0;
+            if (a == null) return 1;
+            if (b == null) return -1;
+            return String(a).toLowerCase().localeCompare(String(b).toLowerCase());
+        };
+        if (property) {
+            sorted.sort((a, b) => cmpNatural(a == null ? null : a[property], b == null ? null : b[property]));
+        } else {
+            sorted.sort(cmpNatural);
+        }
+        return sorted;
+    });
 }
 
 // register custom Liquid filters used in templates
