@@ -18,23 +18,24 @@ Renders your template as a styled HTML page in a VS Code webview panel, updated 
 - Use `ctrl+k h` (or **Reporter Liquid: Open HTML Preview to the Side**) while a `.liquid` file is active.
 - The rendered output is displayed with a white background and black text (including headings h1–h6), ensuring legibility regardless of your editor theme.
 
-### Full HTML Preview
+### Full HTML Preview (Document Options view)
 
-Renders your template as HTML with all Liquid tags stripped and replaced by visual annotations, so you can see the document structure at a glance.
+Renders your template as a layman-readable "document options" overview — designed to be shown to colleagues who don't know Liquid, so they can see every option, optional section and fill-in field a document offers.
 
 - Use `ctrl+k f` (or **Reporter Liquid: Open Full HTML Preview to the Side**) while a `.liquid` file is active.
-- No data file is required — Liquid logic is replaced by colour-coded boxes rather than executed.
-- Each Liquid construct is annotated with a coloured label:
+- No data file is required — Liquid logic is annotated rather than executed.
+- A header at the top names the document, summarises what it contains (e.g. "2 multiple-choice sections (5 options in total), 1 optional section, 3 fill-in fields…") and includes a collapsible plain-English key to the markers.
+- Liquid constructs are shown as colour-coded, plainly worded boxes:
 
-| Construct | Colour | Label |
-|-----------|--------|-------|
-| `{% choice %}` / `{% or %}` | Blue | Option 1, Option 2, … |
-| `{% optional %}` | Green (dashed) | Optional |
-| `{% editor %}` | Amber | Editable |
-| `{% if %}` / `{% elsif %}` / `{% else %}` | Purple | If / Else if / Else |
-| `{% unless %}` | Purple | Unless |
-| `{% for %}` | Teal | For |
-| `{% comment %}` | Grey (dashed) | Comment |
+| Construct | Colour | Shown as |
+|-----------|--------|----------|
+| `{% choice %}` / `{% or %}` | Blue | "Choose one" box (with the choice title) containing numbered Option 1, Option 2, … |
+| `{% optional %}` | Green | "Optional" box, with the field name in readable words |
+| `{% editor %}` | Amber | "Fill in" box, showing the placeholder text; inner content appears as the starting suggestion |
+| `{% if %}` / `{% elsif %}` / `{% else %}` / `{% unless %}` / `{% case %}` | Purple | "Shown when …" branches with the condition translated to plain English (e.g. `patient.age > 8` → "patient age is more than 8") |
+| `{% for %}` | Teal | "Repeats — once for each … " box |
+| `{% comment %}` | Grey (dashed) | "Author note" box |
+| `{{ variable }}` | Grey chip | Inline placeholder chip in readable words (e.g. `{{ owner.last_name }}` → "owner last name"), so sentences keep their flow |
 
 ### CSS Loading
 
