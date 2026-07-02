@@ -400,7 +400,7 @@ function stripLiquidFromHtmlTags(text) {
         } else if (inHtmlTag && inQuote !== null && ch === inQuote) {
             inQuote = null;
             result += ch; i++;
-        } else if (inHtmlTag && inQuote === null && ch === '{' && (text[i + 1] === '%' || text[i + 1] === '{')) {
+        } else if (inHtmlTag && ch === '{' && (text[i + 1] === '%' || text[i + 1] === '{')) {
             // Liquid tag or expression inside an HTML tag – discard it entirely
             const closeSeq = text[i + 1] === '%' ? '%}' : '}}';
             i += 2;
@@ -417,71 +417,258 @@ function stripLiquidFromHtmlTags(text) {
     return result;
 }
 
-function stripLiquid(text) {
-    let optionCount = 0;
+// Turn an identifier like 'patient.first_name' or 'ownerName' into readable words.
+function humanizeName(name) {
+    if (!name) return '';
+    return String(name)
+        .replace(/\[["']?/g, '.')
+        .replace(/["']?\]/g, '')
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .replace(/[._-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .toLowerCase()
+        .trim();
+}
+
+// Translate a Liquid condition into plain English, e.g.
+// "patient.sex == 'male' and age > 8" → 'patient sex is “male” and age is more than 8'
+function humanizeCondition(cond) {
+    let c = String(cond).trim();
+    c = c.replace(/'([^']*)'/g, '“$1”').replace(/"([^"]*)"/g, '“$1”');
+    c = c.replace(/>=/g, ' is at least ')
+        .replace(/<=/g, ' is at most ')
+        .replace(/!=/g, ' is not ')
+        .replace(/==/g, ' is ')
+        .replace(/>/g, ' is more than ')
+        .replace(/</g, ' is less than ');
+    // dotted / underscored / camelCase identifiers → spaced words
+    c = c.replace(/\b\w+(?:[._]\w+)+\b/g, m => humanizeName(m));
+    c = c.replace(/\b[a-z]+[A-Z]\w*\b/g, m => humanizeName(m));
+    return c.replace(/\s+/g, ' ').trim();
+}
+
+// Build a colour-coded pill label, optionally followed by an explanatory detail.
+function annotationLabel(labelText, detailText) {
+    const detail = detailText ? `<span class="lp-detail">${escapeHtml(detailText)}</span>` : '';
+    return `<span class="lp-label">${escapeHtml(labelText)}</span>${detail}`;
+}
+
+// Rewrite a Liquid template into an annotated, layman-readable HTML document:
+// every choice, optional section, fill-in field and automatic rule is shown as a
+// labelled box, and data placeholders appear inline as chips. Returns the HTML
+// plus counts of each construct for the summary header.
+function annotateLiquid(text) {
+    const stats = { choices: 0, options: 0, optionals: 0, editors: 0, conditionals: 0, loops: 0, notes: 0, variables: 0 };
+
+    // Protect literal text so it is not mistaken for live Liquid constructs below.
+    const neutralizeBraces = s => s.replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 
     // Step 1: remove liquid embedded within HTML element tags (attribute-level logic).
     // These modify HTML structure rather than producing standalone output.
     text = stripLiquidFromHtmlTags(text);
 
-    // Step 2: remove non-output block tags that never produce HTML content directly.
-    // capture/endcapture – captures rendered output into a variable
-    text = text.replace(/\{%-?\s*capture\b.*?-?%\}[\s\S]*?\{%-?\s*endcapture\s*-?%\}/g, '');
-    // assign, increment, decrement – variable manipulation, no output
-    // render, include – render a sub-template; its output isn't meaningful here
-    text = text.replace(/\{%-?\s*(assign|increment|decrement|render|include)\b.*?-?%\}/g, '');
+    // Step 2: capture blocks store output in a variable and render nothing here.
+    text = text.replace(/\{%-?\s*capture\b[\s\S]*?\{%-?\s*endcapture\s*-?%\}/g, '');
 
-    // comment / endcomment → muted comment box (processed first so its body is not
-    // mistaken for other liquid constructs)
-    text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) =>
-        `<div class="lp-comment"><span class="lp-label">Comment</span>${escapeHtml(body.trim())}</div>`);
-
-    // choice / or / endchoice → numbered option boxes
-    // 'choice' can have arguments; 'or' and 'endchoice' do not
-    text = text.replace(/\{%-?\s*choice\b.*?-?%\}/g, () => {
-        optionCount = 1;
-        return '<div class="lp-choice-block"><div class="lp-option"><span class="lp-label">Option 1</span>';
+    // Step 3: comments → author-note box (processed before the tag scan so their
+    // bodies are not mistaken for live Liquid constructs).
+    text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) => {
+        stats.notes++;
+        return `<div class="lp-note">${annotationLabel('Author note')}${neutralizeBraces(escapeHtml(body.trim()))}</div>`;
     });
-    text = text.replace(/\{%-?\s*or\s*-?%\}/g, () => {
-        optionCount++;
-        return `</div><div class="lp-option"><span class="lp-label">Option ${optionCount}</span>`;
+
+    // raw blocks output their body as literal text.
+    text = text.replace(/\{%-?\s*raw\s*-?%\}([\s\S]*?)\{%-?\s*endraw\s*-?%\}/g, (_, body) => neutralizeBraces(body));
+
+    // Step 4: single pass over all {% ... %} tags with a stack, so labels and
+    // option numbering stay correct even when constructs are nested.
+    const stack = [];
+    const peek = () => stack[stack.length - 1];
+    const pop = type => {
+        const top = peek();
+        if (top && top.type === type) stack.pop();
+        return top && top.type === type ? top : null;
+    };
+
+    text = text.replace(/\{%-?\s*(\w+)([\s\S]*?)-?%\}/g, (_, tag, rest) => {
+        rest = rest.trim();
+        switch (tag) {
+            case 'choice': {
+                const args = parseTagArgs(rest);
+                stats.choices++;
+                stats.options++;
+                stack.push({ type: 'choice', options: 1, closes: 2 });
+                const what = args.title || humanizeName(args.name || args.nameVar);
+                return `<div class="lp-choice"><div class="lp-choice-head">${annotationLabel('Choose one', what)}</div>`
+                    + `<div class="lp-option"><span class="lp-opt-label">Option 1</span>`;
+            }
+            case 'or': {
+                const top = peek();
+                if (top && top.type === 'choice') {
+                    top.options++;
+                    stats.options++;
+                    return `</div><div class="lp-option"><span class="lp-opt-label">Option ${top.options}</span>`;
+                }
+                return '';
+            }
+            case 'endchoice':
+                pop('choice');
+                return '</div></div>';
+            case 'optional': {
+                const args = parseTagArgs(rest);
+                stats.optionals++;
+                stack.push({ type: 'optional', closes: 1 });
+                return `<div class="lp-optional">${annotationLabel('Optional', humanizeName(args.name || args.nameVar))}`;
+            }
+            case 'endoptional':
+                pop('optional');
+                return '</div>';
+            case 'editor': {
+                const args = parseTagArgs(rest);
+                stats.editors++;
+                stack.push({ type: 'editor', closes: 1 });
+                const what = args.placeholder || humanizeName(args.name || args.nameVar);
+                return `<div class="lp-editor">${annotationLabel('Fill in', what)}`;
+            }
+            case 'endeditor':
+                pop('editor');
+                return '</div>';
+            case 'if':
+                stats.conditionals++;
+                stack.push({ type: 'if', closes: 2 });
+                return `<div class="lp-cond"><div class="lp-branch">${annotationLabel('Shown when', humanizeCondition(rest))}`;
+            case 'elsif': {
+                const top = peek();
+                if (top && top.type === 'if') {
+                    return `</div><div class="lp-branch">${annotationLabel('Otherwise, when', humanizeCondition(rest))}`;
+                }
+                return '';
+            }
+            case 'else': {
+                const top = peek();
+                if (top && top.type === 'if') {
+                    return `</div><div class="lp-branch">${annotationLabel('Otherwise')}`;
+                }
+                if (top && top.type === 'case') {
+                    const prefix = top.closes === 2 ? '</div>' : '';
+                    top.closes = 2;
+                    return `${prefix}<div class="lp-branch">${annotationLabel('Otherwise')}`;
+                }
+                return '';
+            }
+            case 'endif':
+                pop('if');
+                return '</div></div>';
+            case 'unless':
+                stats.conditionals++;
+                stack.push({ type: 'if', closes: 2 });
+                return `<div class="lp-cond"><div class="lp-branch">${annotationLabel('Shown unless', humanizeCondition(rest))}`;
+            case 'endunless':
+                pop('if');
+                return '</div></div>';
+            case 'case':
+                stats.conditionals++;
+                stack.push({ type: 'case', closes: 1, subject: humanizeCondition(rest) });
+                return '<div class="lp-cond">';
+            case 'when': {
+                const top = peek();
+                if (top && top.type === 'case') {
+                    const prefix = top.closes === 2 ? '</div>' : '';
+                    top.closes = 2;
+                    return `${prefix}<div class="lp-branch">${annotationLabel('When', `${top.subject} is ${humanizeCondition(rest)}`)}`;
+                }
+                return '';
+            }
+            case 'endcase': {
+                const top = pop('case');
+                return top && top.closes === 2 ? '</div></div>' : '</div>';
+            }
+            case 'for':
+            case 'tablerow': {
+                stats.loops++;
+                stack.push({ type: tag, closes: 1 });
+                const m = rest.match(/^(\S+)\s+in\s+([\s\S]+)$/);
+                const detail = m
+                    ? `once for each ${humanizeName(m[1])} in ${humanizeCondition(m[2].split('|')[0])}`
+                    : humanizeCondition(rest);
+                return `<div class="lp-loop">${annotationLabel('Repeats', detail)}`;
+            }
+            case 'endfor':
+                pop('for');
+                return '</div>';
+            case 'endtablerow':
+                pop('tablerow');
+                return '</div>';
+            default:
+                // assign, increment, decrement, render, include, cycle, break, … – no visible output
+                return '';
+        }
     });
-    text = text.replace(/\{%-?\s*endchoice\s*-?%\}/g, '</div></div>');
 
-    // optional / endoptional → styled optional box
-    text = text.replace(/\{%-?\s*optional\b.*?-?%\}/g,
-        '<div class="lp-optional"><span class="lp-label">Optional</span>');
-    text = text.replace(/\{%-?\s*endoptional\s*-?%\}/g, '</div>');
+    // Close any blocks left open (e.g. while the template is being edited).
+    while (stack.length) {
+        text += '</div>'.repeat(stack.pop().closes);
+    }
 
-    // editor / endeditor → styled editor box
-    text = text.replace(/\{%-?\s*editor\b.*?-?%\}/g,
-        '<div class="lp-editor"><span class="lp-label">Editable</span>');
-    text = text.replace(/\{%-?\s*endeditor\s*-?%\}/g, '</div>');
+    // Step 5: output expressions → inline data chips, so sentences stay readable
+    // instead of having invisible holes where values would go.
+    text = text.replace(/\{\{-?([\s\S]*?)-?\}\}/g, (_, expr) => {
+        expr = expr.split('|')[0].trim();
+        const literal = expr.match(/^'([^']*)'$|^"([^"]*)"$/);
+        if (literal) return escapeHtml(literal[1] !== undefined ? literal[1] : literal[2]);
+        if (!expr) return '';
+        stats.variables++;
+        return `<span class="lp-var">${escapeHtml(humanizeName(expr))}</span>`;
+    });
 
-    // if / elsif / else / endif → styled branch boxes
-    text = text.replace(/\{%-?\s*if\s+(.*?)-?%\}/g, (_, cond) =>
-        `<div class="lp-if-block"><div class="lp-branch"><span class="lp-label">If: ${escapeHtml(cond.trim())}</span>`);
-    text = text.replace(/\{%-?\s*elsif\s+(.*?)-?%\}/g, (_, cond) =>
-        `</div><div class="lp-branch"><span class="lp-label">Else if: ${escapeHtml(cond.trim())}</span>`);
-    text = text.replace(/\{%-?\s*else\s*-?%\}/g,
-        '</div><div class="lp-branch"><span class="lp-label">Else</span>');
-    text = text.replace(/\{%-?\s*endif\s*-?%\}/g, '</div></div>');
+    return { html: text, stats };
+}
 
-    // unless / endunless → styled branch box
-    text = text.replace(/\{%-?\s*unless\s+(.*?)-?%\}/g, (_, cond) =>
-        `<div class="lp-if-block"><div class="lp-branch"><span class="lp-label">Unless: ${escapeHtml(cond.trim())}</span>`);
-    text = text.replace(/\{%-?\s*endunless\s*-?%\}/g, '</div></div>');
+function pluralize(count, singular, plural) {
+    return `${count} ${count === 1 ? singular : (plural || singular + 's')}`;
+}
 
-    // for / endfor → styled loop box
-    text = text.replace(/\{%-?\s*for\s+(.*?)-?%\}/g, (_, expr) =>
-        `<div class="lp-loop"><span class="lp-label">For: ${escapeHtml(expr.trim())}</span>`);
-    text = text.replace(/\{%-?\s*endfor\s*-?%\}/g, '</div>');
+function joinWithAnd(parts) {
+    if (parts.length <= 1) return parts.join('');
+    return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+}
 
-    // Strip all remaining liquid tags and output expressions
-    text = text.replace(/\{%-?[\s\S]*?-?%\}/g, '');
-    text = text.replace(/\{\{-?[\s\S]*?-?\}\}/g, '');
+// Header shown above the annotated document: what it is, what it contains,
+// and a plain-English key to the colour-coded markers.
+function buildFullPreviewHeader(templateUri, stats) {
+    const fileName = templateUri ? path.basename(templateUri) : '';
 
-    return text;
+    const summaryParts = [];
+    if (stats.choices) summaryParts.push(`${pluralize(stats.choices, 'multiple-choice section')} (${pluralize(stats.options, 'option')} in total)`);
+    if (stats.optionals) summaryParts.push(pluralize(stats.optionals, 'optional section'));
+    if (stats.editors) summaryParts.push(pluralize(stats.editors, 'fill-in field'));
+    if (stats.conditionals) summaryParts.push(pluralize(stats.conditionals, 'automatic section'));
+    if (stats.loops) summaryParts.push(pluralize(stats.loops, 'repeating section'));
+    if (stats.variables) summaryParts.push(pluralize(stats.variables, 'data value', 'data values'));
+    const summary = summaryParts.length
+        ? `This document contains ${joinWithAnd(summaryParts)}.`
+        : 'This document has no options — it always reads exactly as shown below.';
+
+    const legendRows = [];
+    const legendRow = (cls, label, description) =>
+        `<span class="lp-label ${cls}">${label}</span><span>${description}</span>`;
+    if (stats.choices) legendRows.push(legendRow('lg-choice', 'Choose one', 'The writer picks exactly one of the numbered options.'));
+    if (stats.optionals) legendRows.push(legendRow('lg-optional', 'Optional', 'The writer can include this content or leave it out.'));
+    if (stats.editors) legendRows.push(legendRow('lg-editor', 'Fill in', 'The writer types this in; any text shown is the starting suggestion.'));
+    if (stats.conditionals) legendRows.push(legendRow('lg-cond', 'Shown when…', 'Included automatically when the stated condition applies.'));
+    if (stats.loops) legendRows.push(legendRow('lg-loop', 'Repeats', 'This section appears once for each item in a list.'));
+    if (stats.variables) legendRows.push(`<span class="lp-var">example value</span><span>Filled in automatically from the case data.</span>`);
+    if (stats.notes) legendRows.push(legendRow('lg-note', 'Author note', 'Guidance for template authors — never appears in the finished document.'));
+
+    const legend = legendRows.length
+        ? `<details class="lp-legend" open><summary>What the markers mean</summary><div class="lp-legend-grid">${legendRows.join('')}</div></details>`
+        : '';
+
+    return `<div class="lp-header">
+<div class="lp-doc-title">Document options${fileName ? ' — ' + escapeHtml(fileName) : ''}</div>
+<div class="lp-summary">${summary}</div>
+${legend}
+</div>`;
 }
 
 const htmlPreviewStyles = `
@@ -493,23 +680,47 @@ const htmlPreviewStyles = `
   .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`;
 
 const fullPreviewStyles = `
-  .lp-choice-block { border: 2px solid #1976d2; border-radius: 4px; margin: 8px 0; overflow: hidden; }
-  .lp-option { border-left: 4px solid #1976d2; background: #e3f2fd; padding: 6px 10px; }
+  .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
+  .lp-detail { font-family: sans-serif; font-size: 12px; font-style: italic; color: #555; margin-right: 6px; vertical-align: middle; }
+
+  .lp-header { font-family: sans-serif; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; padding: 12px 16px; margin: 0 0 18px 0; }
+  .lp-doc-title { font-size: 16px; font-weight: bold; color: #222; }
+  .lp-summary { font-size: 12.5px; color: #444; margin: 5px 0 4px 0; }
+  .lp-legend { margin-top: 6px; }
+  .lp-legend summary { font-size: 11.5px; font-weight: bold; color: #666; cursor: pointer; }
+  .lp-legend-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; font-size: 12px; color: #333; margin-top: 8px; }
+  .lg-choice { background: #1976d2; }
+  .lg-optional { background: #388e3c; }
+  .lg-editor { background: #ef6c00; }
+  .lg-cond { background: #7b1fa2; }
+  .lg-loop { background: #00796b; }
+  .lg-note { background: #9e9e9e; }
+
+  .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px 0; overflow: hidden; background: white; }
+  .lp-choice-head { background: #e3f2fd; border-bottom: 1px solid #bbdefb; padding: 5px 10px; }
+  .lp-choice .lp-label { background: #1976d2; }
+  .lp-option { padding: 6px 12px; }
   .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
-  .lp-optional { border: 2px dashed #388e3c; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: #f1f8e9; }
-  .lp-editor { border: 2px solid #f57c00; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: #fff8e1; }
-  .lp-if-block { border: 2px solid #7b1fa2; border-radius: 4px; margin: 8px 0; overflow: hidden; }
-  .lp-branch { border-left: 4px solid #7b1fa2; background: #f3e5f5; padding: 6px 10px; }
-  .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
-  .lp-loop { border: 2px solid #00796b; border-radius: 4px; padding: 6px 10px; margin: 8px 0; background: #e0f2f1; }
-  .lp-label { display: inline-block; font-size: 10px; font-weight: bold; font-family: sans-serif; color: white; padding: 1px 6px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
-  .lp-choice-block .lp-label { background: #1976d2; }
+  .lp-opt-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; color: #1565c0; background: #e3f2fd; border: 1px solid #90caf9; padding: 1px 8px; border-radius: 9px; margin: 2px 8px 2px 0; vertical-align: middle; }
+
+  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px 0; }
   .lp-optional .lp-label { background: #388e3c; }
-  .lp-editor .lp-label { background: #f57c00; }
-  .lp-if-block .lp-label { background: #7b1fa2; }
+
+  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px 0; }
+  .lp-editor .lp-label { background: #ef6c00; }
+
+  .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px 0; overflow: hidden; background: #faf5fb; }
+  .lp-cond > .lp-branch { padding: 6px 12px; }
+  .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
+  .lp-cond .lp-label { background: #7b1fa2; }
+
+  .lp-loop { border: 1px solid #80cbc4; border-left: 4px solid #00796b; border-radius: 0 6px 6px 0; background: #e0f2f1; padding: 6px 10px; margin: 10px 0; }
   .lp-loop .lp-label { background: #00796b; }
-  .lp-comment { border: 1px dashed #9e9e9e; border-radius: 4px; padding: 4px 10px; margin: 4px 0; background: #f5f5f5; color: #616161; font-style: italic; }
-  .lp-comment .lp-label { background: #9e9e9e; font-style: normal; }`;
+
+  .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
+  .lp-note .lp-label { background: #9e9e9e; font-style: normal; }
+
+  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`;
 
 async function refreshHtmlFullPanel(preview, panel) {
     let errors = [];
@@ -517,7 +728,8 @@ async function refreshHtmlFullPanel(preview, panel) {
 
     try {
         let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
-        content = stripLiquid(templateDocument.getText());
+        const { html, stats } = annotateLiquid(templateDocument.getText());
+        content = buildFullPreviewHeader(preview.templateUri, stats) + html;
         preview.lastRenderedHtml = content;
     } catch (err) {
         errors.push({ title: 'Template error', message: err.message });
