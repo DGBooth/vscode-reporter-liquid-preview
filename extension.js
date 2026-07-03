@@ -465,7 +465,12 @@ function annotationLabel(labelText, detailText) {
 // every choice, optional section, fill-in field and automatic rule is shown as a
 // labelled box, and data placeholders appear inline as chips. Returns the HTML
 // plus counts of each construct for the summary header.
-function annotateLiquid(text) {
+//
+// With includeNotes: false, {% comment %} blocks are removed instead of shown
+// as author-note boxes. Loops and conditionals whose body then has no visible
+// content (e.g. it was only a comment) are dropped by the same logic that
+// hides logic-only blocks, and the stats reflect what actually remains.
+function annotateLiquid(text, { includeNotes = true } = {}) {
     const stats = { choices: 0, options: 0, optionals: 0, editors: 0, conditionals: 0, loops: 0, notes: 0, variables: 0 };
 
     // Protect literal text so it is not mistaken for live Liquid constructs below.
@@ -481,6 +486,7 @@ function annotateLiquid(text) {
     // Step 3: comments → author-note box (processed before the tag scan so their
     // bodies are not mistaken for live Liquid constructs).
     text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) => {
+        if (!includeNotes) return '';
         stats.notes++;
         return `<div class="lp-note">${annotationLabel('Author note')}${neutralizeBraces(escapeHtml(body.trim()))}</div>`;
     });
@@ -531,7 +537,7 @@ function annotateLiquid(text) {
             case 'tablerow':
                 if (!hasVisibleContent(frame.html)) return '';
                 stats.loops++;
-                return `<div class="lp-loop">${frame.label}${frame.html}</div>`;
+                return `<div class="lp-loop"><div class="lp-loop-head">${frame.label}</div>${frame.html}</div>`;
         }
         return frame.html;
     };
@@ -801,7 +807,12 @@ const fullPreviewStyles = `
   .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
   .lp-cond .lp-label { background: #7b1fa2; }
 
-  .lp-loop { border: 1px solid #80cbc4; border-left: 4px solid #00796b; border-radius: 0 6px 6px 0; background: #e0f2f1; padding: 6px 10px; margin: 10px 0; }
+  /* Loops are marked with a left rail and a label strip rather than a full
+     box: they nest inside one another, and a padded box on both sides quickly
+     narrows the usable width until tables inside deep loops get crushed.
+     The rail costs 13px on the left per level and nothing on the right. */
+  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0; }
+  .lp-loop-head { display: inline-block; background: #e0f2f1; border: 1px solid #80cbc4; border-left: none; border-radius: 0 9px 9px 0; padding: 2px 8px 2px 6px; margin: 0 0 4px -10px; }
   .lp-loop .lp-label { background: #00796b; }
 
   .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
@@ -1000,7 +1011,12 @@ function buildFullPreviewContent(templateText, templateUri) {
     const { html, stats } = annotateLiquid(templateText);
     const cssText = readCssContents(templateUri);
 
-    const exportContent = buildFullPreviewHeader(templateUri, stats) + html;
+    // The standalone export is the publishable document, so author notes are
+    // left out of it entirely — a second annotation pass without notes also
+    // drops any loop or conditional that held nothing but a note, and its
+    // stats keep the export's own summary header accurate.
+    const exported = annotateLiquid(templateText, { includeNotes: false });
+    const exportContent = buildFullPreviewHeader(templateUri, exported.stats) + exported.html;
     const standalone = buildStandaloneHtml(exportContent, cssText);
 
     // The toggles are plain checkboxes wired up purely with CSS

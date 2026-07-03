@@ -44,7 +44,7 @@ Renders your template as a layman-readable "document options" overview — desig
 | `{% optional %}` | Green | "Optional" box, with the field name in readable words |
 | `{% editor %}` | Amber | "Fill in" box, showing the placeholder text; inner content appears as the starting suggestion |
 | `{% if %}` / `{% elsif %}` / `{% else %}` / `{% unless %}` / `{% case %}` | Purple | "Shown when …" branches with the condition translated to plain English (e.g. `patient.age > 8` → "patient age is more than 8") |
-| `{% for %}` | Teal | "Repeats — once for each … " box |
+| `{% for %}` | Teal | "Repeats — once for each … " label with a rail down the left edge of the repeated content. Loops often nest, so they deliberately add no box around the content itself — tables inside several levels of loops keep their full width |
 | `{% comment %}` | Grey (dashed) | "Author note" box |
 | `{{ variable }}` | Grey chip | Inline placeholder chip in readable words (e.g. `{{ owner.last_name }}` → "owner last name"), so sentences keep their flow |
 
@@ -53,7 +53,7 @@ Renders your template as a layman-readable "document options" overview — desig
 A toolbar pinned to the top of the viewport offers:
 
 - **Show author notes** — untick to hide the `{% comment %}` boxes (and their legend entry) when the notes are only relevant to template developers. Only shown when the template contains notes.
-- **Show HTML source** — swaps the view for a complete, standalone HTML document ready to publish elsewhere (e.g. paste into SharePoint or save as an `.html` file). The preview's styles and the contents of any external CSS the preview loads are inlined, so the document works entirely on its own; the toggle controls themselves are excluded. Click the code once to select all of it for copying.
+- **Show HTML source** — swaps the view for a complete, standalone HTML document ready to publish elsewhere (e.g. paste into SharePoint or save as an `.html` file). The preview's styles and the contents of any external CSS the preview loads are inlined, so the document works entirely on its own; the toggle controls themselves are excluded. Author notes are excluded too — they're guidance for template developers, not part of the published document — and any loop or conditional that contained nothing but a note is dropped along with them. Click the code once to select all of it for copying.
 
 ### CSS Loading
 
