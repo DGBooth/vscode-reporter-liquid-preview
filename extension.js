@@ -789,21 +789,26 @@ const fullPreviewStyles = `
   .lg-loop { background: #00796b; }
   .lg-note { background: #9e9e9e; }
 
+  /* Documents often cap their width (e.g. section { max-width: 1024px }), so
+     an annotated table can be wider than the box it sits in. Boxes clip at
+     rounded corners (overflow: hidden), which would make the table's right
+     edge unreachable — the inner branch/option containers scroll horizontally
+     instead, so every column can still be read. */
   .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px 0; overflow: hidden; background: white; }
   .lp-choice-head { background: #e3f2fd; border-bottom: 1px solid #bbdefb; padding: 5px 10px; }
   .lp-choice .lp-label { background: #1976d2; }
-  .lp-option { padding: 6px 12px; }
+  .lp-option { padding: 6px 12px; overflow-x: auto; }
   .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
   .lp-opt-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; color: #1565c0; background: #e3f2fd; border: 1px solid #90caf9; padding: 1px 8px; border-radius: 9px; margin: 2px 8px 2px 0; vertical-align: middle; }
 
-  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px 0; }
+  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px 0; overflow-x: auto; }
   .lp-optional .lp-label { background: #388e3c; }
 
-  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px 0; }
+  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px 0; overflow-x: auto; }
   .lp-editor .lp-label { background: #ef6c00; }
 
   .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px 0; overflow: hidden; background: #faf5fb; }
-  .lp-cond > .lp-branch { padding: 6px 12px; }
+  .lp-cond > .lp-branch { padding: 6px 12px; overflow-x: auto; }
   .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
   .lp-cond .lp-label { background: #7b1fa2; }
 
@@ -811,7 +816,7 @@ const fullPreviewStyles = `
      box: they nest inside one another, and a padded box on both sides quickly
      narrows the usable width until tables inside deep loops get crushed.
      The rail costs 13px on the left per level and nothing on the right. */
-  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0; }
+  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0; overflow-x: auto; }
   .lp-loop-head { display: inline-block; background: #e0f2f1; border: 1px solid #80cbc4; border-left: none; border-radius: 0 9px 9px 0; padding: 2px 8px 2px 6px; margin: 0 0 4px -10px; }
   .lp-loop .lp-label { background: #00796b; }
 
@@ -822,7 +827,11 @@ const fullPreviewStyles = `
   body:has(#lp-show-notes:not(:checked)) .lp-note,
   body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
 
-  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`
+  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }
+  /* Inside table cells, long chip names must wrap: a nowrap chip sets the
+     column's minimum width, and on a width-limited page that forces the
+     whole table wider than its container. */
+  td .lp-var, th .lp-var { white-space: normal; }`
     + viewSourceStyles + `
   .lp-source pre { user-select: all; }`;
 

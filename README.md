@@ -36,6 +36,7 @@ Renders your template as a layman-readable "document options" overview — desig
 - No data file is required — Liquid logic is annotated rather than executed.
 - A header at the top names the document, summarises what it contains (e.g. "2 multiple-choice sections (5 options in total), 1 optional section, 3 fill-in fields…") and includes a collapsible plain-English key to the markers.
 - **Only actual outputs are shown**: loops and conditionals that exist purely to set up variables (`assign`, `capture`, etc.) and produce nothing visible are hidden entirely, as are empty branches of otherwise-visible conditionals — so readers see every possible output without the behind-the-scenes logic that makes it work.
+- **Wide content stays reachable**: documents often cap their own width (e.g. `section { max-width: 1024px }` in the template's CSS). A table inside an annotation box scrolls horizontally within the box when it can't fit, instead of having its right-hand columns clipped, and data-value chips wrap inside table cells so annotated tables don't demand more width than the finished document would.
 - Liquid constructs are shown as colour-coded, plainly worded boxes:
 
 | Construct | Colour | Shown as |
