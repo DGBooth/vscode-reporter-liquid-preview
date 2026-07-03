@@ -678,8 +678,10 @@ function joinWithAnd(parts) {
 }
 
 // Header shown above the annotated document: what it is, what it contains,
-// and a plain-English key to the colour-coded markers.
-function buildFullPreviewHeader(templateUri, stats) {
+// and a plain-English key to the colour-coded markers. toolbarHtml (optional)
+// is injected at the end of the header box — used for the webview's toggles,
+// and left out of the standalone export so it carries no form controls.
+function buildFullPreviewHeader(templateUri, stats, toolbarHtml = '') {
     const fileName = templateUri ? path.basename(templateUri) : '';
 
     const summaryParts = [];
@@ -709,17 +711,11 @@ function buildFullPreviewHeader(templateUri, stats) {
         ? `<details class="lp-legend" open><summary>What the markers mean</summary><div class="lp-legend-grid">${legendRows.join('')}</div></details>`
         : '';
 
-    // Scripts are disabled in the webview, so the author-note toggle is a plain
-    // checkbox wired up purely with CSS (body:has(...) rules in fullPreviewStyles).
-    const notesToggle = stats.notes
-        ? `<label class="lp-toggle"><input type="checkbox" id="lp-show-notes" checked=""> Show ${pluralize(stats.notes, 'author note')}</label>`
-        : '';
-
     return `<div class="lp-header">
 <div class="lp-doc-title">Document options${fileName ? ' — ' + escapeHtml(fileName) : ''}</div>
 <div class="lp-summary">${summary}</div>
 ${legend}
-${notesToggle}
+${toolbarHtml}
 </div>`;
 }
 
@@ -772,13 +768,69 @@ const fullPreviewStyles = `
   .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
   .lp-note .lp-label { background: #9e9e9e; font-style: normal; }
 
-  .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; margin-top: 8px; }
+  .lp-toolbar { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
+  .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
   .lp-toggle input { margin: 0; }
   .lp-legend-note { display: contents; }
   body:has(#lp-show-notes:not(:checked)) .lp-note,
   body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
 
+  .lp-source { display: none; }
+  .lp-source-hint { font-family: sans-serif; font-size: 12px; color: #444; margin-bottom: 8px; }
+  .lp-source pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: all; cursor: text; }
+  body:has(#lp-show-source:checked) .lp-rendered { display: none; }
+  body:has(#lp-show-source:checked) .lp-source { display: block; }
+
   .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`;
+
+// A complete standalone HTML document for the annotated view: preview styles
+// and any external CSS are inlined, so the file works on its own (e.g. pasted
+// into SharePoint or saved as an .html file).
+function buildStandaloneHtml(content, cssText) {
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background-color: white; color: black; margin: 0; padding: 16px; box-sizing: border-box; }
+  h1, h2, h3, h4, h5, h6 { color: black; }${fullPreviewStyles}
+${cssText}
+</style>
+</head>
+<body>
+${content}
+</body>
+</html>`;
+}
+
+// Body of the Full HTML Preview webview: the header (with view toggles), the
+// annotated document, and a hidden panel holding the standalone HTML source
+// that the "Show HTML source" toggle swaps in.
+function buildFullPreviewContent(templateText, templateUri) {
+    const { html, stats } = annotateLiquid(templateText);
+    const cssText = readCssContents(templateUri);
+
+    const exportContent = buildFullPreviewHeader(templateUri, stats) + html;
+    const standalone = buildStandaloneHtml(exportContent, cssText);
+
+    // Scripts are disabled in the webview, so the toggles are plain checkboxes
+    // wired up purely with CSS (body:has(...) rules in fullPreviewStyles).
+    const toggles = [];
+    if (stats.notes) {
+        toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-notes" checked=""> Show ${pluralize(stats.notes, 'author note')}</label>`);
+    }
+    toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`);
+    const toolbar = `<div class="lp-toolbar">${toggles.join('')}</div>`;
+
+    const sourcePanel = `<div class="lp-source">
+<div class="lp-source-hint">Standalone HTML for this document — styles are included, so it works on its own. Click the code below to select it all, copy, and paste into SharePoint or save as an .html file.</div>
+<pre>${escapeHtml(standalone)}</pre>
+</div>`;
+
+    return buildFullPreviewHeader(templateUri, stats, toolbar)
+        + `<div class="lp-rendered">${html}</div>`
+        + sourcePanel;
+}
 
 async function refreshHtmlFullPanel(preview, panel) {
     let errors = [];
@@ -786,8 +838,7 @@ async function refreshHtmlFullPanel(preview, panel) {
 
     try {
         let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
-        const { html, stats } = annotateLiquid(templateDocument.getText());
-        content = buildFullPreviewHeader(preview.templateUri, stats) + html;
+        content = buildFullPreviewContent(templateDocument.getText(), preview.templateUri);
         preview.lastRenderedHtml = content;
     } catch (err) {
         errors.push({ title: 'Template error', message: err.message });
@@ -850,7 +901,7 @@ async function refreshHtmlPanel(preview, panel) {
     panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles);
 }
 
-function buildCssLinks(templateUri, webview) {
+function findCssPaths(templateUri) {
     const fs = require('fs');
     let cssPaths = [];
 
@@ -875,11 +926,24 @@ function buildCssLinks(templateUri, webview) {
         }
     }
 
-    return cssPaths
+    return cssPaths;
+}
+
+function buildCssLinks(templateUri, webview) {
+    return findCssPaths(templateUri)
         .map(p => {
             let uri = webview.asWebviewUri(vscode.Uri.file(p));
             return `<link rel="stylesheet" href="${uri}">`;
         })
+        .join('\n');
+}
+
+// Concatenated contents of the workspace/template CSS files, for inlining into
+// a standalone document.
+function readCssContents(templateUri) {
+    const fs = require('fs');
+    return findCssPaths(templateUri)
+        .map(p => `/* ${path.basename(p)} */\n${fs.readFileSync(p, 'utf8')}`)
         .join('\n');
 }
 
