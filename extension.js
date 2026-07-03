@@ -686,10 +686,9 @@ function joinWithAnd(parts) {
 }
 
 // Header shown above the annotated document: what it is, what it contains,
-// and a plain-English key to the colour-coded markers. toolbarHtml (optional)
-// is injected at the end of the header box — used for the webview's toggles,
-// and left out of the standalone export so it carries no form controls.
-function buildFullPreviewHeader(templateUri, stats, toolbarHtml = '') {
+// and a plain-English key to the colour-coded markers. Used both in the
+// webview and in the standalone export (which is why it carries no controls).
+function buildFullPreviewHeader(templateUri, stats) {
     const fileName = templateUri ? path.basename(templateUri) : '';
 
     const summaryParts = [];
@@ -723,7 +722,6 @@ function buildFullPreviewHeader(templateUri, stats, toolbarHtml = '') {
 <div class="lp-doc-title">Document options${fileName ? ' — ' + escapeHtml(fileName) : ''}</div>
 <div class="lp-summary">${summary}</div>
 ${legend}
-${toolbarHtml}
 </div>`;
 }
 
@@ -734,7 +732,8 @@ ${toolbarHtml}
 // --vscode-* variables the editor injects into webviews; the fallbacks keep
 // the rules harmless outside VS Code (e.g. in the standalone export).
 const viewSourceStyles = `
-  .lp-toolbar { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
+  #lp-chrome { display: contents; }
+  .lp-toolbar { position: sticky; top: 0; z-index: 9000; display: flex; flex-wrap: wrap; gap: 6px 18px; background: white; margin: -8px -8px 10px -8px; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
   .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
   .lp-toggle input { margin: 0; }
   .lp-source { display: none; }
@@ -742,7 +741,7 @@ const viewSourceStyles = `
   .lp-source pre { background: var(--vscode-textCodeBlock-background, #f5f5f5); color: var(--vscode-editor-foreground, black); border: 1px solid var(--vscode-panel-border, #ddd); border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
   body:has(#lp-show-source:checked) { background-color: var(--vscode-editor-background, white); }
   body:has(#lp-show-source:checked) .lp-toggle { color: var(--vscode-foreground, #444); }
-  body:has(#lp-show-source:checked) .lp-toolbar { border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
+  body:has(#lp-show-source:checked) .lp-toolbar { background: var(--vscode-editor-background, white); border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
   body:has(#lp-show-source:checked) #lp-rendered-root,
   body:has(#lp-show-source:checked) #lp-rendered-root ~ * { display: none; }
   body:has(#lp-show-source:checked) .lp-source { display: block; }`;
@@ -754,8 +753,7 @@ const htmlPreviewStyles = `
   .editor:has(input[type="text"]), .editor:has(textarea) { border: 2px solid #f57c00; background: #fff8e1; }
   .editor:has(input[type="radio"]) label { display: block; padding: 6px 10px; margin: 4px 0; border: 1px solid #90caf9; border-radius: 3px; background: white; }
   .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`
-    + viewSourceStyles + `
-  .lp-toolbar { margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0; }`;
+    + viewSourceStyles;
 
 const fullPreviewStyles = `
   .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
@@ -952,7 +950,7 @@ function buildFullPreviewContent(templateText, templateUri) {
 </div>`;
 
     return {
-        chrome: buildFullPreviewHeader(templateUri, stats, toolbar) + sourcePanel,
+        chrome: toolbar + buildFullPreviewHeader(templateUri, stats) + sourcePanel,
         rendered: html
     };
 }
@@ -1174,6 +1172,140 @@ ${rendered}
         const newLegend = document.querySelector('.lp-legend');
         if (newLegend && legendOpen !== null) newLegend.open = legendOpen;
         window.scrollTo(x, y);
+    });
+
+    // ---- Scroll sync between the rendered view and the HTML source view ----
+    // On toggle, anchor on the text at the top of the viewport in the view
+    // being left and scroll the view being entered to that same text. If the
+    // anchor can't be found (e.g. entity differences), the scroll is left
+    // alone rather than jumping to the top.
+
+    const sourcePre = () => document.querySelector('.lp-source pre');
+    const toolbarBottom = () => {
+        const bar = document.querySelector('.lp-toolbar');
+        return bar ? bar.getBoundingClientRect().bottom : 0;
+    };
+
+    const escapeRegex = s => s.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+    // Whitespace-tolerant matcher from the first few words of a snippet.
+    const snippetRegex = snippet => {
+        const words = String(snippet).trim().split(/\\s+/).slice(0, 8);
+        return words.length ? new RegExp(words.map(escapeRegex).join('\\\\s+')) : null;
+    };
+
+    // First meaningful text currently visible in the rendered view.
+    function renderedTopSnippet() {
+        const root = document.getElementById('lp-rendered-root');
+        const limit = toolbarBottom() + 4;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            if (!node.textContent.trim()) continue;
+            const el = node.parentElement;
+            if (!el) continue;
+            const r = el.getBoundingClientRect();
+            if (r.height > 0 && r.bottom > limit) return node.textContent.trim().slice(0, 80);
+        }
+        return '';
+    }
+
+    // A Range covering [start, start+1) of a container's concatenated text.
+    function rangeAtOffset(container, start) {
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        let node, pos = 0;
+        while ((node = walker.nextNode())) {
+            const next = pos + node.length;
+            if (start < next) {
+                const range = document.createRange();
+                range.setStart(node, start - pos);
+                range.setEnd(node, Math.min(start - pos + 1, node.length));
+                return range;
+            }
+            pos = next;
+        }
+        return null;
+    }
+
+    function scrollSourceToSnippet(snippet) {
+        const pre = sourcePre();
+        const re = snippet && snippetRegex(snippet);
+        if (!pre || !re) return;
+        const m = re.exec(pre.textContent);
+        if (!m) return;
+        const range = rangeAtOffset(pre, m.index);
+        if (!range) return;
+        const rect = range.getBoundingClientRect();
+        window.scrollTo(0, Math.max(0, window.scrollY + rect.top - toolbarBottom() - 16));
+    }
+
+    // Plain-text snippet (tag markup skipped) at the top of the source view.
+    function sourceTopSnippet() {
+        const pre = sourcePre();
+        if (!pre) return '';
+        const text = pre.textContent;
+        let offset = 0;
+        const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(24, toolbarBottom() + 12) : null;
+        if (caret && pre.contains(caret.startContainer)) {
+            const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode()) && node !== caret.startContainer) offset += node.length;
+            offset += caret.startOffset;
+        }
+        // If the offset lands inside a tag, skip to the end of that tag.
+        const nextLt = text.indexOf('<', offset), nextGt = text.indexOf('>', offset);
+        let i = (nextGt !== -1 && (nextLt === -1 || nextGt < nextLt)) ? nextGt + 1 : offset;
+        let out = '', inTag = false;
+        while (i < text.length && out.length < 60) {
+            const c = text[i++];
+            if (c === '<') inTag = true;
+            else if (c === '>') inTag = false;
+            else if (!inTag) out += c;
+        }
+        return out;
+    }
+
+    function scrollRenderedToSnippet(snippet) {
+        const root = document.getElementById('lp-rendered-root');
+        const re = snippet && snippetRegex(snippet);
+        if (!root || !re) return;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        let node, buf = '';
+        while ((node = walker.nextNode())) {
+            nodes.push({ start: buf.length, node });
+            // Separate nodes with a newline: adjacent block elements have no
+            // whitespace between their text nodes, but the source does, and
+            // the whitespace-tolerant regex absorbs the extra separator.
+            buf += node.textContent + '\\n';
+        }
+        const m = re.exec(buf);
+        if (!m) return;
+        let target = null;
+        for (const entry of nodes) {
+            if (entry.start <= m.index) target = entry.node; else break;
+        }
+        const el = target && target.parentElement;
+        if (!el) return;
+        window.scrollTo(0, Math.max(0, window.scrollY + el.getBoundingClientRect().top - toolbarBottom() - 16));
+    }
+
+    // Delegated so the listener survives content patches. The checkbox is
+    // flipped back briefly to measure the view being left — this happens
+    // within a single frame, so nothing visibly flickers.
+    document.addEventListener('change', event => {
+        const input = event.target;
+        if (!input || input.id !== 'lp-show-source') return;
+        if (input.checked) {
+            input.checked = false;
+            const snippet = renderedTopSnippet();
+            input.checked = true;
+            scrollSourceToSnippet(snippet);
+        } else {
+            input.checked = true;
+            const snippet = sourceTopSnippet();
+            input.checked = false;
+            scrollRenderedToSnippet(snippet);
+        }
     });
 </script>
 </body>
