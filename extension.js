@@ -725,13 +725,20 @@ ${toolbarHtml}
 
 // "Show HTML source" toggle plumbing shared by both HTML previews. Webview
 // scripts are disabled, so the swap is wired up purely with CSS body:has().
+// The rendered document keeps its white page (it previews the finished,
+// printed document), but the source view follows the VS Code theme via the
+// --vscode-* variables the editor injects into webviews; the fallbacks keep
+// the rules harmless outside VS Code (e.g. in the standalone export).
 const viewSourceStyles = `
   .lp-toolbar { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
   .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
   .lp-toggle input { margin: 0; }
   .lp-source { display: none; }
-  .lp-source-hint { font-family: sans-serif; font-size: 12px; color: #444; margin-bottom: 8px; }
-  .lp-source pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
+  .lp-source-hint { font-family: sans-serif; font-size: 12px; color: var(--vscode-descriptionForeground, #444); margin-bottom: 8px; }
+  .lp-source pre { background: var(--vscode-textCodeBlock-background, #f5f5f5); color: var(--vscode-editor-foreground, black); border: 1px solid var(--vscode-panel-border, #ddd); border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
+  body:has(#lp-show-source:checked) { background-color: var(--vscode-editor-background, white); }
+  body:has(#lp-show-source:checked) .lp-toggle { color: var(--vscode-foreground, #444); }
+  body:has(#lp-show-source:checked) .lp-toolbar { border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
   body:has(#lp-show-source:checked) .lp-rendered { display: none; }
   body:has(#lp-show-source:checked) .lp-source { display: block; }`;
 
