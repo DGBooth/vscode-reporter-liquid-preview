@@ -702,16 +702,24 @@ function buildFullPreviewHeader(templateUri, stats) {
     if (stats.conditionals) legendRows.push(legendRow('lg-cond', 'Shown when…', 'Included automatically when the stated condition applies.'));
     if (stats.loops) legendRows.push(legendRow('lg-loop', 'Repeats', 'This section appears once for each item in a list.'));
     if (stats.variables) legendRows.push(`<span class="lp-var">example value</span><span>Filled in automatically from the case data.</span>`);
-    if (stats.notes) legendRows.push(legendRow('lg-note', 'Author note', 'Guidance for template authors — never appears in the finished document.'));
+    // The note legend row hides together with the notes themselves (see .lp-legend-note CSS).
+    if (stats.notes) legendRows.push(`<span class="lp-legend-note">${legendRow('lg-note', 'Author note', 'Guidance for template authors — never appears in the finished document.')}</span>`);
 
     const legend = legendRows.length
         ? `<details class="lp-legend" open><summary>What the markers mean</summary><div class="lp-legend-grid">${legendRows.join('')}</div></details>`
+        : '';
+
+    // Scripts are disabled in the webview, so the author-note toggle is a plain
+    // checkbox wired up purely with CSS (body:has(...) rules in fullPreviewStyles).
+    const notesToggle = stats.notes
+        ? `<label class="lp-toggle"><input type="checkbox" id="lp-show-notes" checked=""> Show ${pluralize(stats.notes, 'author note')}</label>`
         : '';
 
     return `<div class="lp-header">
 <div class="lp-doc-title">Document options${fileName ? ' — ' + escapeHtml(fileName) : ''}</div>
 <div class="lp-summary">${summary}</div>
 ${legend}
+${notesToggle}
 </div>`;
 }
 
@@ -763,6 +771,12 @@ const fullPreviewStyles = `
 
   .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
   .lp-note .lp-label { background: #9e9e9e; font-style: normal; }
+
+  .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; margin-top: 8px; }
+  .lp-toggle input { margin: 0; }
+  .lp-legend-note { display: contents; }
+  body:has(#lp-show-notes:not(:checked)) .lp-note,
+  body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
 
   .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`;
 
