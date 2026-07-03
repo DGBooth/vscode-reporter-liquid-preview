@@ -480,135 +480,179 @@ function annotateLiquid(text) {
     // raw blocks output their body as literal text.
     text = text.replace(/\{%-?\s*raw\s*-?%\}([\s\S]*?)\{%-?\s*endraw\s*-?%\}/g, (_, body) => neutralizeBraces(body));
 
-    // Step 4: single pass over all {% ... %} tags with a stack, so labels and
-    // option numbering stay correct even when constructs are nested.
+    // Step 4: single pass over all {% ... %} tags with a stack of frames, so
+    // labels and option numbering stay correct even when constructs are nested.
+    // Each frame buffers its body rather than emitting markup immediately, so
+    // logic-only blocks — loops and conditionals whose bodies produce nothing
+    // visible (e.g. they only set up variables) — are dropped entirely instead
+    // of cluttering the document as empty boxes. Stats therefore count only
+    // the constructs that remain visible.
+    const root = { html: '' };
     const stack = [];
     const peek = () => stack[stack.length - 1];
-    const pop = type => {
-        const top = peek();
-        if (top && top.type === type) stack.pop();
-        return top && top.type === type ? top : null;
+    const append = s => { (peek() || root).html += s; };
+    const hasVisibleContent = html => /\S/.test(html);
+
+    // Render a completed frame to HTML. Returns '' for hidden logic-only blocks.
+    const closeFrame = frame => {
+        switch (frame.type) {
+            case 'choice': {
+                frame.options.push(frame.html);
+                stats.choices++;
+                stats.options += frame.options.length;
+                const optionsHtml = frame.options
+                    .map((body, i) => `<div class="lp-option"><span class="lp-opt-label">Option ${i + 1}</span>${body}</div>`)
+                    .join('');
+                return `<div class="lp-choice"><div class="lp-choice-head">${frame.head}</div>${optionsHtml}</div>`;
+            }
+            case 'optional':
+                stats.optionals++;
+                return `<div class="lp-optional">${frame.label}${frame.html}</div>`;
+            case 'editor':
+                stats.editors++;
+                return `<div class="lp-editor">${frame.label}${frame.html}</div>`;
+            case 'if':
+            case 'case': {
+                if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
+                const kept = frame.branches.filter(b => hasVisibleContent(b.html));
+                if (kept.length === 0) return '';
+                stats.conditionals++;
+                return `<div class="lp-cond">${kept.map(b => `<div class="lp-branch">${b.label}${b.html}</div>`).join('')}</div>`;
+            }
+            case 'for':
+            case 'tablerow':
+                if (!hasVisibleContent(frame.html)) return '';
+                stats.loops++;
+                return `<div class="lp-loop">${frame.label}${frame.html}</div>`;
+        }
+        return frame.html;
     };
 
-    text = text.replace(/\{%-?\s*(\w+)([\s\S]*?)-?%\}/g, (_, tag, rest) => {
-        rest = rest.trim();
+    // Pop the top frame if it matches and append its rendered form.
+    const closeIf = type => {
+        const frame = peek();
+        if (frame && frame.type === type) {
+            stack.pop();
+            append(closeFrame(frame));
+        }
+    };
+
+    const tagRegex = /\{%-?\s*(\w+)([\s\S]*?)-?%\}/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = tagRegex.exec(text)) !== null) {
+        append(text.slice(lastIndex, match.index));
+        lastIndex = tagRegex.lastIndex;
+        const tag = match[1];
+        const rest = match[2].trim();
         switch (tag) {
             case 'choice': {
                 const args = parseTagArgs(rest);
-                stats.choices++;
-                stats.options++;
-                stack.push({ type: 'choice', options: 1, closes: 2 });
                 const what = args.title || humanizeName(args.name || args.nameVar);
-                return `<div class="lp-choice"><div class="lp-choice-head">${annotationLabel('Choose one', what)}</div>`
-                    + `<div class="lp-option"><span class="lp-opt-label">Option 1</span>`;
+                stack.push({ type: 'choice', head: annotationLabel('Choose one', what), options: [], html: '' });
+                break;
             }
             case 'or': {
-                const top = peek();
-                if (top && top.type === 'choice') {
-                    top.options++;
-                    stats.options++;
-                    return `</div><div class="lp-option"><span class="lp-opt-label">Option ${top.options}</span>`;
+                const frame = peek();
+                if (frame && frame.type === 'choice') {
+                    frame.options.push(frame.html);
+                    frame.html = '';
                 }
-                return '';
+                break;
             }
             case 'endchoice':
-                pop('choice');
-                return '</div></div>';
+                closeIf('choice');
+                break;
             case 'optional': {
                 const args = parseTagArgs(rest);
-                stats.optionals++;
-                stack.push({ type: 'optional', closes: 1 });
-                return `<div class="lp-optional">${annotationLabel('Optional', humanizeName(args.name || args.nameVar))}`;
+                stack.push({ type: 'optional', label: annotationLabel('Optional', humanizeName(args.name || args.nameVar)), html: '' });
+                break;
             }
             case 'endoptional':
-                pop('optional');
-                return '</div>';
+                closeIf('optional');
+                break;
             case 'editor': {
                 const args = parseTagArgs(rest);
-                stats.editors++;
-                stack.push({ type: 'editor', closes: 1 });
                 const what = args.placeholder || humanizeName(args.name || args.nameVar);
-                return `<div class="lp-editor">${annotationLabel('Fill in', what)}`;
+                stack.push({ type: 'editor', label: annotationLabel('Fill in', what), html: '' });
+                break;
             }
             case 'endeditor':
-                pop('editor');
-                return '</div>';
+                closeIf('editor');
+                break;
             case 'if':
-                stats.conditionals++;
-                stack.push({ type: 'if', closes: 2 });
-                return `<div class="lp-cond"><div class="lp-branch">${annotationLabel('Shown when', humanizeCondition(rest))}`;
+                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown when', humanizeCondition(rest)), html: '' });
+                break;
+            case 'unless':
+                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown unless', humanizeCondition(rest)), html: '' });
+                break;
             case 'elsif': {
-                const top = peek();
-                if (top && top.type === 'if') {
-                    return `</div><div class="lp-branch">${annotationLabel('Otherwise, when', humanizeCondition(rest))}`;
+                const frame = peek();
+                if (frame && frame.type === 'if') {
+                    frame.branches.push({ label: frame.label, html: frame.html });
+                    frame.label = annotationLabel('Otherwise, when', humanizeCondition(rest));
+                    frame.html = '';
                 }
-                return '';
+                break;
             }
             case 'else': {
-                const top = peek();
-                if (top && top.type === 'if') {
-                    return `</div><div class="lp-branch">${annotationLabel('Otherwise')}`;
+                const frame = peek();
+                if (frame && (frame.type === 'if' || frame.type === 'case')) {
+                    if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
+                    frame.label = annotationLabel('Otherwise');
+                    frame.html = '';
                 }
-                if (top && top.type === 'case') {
-                    const prefix = top.closes === 2 ? '</div>' : '';
-                    top.closes = 2;
-                    return `${prefix}<div class="lp-branch">${annotationLabel('Otherwise')}`;
-                }
-                return '';
+                break;
             }
             case 'endif':
-                pop('if');
-                return '</div></div>';
-            case 'unless':
-                stats.conditionals++;
-                stack.push({ type: 'if', closes: 2 });
-                return `<div class="lp-cond"><div class="lp-branch">${annotationLabel('Shown unless', humanizeCondition(rest))}`;
             case 'endunless':
-                pop('if');
-                return '</div></div>';
+                closeIf('if');
+                break;
             case 'case':
-                stats.conditionals++;
-                stack.push({ type: 'case', closes: 1, subject: humanizeCondition(rest) });
-                return '<div class="lp-cond">';
+                // label stays null (and the buffered text is discarded) until the
+                // first 'when' — Liquid ignores content between case and when.
+                stack.push({ type: 'case', subject: humanizeCondition(rest), branches: [], label: null, html: '' });
+                break;
             case 'when': {
-                const top = peek();
-                if (top && top.type === 'case') {
-                    const prefix = top.closes === 2 ? '</div>' : '';
-                    top.closes = 2;
-                    return `${prefix}<div class="lp-branch">${annotationLabel('When', `${top.subject} is ${humanizeCondition(rest)}`)}`;
+                const frame = peek();
+                if (frame && frame.type === 'case') {
+                    if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
+                    frame.label = annotationLabel('When', `${frame.subject} is ${humanizeCondition(rest)}`);
+                    frame.html = '';
                 }
-                return '';
+                break;
             }
-            case 'endcase': {
-                const top = pop('case');
-                return top && top.closes === 2 ? '</div></div>' : '</div>';
-            }
+            case 'endcase':
+                closeIf('case');
+                break;
             case 'for':
             case 'tablerow': {
-                stats.loops++;
-                stack.push({ type: tag, closes: 1 });
                 const m = rest.match(/^(\S+)\s+in\s+([\s\S]+)$/);
                 const detail = m
                     ? `once for each ${humanizeName(m[1])} in ${humanizeCondition(m[2].split('|')[0])}`
                     : humanizeCondition(rest);
-                return `<div class="lp-loop">${annotationLabel('Repeats', detail)}`;
+                stack.push({ type: tag, label: annotationLabel('Repeats', detail), html: '' });
+                break;
             }
             case 'endfor':
-                pop('for');
-                return '</div>';
+                closeIf('for');
+                break;
             case 'endtablerow':
-                pop('tablerow');
-                return '</div>';
+                closeIf('tablerow');
+                break;
             default:
                 // assign, increment, decrement, render, include, cycle, break, … – no visible output
-                return '';
+                break;
         }
-    });
+    }
+    append(text.slice(lastIndex));
 
     // Close any blocks left open (e.g. while the template is being edited).
     while (stack.length) {
-        text += '</div>'.repeat(stack.pop().closes);
+        const frame = stack.pop();
+        append(closeFrame(frame));
     }
+    text = root.html;
 
     // Step 5: output expressions → inline data chips, so sentences stay readable
     // instead of having invisible holes where values would go.
