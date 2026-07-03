@@ -299,7 +299,9 @@ function activate(context) {
                 'shopifyLiquidHtmlPreview',
                 'HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false, localResourceRoots: workspaceFolders }
+                // retainContextWhenHidden keeps the webview alive when its tab is
+                // hidden, preserving scroll position and toggle state on return.
+                { enableScripts: false, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
             );
 
             htmlPreviews[preview.id] = { preview, panel };
@@ -322,7 +324,9 @@ function activate(context) {
                 'shopifyLiquidFullHtmlPreview',
                 'Full HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false, localResourceRoots: workspaceFolders }
+                // retainContextWhenHidden keeps the webview alive when its tab is
+                // hidden, preserving scroll position and toggle state on return.
+                { enableScripts: false, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
             );
 
             htmlFullPreviews[preview.id] = { preview, panel };
