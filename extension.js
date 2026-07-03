@@ -719,13 +719,27 @@ ${toolbarHtml}
 </div>`;
 }
 
+// "Show HTML source" toggle plumbing shared by both HTML previews. Webview
+// scripts are disabled, so the swap is wired up purely with CSS body:has().
+const viewSourceStyles = `
+  .lp-toolbar { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
+  .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
+  .lp-toggle input { margin: 0; }
+  .lp-source { display: none; }
+  .lp-source-hint { font-family: sans-serif; font-size: 12px; color: #444; margin-bottom: 8px; }
+  .lp-source pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
+  body:has(#lp-show-source:checked) .lp-rendered { display: none; }
+  body:has(#lp-show-source:checked) .lp-source { display: block; }`;
+
 const htmlPreviewStyles = `
   .editor { border-radius: 4px; padding: 8px 12px; margin: 8px 0; }
   .editor:has(input[type="checkbox"]) { border: 2px dashed #388e3c; background: #f1f8e9; }
   .editor:has(input[type="radio"]) { border: 2px solid #1976d2; background: #e3f2fd; }
   .editor:has(input[type="text"]), .editor:has(textarea) { border: 2px solid #f57c00; background: #fff8e1; }
   .editor:has(input[type="radio"]) label { display: block; padding: 6px 10px; margin: 4px 0; border: 1px solid #90caf9; border-radius: 3px; background: white; }
-  .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`;
+  .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`
+    + viewSourceStyles + `
+  .lp-toolbar { margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid #e0e0e0; }`;
 
 const fullPreviewStyles = `
   .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
@@ -768,20 +782,13 @@ const fullPreviewStyles = `
   .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
   .lp-note .lp-label { background: #9e9e9e; font-style: normal; }
 
-  .lp-toolbar { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; }
-  .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
-  .lp-toggle input { margin: 0; }
   .lp-legend-note { display: contents; }
   body:has(#lp-show-notes:not(:checked)) .lp-note,
   body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
 
-  .lp-source { display: none; }
-  .lp-source-hint { font-family: sans-serif; font-size: 12px; color: #444; margin-bottom: 8px; }
-  .lp-source pre { background: #f5f5f5; border: 1px solid #ddd; border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; user-select: all; cursor: text; }
-  body:has(#lp-show-source:checked) .lp-rendered { display: none; }
-  body:has(#lp-show-source:checked) .lp-source { display: block; }
-
-  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`;
+  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`
+    + viewSourceStyles + `
+  .lp-source pre { user-select: all; }`;
 
 // A complete standalone HTML document for the annotated view: preview styles
 // and any external CSS are inlined, so the file works on its own (e.g. pasted
@@ -898,7 +905,20 @@ async function refreshHtmlPanel(preview, panel) {
     }
 
     let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles);
+    panel.webview.html = buildPreviewHtml(cssLinks, buildHtmlPreviewContent(rendered), errors, htmlPreviewStyles);
+}
+
+// Body of the HTML Preview webview: a toolbar with a source toggle, the
+// rendered document, and a hidden panel with the document's underlying HTML —
+// the same render currently in view, so it reflects the selected data and
+// field values.
+function buildHtmlPreviewContent(rendered) {
+    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
+    const sourcePanel = `<div class="lp-source">
+<div class="lp-source-hint">The HTML behind the view above, as rendered with the current data and field values.</div>
+<pre>${escapeHtml(rendered)}</pre>
+</div>`;
+    return toolbar + `<div class="lp-rendered">${rendered}</div>` + sourcePanel;
 }
 
 function findCssPaths(templateUri) {
