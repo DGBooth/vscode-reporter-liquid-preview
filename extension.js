@@ -299,7 +299,11 @@ function activate(context) {
                 'shopifyLiquidHtmlPreview',
                 'HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false, localResourceRoots: workspaceFolders }
+                // retainContextWhenHidden keeps the webview alive when its tab is
+                // hidden, preserving scroll position and toggle state on return.
+                // Scripts are needed only for the in-place update listener in
+                // buildPreviewHtml; the preview content itself uses none.
+                { enableScripts: true, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
             );
 
             htmlPreviews[preview.id] = { preview, panel };
@@ -322,7 +326,11 @@ function activate(context) {
                 'shopifyLiquidFullHtmlPreview',
                 'Full HTML Preview: ' + path.basename(document.fileName),
                 vscode.ViewColumn.Beside,
-                { enableScripts: false, localResourceRoots: workspaceFolders }
+                // retainContextWhenHidden keeps the webview alive when its tab is
+                // hidden, preserving scroll position and toggle state on return.
+                // Scripts are needed only for the in-place update listener in
+                // buildPreviewHtml; the preview content itself uses none.
+                { enableScripts: true, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
             );
 
             htmlFullPreviews[preview.id] = { preview, panel };
@@ -480,135 +488,179 @@ function annotateLiquid(text) {
     // raw blocks output their body as literal text.
     text = text.replace(/\{%-?\s*raw\s*-?%\}([\s\S]*?)\{%-?\s*endraw\s*-?%\}/g, (_, body) => neutralizeBraces(body));
 
-    // Step 4: single pass over all {% ... %} tags with a stack, so labels and
-    // option numbering stay correct even when constructs are nested.
+    // Step 4: single pass over all {% ... %} tags with a stack of frames, so
+    // labels and option numbering stay correct even when constructs are nested.
+    // Each frame buffers its body rather than emitting markup immediately, so
+    // logic-only blocks — loops and conditionals whose bodies produce nothing
+    // visible (e.g. they only set up variables) — are dropped entirely instead
+    // of cluttering the document as empty boxes. Stats therefore count only
+    // the constructs that remain visible.
+    const root = { html: '' };
     const stack = [];
     const peek = () => stack[stack.length - 1];
-    const pop = type => {
-        const top = peek();
-        if (top && top.type === type) stack.pop();
-        return top && top.type === type ? top : null;
+    const append = s => { (peek() || root).html += s; };
+    const hasVisibleContent = html => /\S/.test(html);
+
+    // Render a completed frame to HTML. Returns '' for hidden logic-only blocks.
+    const closeFrame = frame => {
+        switch (frame.type) {
+            case 'choice': {
+                frame.options.push(frame.html);
+                stats.choices++;
+                stats.options += frame.options.length;
+                const optionsHtml = frame.options
+                    .map((body, i) => `<div class="lp-option"><span class="lp-opt-label">Option ${i + 1}</span>${body}</div>`)
+                    .join('');
+                return `<div class="lp-choice"><div class="lp-choice-head">${frame.head}</div>${optionsHtml}</div>`;
+            }
+            case 'optional':
+                stats.optionals++;
+                return `<div class="lp-optional">${frame.label}${frame.html}</div>`;
+            case 'editor':
+                stats.editors++;
+                return `<div class="lp-editor">${frame.label}${frame.html}</div>`;
+            case 'if':
+            case 'case': {
+                if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
+                const kept = frame.branches.filter(b => hasVisibleContent(b.html));
+                if (kept.length === 0) return '';
+                stats.conditionals++;
+                return `<div class="lp-cond">${kept.map(b => `<div class="lp-branch">${b.label}${b.html}</div>`).join('')}</div>`;
+            }
+            case 'for':
+            case 'tablerow':
+                if (!hasVisibleContent(frame.html)) return '';
+                stats.loops++;
+                return `<div class="lp-loop">${frame.label}${frame.html}</div>`;
+        }
+        return frame.html;
     };
 
-    text = text.replace(/\{%-?\s*(\w+)([\s\S]*?)-?%\}/g, (_, tag, rest) => {
-        rest = rest.trim();
+    // Pop the top frame if it matches and append its rendered form.
+    const closeIf = type => {
+        const frame = peek();
+        if (frame && frame.type === type) {
+            stack.pop();
+            append(closeFrame(frame));
+        }
+    };
+
+    const tagRegex = /\{%-?\s*(\w+)([\s\S]*?)-?%\}/g;
+    let lastIndex = 0;
+    let match;
+    while ((match = tagRegex.exec(text)) !== null) {
+        append(text.slice(lastIndex, match.index));
+        lastIndex = tagRegex.lastIndex;
+        const tag = match[1];
+        const rest = match[2].trim();
         switch (tag) {
             case 'choice': {
                 const args = parseTagArgs(rest);
-                stats.choices++;
-                stats.options++;
-                stack.push({ type: 'choice', options: 1, closes: 2 });
                 const what = args.title || humanizeName(args.name || args.nameVar);
-                return `<div class="lp-choice"><div class="lp-choice-head">${annotationLabel('Choose one', what)}</div>`
-                    + `<div class="lp-option"><span class="lp-opt-label">Option 1</span>`;
+                stack.push({ type: 'choice', head: annotationLabel('Choose one', what), options: [], html: '' });
+                break;
             }
             case 'or': {
-                const top = peek();
-                if (top && top.type === 'choice') {
-                    top.options++;
-                    stats.options++;
-                    return `</div><div class="lp-option"><span class="lp-opt-label">Option ${top.options}</span>`;
+                const frame = peek();
+                if (frame && frame.type === 'choice') {
+                    frame.options.push(frame.html);
+                    frame.html = '';
                 }
-                return '';
+                break;
             }
             case 'endchoice':
-                pop('choice');
-                return '</div></div>';
+                closeIf('choice');
+                break;
             case 'optional': {
                 const args = parseTagArgs(rest);
-                stats.optionals++;
-                stack.push({ type: 'optional', closes: 1 });
-                return `<div class="lp-optional">${annotationLabel('Optional', humanizeName(args.name || args.nameVar))}`;
+                stack.push({ type: 'optional', label: annotationLabel('Optional', humanizeName(args.name || args.nameVar)), html: '' });
+                break;
             }
             case 'endoptional':
-                pop('optional');
-                return '</div>';
+                closeIf('optional');
+                break;
             case 'editor': {
                 const args = parseTagArgs(rest);
-                stats.editors++;
-                stack.push({ type: 'editor', closes: 1 });
                 const what = args.placeholder || humanizeName(args.name || args.nameVar);
-                return `<div class="lp-editor">${annotationLabel('Fill in', what)}`;
+                stack.push({ type: 'editor', label: annotationLabel('Fill in', what), html: '' });
+                break;
             }
             case 'endeditor':
-                pop('editor');
-                return '</div>';
+                closeIf('editor');
+                break;
             case 'if':
-                stats.conditionals++;
-                stack.push({ type: 'if', closes: 2 });
-                return `<div class="lp-cond"><div class="lp-branch">${annotationLabel('Shown when', humanizeCondition(rest))}`;
+                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown when', humanizeCondition(rest)), html: '' });
+                break;
+            case 'unless':
+                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown unless', humanizeCondition(rest)), html: '' });
+                break;
             case 'elsif': {
-                const top = peek();
-                if (top && top.type === 'if') {
-                    return `</div><div class="lp-branch">${annotationLabel('Otherwise, when', humanizeCondition(rest))}`;
+                const frame = peek();
+                if (frame && frame.type === 'if') {
+                    frame.branches.push({ label: frame.label, html: frame.html });
+                    frame.label = annotationLabel('Otherwise, when', humanizeCondition(rest));
+                    frame.html = '';
                 }
-                return '';
+                break;
             }
             case 'else': {
-                const top = peek();
-                if (top && top.type === 'if') {
-                    return `</div><div class="lp-branch">${annotationLabel('Otherwise')}`;
+                const frame = peek();
+                if (frame && (frame.type === 'if' || frame.type === 'case')) {
+                    if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
+                    frame.label = annotationLabel('Otherwise');
+                    frame.html = '';
                 }
-                if (top && top.type === 'case') {
-                    const prefix = top.closes === 2 ? '</div>' : '';
-                    top.closes = 2;
-                    return `${prefix}<div class="lp-branch">${annotationLabel('Otherwise')}`;
-                }
-                return '';
+                break;
             }
             case 'endif':
-                pop('if');
-                return '</div></div>';
-            case 'unless':
-                stats.conditionals++;
-                stack.push({ type: 'if', closes: 2 });
-                return `<div class="lp-cond"><div class="lp-branch">${annotationLabel('Shown unless', humanizeCondition(rest))}`;
             case 'endunless':
-                pop('if');
-                return '</div></div>';
+                closeIf('if');
+                break;
             case 'case':
-                stats.conditionals++;
-                stack.push({ type: 'case', closes: 1, subject: humanizeCondition(rest) });
-                return '<div class="lp-cond">';
+                // label stays null (and the buffered text is discarded) until the
+                // first 'when' — Liquid ignores content between case and when.
+                stack.push({ type: 'case', subject: humanizeCondition(rest), branches: [], label: null, html: '' });
+                break;
             case 'when': {
-                const top = peek();
-                if (top && top.type === 'case') {
-                    const prefix = top.closes === 2 ? '</div>' : '';
-                    top.closes = 2;
-                    return `${prefix}<div class="lp-branch">${annotationLabel('When', `${top.subject} is ${humanizeCondition(rest)}`)}`;
+                const frame = peek();
+                if (frame && frame.type === 'case') {
+                    if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
+                    frame.label = annotationLabel('When', `${frame.subject} is ${humanizeCondition(rest)}`);
+                    frame.html = '';
                 }
-                return '';
+                break;
             }
-            case 'endcase': {
-                const top = pop('case');
-                return top && top.closes === 2 ? '</div></div>' : '</div>';
-            }
+            case 'endcase':
+                closeIf('case');
+                break;
             case 'for':
             case 'tablerow': {
-                stats.loops++;
-                stack.push({ type: tag, closes: 1 });
                 const m = rest.match(/^(\S+)\s+in\s+([\s\S]+)$/);
                 const detail = m
                     ? `once for each ${humanizeName(m[1])} in ${humanizeCondition(m[2].split('|')[0])}`
                     : humanizeCondition(rest);
-                return `<div class="lp-loop">${annotationLabel('Repeats', detail)}`;
+                stack.push({ type: tag, label: annotationLabel('Repeats', detail), html: '' });
+                break;
             }
             case 'endfor':
-                pop('for');
-                return '</div>';
+                closeIf('for');
+                break;
             case 'endtablerow':
-                pop('tablerow');
-                return '</div>';
+                closeIf('tablerow');
+                break;
             default:
                 // assign, increment, decrement, render, include, cycle, break, … – no visible output
-                return '';
+                break;
         }
-    });
+    }
+    append(text.slice(lastIndex));
 
     // Close any blocks left open (e.g. while the template is being edited).
     while (stack.length) {
-        text += '</div>'.repeat(stack.pop().closes);
+        const frame = stack.pop();
+        append(closeFrame(frame));
     }
+    text = root.html;
 
     // Step 5: output expressions → inline data chips, so sentences stay readable
     // instead of having invisible holes where values would go.
@@ -634,7 +686,8 @@ function joinWithAnd(parts) {
 }
 
 // Header shown above the annotated document: what it is, what it contains,
-// and a plain-English key to the colour-coded markers.
+// and a plain-English key to the colour-coded markers. Used both in the
+// webview and in the standalone export (which is why it carries no controls).
 function buildFullPreviewHeader(templateUri, stats) {
     const fileName = templateUri ? path.basename(templateUri) : '';
 
@@ -658,7 +711,8 @@ function buildFullPreviewHeader(templateUri, stats) {
     if (stats.conditionals) legendRows.push(legendRow('lg-cond', 'Shown when…', 'Included automatically when the stated condition applies.'));
     if (stats.loops) legendRows.push(legendRow('lg-loop', 'Repeats', 'This section appears once for each item in a list.'));
     if (stats.variables) legendRows.push(`<span class="lp-var">example value</span><span>Filled in automatically from the case data.</span>`);
-    if (stats.notes) legendRows.push(legendRow('lg-note', 'Author note', 'Guidance for template authors — never appears in the finished document.'));
+    // The note legend row hides together with the notes themselves (see .lp-legend-note CSS).
+    if (stats.notes) legendRows.push(`<span class="lp-legend-note">${legendRow('lg-note', 'Author note', 'Guidance for template authors — never appears in the finished document.')}</span>`);
 
     const legend = legendRows.length
         ? `<details class="lp-legend" open><summary>What the markers mean</summary><div class="lp-legend-grid">${legendRows.join('')}</div></details>`
@@ -671,13 +725,46 @@ ${legend}
 </div>`;
 }
 
+// "Show HTML source" toggle plumbing shared by both HTML previews. Webview
+// scripts are disabled, so the swap is wired up purely with CSS body:has().
+// The rendered document keeps its white page (it previews the finished,
+// printed document), but the source view follows the VS Code theme via the
+// --vscode-* variables the editor injects into webviews; the fallbacks keep
+// the rules harmless outside VS Code (e.g. in the standalone export).
+const viewSourceStyles = `
+  #lp-chrome { display: contents; }
+  .lp-toolbar { position: sticky; top: 0; z-index: 9000; display: flex; flex-wrap: wrap; gap: 6px 18px; background: white; margin: -8px -8px 10px -8px; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
+  .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
+  .lp-toggle input { margin: 0; }
+  .lp-source { display: none; }
+  .lp-source-hint { font-family: sans-serif; font-size: 12px; color: var(--vscode-descriptionForeground, #444); margin-bottom: 8px; }
+  .lp-source pre { background: none; border: none; margin: 0; padding: 2px 4px; color: var(--vscode-editor-foreground, #333); font-family: var(--vscode-editor-font-family, "SF Mono", Monaco, Menlo, Consolas, monospace); font-size: var(--vscode-editor-font-size, 12px); line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
+
+  .lp-tk-tag, .lp-tk-doctype, .lp-tk-punct { color: #800000; }
+  .lp-tk-attr { color: #e50000; }
+  .lp-tk-str { color: #0000ff; }
+  .lp-tk-comment { color: #008000; }
+  body.vscode-dark .lp-tk-tag, body.vscode-dark .lp-tk-doctype,
+  body.vscode-high-contrast .lp-tk-tag, body.vscode-high-contrast .lp-tk-doctype { color: #569cd6; }
+  body.vscode-dark .lp-tk-punct, body.vscode-high-contrast .lp-tk-punct { color: #808080; }
+  body.vscode-dark .lp-tk-attr, body.vscode-high-contrast .lp-tk-attr { color: #9cdcfe; }
+  body.vscode-dark .lp-tk-str, body.vscode-high-contrast .lp-tk-str { color: #ce9178; }
+  body.vscode-dark .lp-tk-comment, body.vscode-high-contrast .lp-tk-comment { color: #6a9955; }
+  body:has(#lp-show-source:checked) { background-color: var(--vscode-editor-background, white); }
+  body:has(#lp-show-source:checked) .lp-toggle { color: var(--vscode-foreground, #444); }
+  body:has(#lp-show-source:checked) .lp-toolbar { background: var(--vscode-editor-background, white); border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
+  body:has(#lp-show-source:checked) #lp-rendered-root,
+  body:has(#lp-show-source:checked) #lp-rendered-root ~ * { display: none; }
+  body:has(#lp-show-source:checked) .lp-source { display: block; }`;
+
 const htmlPreviewStyles = `
   .editor { border-radius: 4px; padding: 8px 12px; margin: 8px 0; }
   .editor:has(input[type="checkbox"]) { border: 2px dashed #388e3c; background: #f1f8e9; }
   .editor:has(input[type="radio"]) { border: 2px solid #1976d2; background: #e3f2fd; }
   .editor:has(input[type="text"]), .editor:has(textarea) { border: 2px solid #f57c00; background: #fff8e1; }
   .editor:has(input[type="radio"]) label { display: block; padding: 6px 10px; margin: 4px 0; border: 1px solid #90caf9; border-radius: 3px; background: white; }
-  .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`;
+  .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`
+    + viewSourceStyles;
 
 const fullPreviewStyles = `
   .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
@@ -720,24 +807,249 @@ const fullPreviewStyles = `
   .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
   .lp-note .lp-label { background: #9e9e9e; font-style: normal; }
 
-  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`;
+  .lp-legend-note { display: contents; }
+  body:has(#lp-show-notes:not(:checked)) .lp-note,
+  body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
+
+  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`
+    + viewSourceStyles + `
+  .lp-source pre { user-select: all; }`;
+
+// A complete standalone HTML document for the annotated view: preview styles
+// and any external CSS are inlined, so the file works on its own (e.g. pasted
+// into SharePoint or saved as an .html file).
+function buildStandaloneHtml(content, cssText) {
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background-color: white; color: black; margin: 0; padding: 16px; box-sizing: border-box; }
+  h1, h2, h3, h4, h5, h6 { color: black; }${fullPreviewStyles}
+${cssText}
+</style>
+</head>
+<body>
+${content}
+</body>
+</html>`;
+}
+
+// Tags that get their own indented line when formatting; everything else is
+// treated as inline and left verbatim.
+const HTML_BLOCK_TAGS = new Set(['html', 'head', 'body', 'title', 'meta', 'link', 'style', 'script', 'div', 'section', 'article', 'header', 'footer', 'nav', 'aside', 'main', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col', 'form', 'fieldset', 'legend', 'blockquote', 'hr', 'details', 'summary', 'figure', 'figcaption', 'address']);
+// Elements with no closing tag, so an opening tag must not increase the indent.
+const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+// Elements whose body is whitespace-sensitive and must be kept verbatim.
+const HTML_RAW_TAGS = new Set(['pre', 'textarea', 'script', 'style']);
+
+// Split HTML into tag/text/raw tokens. The scanner respects quoted attribute
+// values (a '>' inside quotes does not end the tag), comments and doctypes,
+// and captures raw-tag bodies verbatim.
+function tokenizeHtml(html) {
+    const tokens = [];
+    let i = 0;
+    let textStart = 0;
+    const flushText = end => { if (end > textStart) tokens.push({ type: 'text', text: html.slice(textStart, end) }); };
+
+    while (i < html.length) {
+        if (html[i] !== '<' || !/[a-zA-Z\/!]/.test(html[i + 1] || '')) { i++; continue; }
+        flushText(i);
+
+        if (html.startsWith('<!--', i)) {
+            const end = html.indexOf('-->', i + 4);
+            const close = end === -1 ? html.length : end + 3;
+            tokens.push({ type: 'tag', kind: 'comment', name: '', text: html.slice(i, close) });
+            i = textStart = close;
+            continue;
+        }
+
+        // Scan to the matching '>', ignoring any inside quoted attribute values.
+        let j = i + 1;
+        let quote = null;
+        while (j < html.length && (quote !== null || html[j] !== '>')) {
+            if (quote === null && (html[j] === '"' || html[j] === "'")) quote = html[j];
+            else if (html[j] === quote) quote = null;
+            j++;
+        }
+        const close = j < html.length ? j + 1 : html.length;
+        const text = html.slice(i, close);
+        const nameMatch = text.match(/^<\/?([a-zA-Z][a-zA-Z0-9-]*)/);
+        const name = nameMatch ? nameMatch[1].toLowerCase() : '';
+        const kind = text[1] === '!' ? 'doctype' : (text[1] === '/' ? 'close' : 'open');
+        i = textStart = close;
+
+        if (kind === 'open' && HTML_RAW_TAGS.has(name)) {
+            const closeRegex = new RegExp(`</${name}\\s*>`, 'i');
+            const m = closeRegex.exec(html.slice(i));
+            const bodyEnd = m ? i + m.index : html.length;
+            const rawClose = m ? bodyEnd + m[0].length : html.length;
+            tokens.push({ type: 'raw', name, openTag: text, body: html.slice(i, bodyEnd), closeTag: m ? m[0] : '' });
+            i = textStart = rawClose;
+        } else {
+            tokens.push({ type: 'tag', kind, name, text });
+        }
+    }
+    flushText(html.length);
+    return tokens;
+}
+
+// Conservative HTML pretty-printer for the source views: block-level tags get
+// their own indented lines and inline runs are kept together, with newlines
+// inside them collapsed to a space. Only whitespace that cannot affect
+// rendering is changed — inline content is otherwise verbatim and raw-tag
+// bodies (pre, textarea, script, style) are untouched — so the formatted
+// markup renders identically to the original.
+function formatHtml(html) {
+    const out = [];
+    let indent = 0;
+    let line = '';
+    const pushLine = () => {
+        const trimmed = line.replace(/\s*\n\s*/g, ' ').trim();
+        if (trimmed) out.push('  '.repeat(indent) + trimmed);
+        line = '';
+    };
+
+    for (const tok of tokenizeHtml(html)) {
+        if (tok.type === 'text') {
+            line += tok.text;
+        } else if (tok.type === 'raw') {
+            pushLine();
+            out.push('  '.repeat(indent) + tok.openTag + tok.body + tok.closeTag);
+        } else if (HTML_BLOCK_TAGS.has(tok.name) || tok.kind === 'comment' || tok.kind === 'doctype') {
+            pushLine();
+            if (tok.kind === 'close') {
+                indent = Math.max(0, indent - 1);
+                out.push('  '.repeat(indent) + tok.text);
+            } else {
+                out.push('  '.repeat(indent) + tok.text);
+                if (tok.kind === 'open' && !HTML_VOID_TAGS.has(tok.name)) indent++;
+            }
+        } else {
+            line += tok.text;
+        }
+    }
+    pushLine();
+    return out.join('\n');
+}
+
+// Syntax-highlight a tag's markup: punctuation, tag name, attribute names and
+// quoted values each get a token span. All token text is escaped, and the
+// combined textContent of the output equals the input exactly — the
+// scroll-sync script and copy behaviour rely on that.
+function highlightTagMarkup(text) {
+    const m = text.match(/^(<\/?)([a-zA-Z][a-zA-Z0-9-]*)/);
+    if (!m) return `<span class="lp-tk-punct">${escapeHtml(text)}</span>`;
+    let out = `<span class="lp-tk-punct">${escapeHtml(m[1])}</span><span class="lp-tk-tag">${escapeHtml(m[2])}</span>`;
+    const rest = text.slice(m[0].length);
+    let j = 0;
+    while (j < rest.length) {
+        const c = rest[j];
+        if (/\s/.test(c)) {
+            let k = j;
+            while (k < rest.length && /\s/.test(rest[k])) k++;
+            out += rest.slice(j, k);
+            j = k;
+        } else if (c === '"' || c === "'") {
+            let k = rest.indexOf(c, j + 1);
+            k = k === -1 ? rest.length : k + 1;
+            out += `<span class="lp-tk-str">${escapeHtml(rest.slice(j, k))}</span>`;
+            j = k;
+        } else if (c === '=' || c === '>' || c === '/') {
+            out += `<span class="lp-tk-punct">${escapeHtml(c)}</span>`;
+            j++;
+        } else {
+            let k = j;
+            while (k < rest.length && !/[\s=>\/"']/.test(rest[k])) k++;
+            out += `<span class="lp-tk-attr">${escapeHtml(rest.slice(j, k))}</span>`;
+            j = k;
+        }
+    }
+    return out;
+}
+
+// Convert HTML source text into escaped, token-coloured markup for the source
+// views, so the source reads like VS Code's own HTML highlighting. Colours
+// follow the editor's default light/dark themes (see the .lp-tk-* rules).
+function highlightHtml(html) {
+    let out = '';
+    for (const tok of tokenizeHtml(html)) {
+        if (tok.type === 'text') {
+            out += escapeHtml(tok.text);
+        } else if (tok.type === 'raw') {
+            out += highlightTagMarkup(tok.openTag) + escapeHtml(tok.body)
+                + (tok.closeTag ? highlightTagMarkup(tok.closeTag) : '');
+        } else if (tok.kind === 'comment') {
+            out += `<span class="lp-tk-comment">${escapeHtml(tok.text)}</span>`;
+        } else if (tok.kind === 'doctype') {
+            out += `<span class="lp-tk-doctype">${escapeHtml(tok.text)}</span>`;
+        } else {
+            out += highlightTagMarkup(tok.text);
+        }
+    }
+    return out;
+}
+
+// Content of the Full HTML Preview webview, split into two parts: 'chrome' is
+// the extension's own markup — header with view toggles and the hidden panel
+// holding the standalone HTML source — and 'rendered' is the annotated
+// document. They are kept in separate containers (chrome first) so malformed
+// HTML in the template — stray closing tags, unclosed elements — can never
+// swallow or break out into the extension's UI when the browser parses it.
+function buildFullPreviewContent(templateText, templateUri) {
+    const { html, stats } = annotateLiquid(templateText);
+    const cssText = readCssContents(templateUri);
+
+    const exportContent = buildFullPreviewHeader(templateUri, stats) + html;
+    const standalone = buildStandaloneHtml(exportContent, cssText);
+
+    // The toggles are plain checkboxes wired up purely with CSS
+    // (body:has(...) rules in fullPreviewStyles).
+    const toggles = [];
+    if (stats.notes) {
+        toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-notes" checked=""> Show ${pluralize(stats.notes, 'author note')}</label>`);
+    }
+    toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`);
+    const toolbar = `<div class="lp-toolbar">${toggles.join('')}</div>`;
+
+    const sourcePanel = `<div class="lp-source">
+<div class="lp-source-hint">Standalone HTML for this document — styles are included, so it works on its own. Click the code below to select it all, copy, and paste into SharePoint or save as an .html file.</div>
+<pre>${highlightHtml(formatHtml(standalone))}</pre>
+</div>`;
+
+    return {
+        chrome: toolbar + buildFullPreviewHeader(templateUri, stats) + sourcePanel,
+        rendered: html
+    };
+}
 
 async function refreshHtmlFullPanel(preview, panel) {
     let errors = [];
-    let content = '';
+    let content = null;
 
     try {
         let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
-        const { html, stats } = annotateLiquid(templateDocument.getText());
-        content = buildFullPreviewHeader(preview.templateUri, stats) + html;
+        content = buildFullPreviewContent(templateDocument.getText(), preview.templateUri);
         preview.lastRenderedHtml = content;
     } catch (err) {
         errors.push({ title: 'Template error', message: err.message });
-        content = preview.lastRenderedHtml || '';
+        content = preview.lastRenderedHtml || { chrome: '', rendered: '' };
     }
 
-    let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles);
+    updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(errors), content.rendered, fullPreviewStyles);
+}
+
+// Push new content into a preview panel: the first call sets the full webview
+// document, later calls patch it in place via a message (see buildPreviewHtml)
+// so the view isn't reloaded on every edit.
+function updatePreviewPanel(panel, preview, chrome, rendered, styles) {
+    if (panel._rlpInitialized) {
+        panel.webview.postMessage({ type: 'update', chrome, rendered });
+    } else {
+        let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
+        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles);
+        panel._rlpInitialized = true;
+    }
 }
 
 async function refreshHtmlPanel(preview, panel) {
@@ -788,11 +1100,23 @@ async function refreshHtmlPanel(preview, panel) {
         _currentWarnings = null;
     }
 
-    let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, rendered, errors, htmlPreviewStyles);
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(errors), rendered, htmlPreviewStyles);
 }
 
-function buildCssLinks(templateUri, webview) {
+// The HTML Preview's own UI: a toolbar with a source toggle and a hidden
+// panel with the document's underlying HTML — the same render currently in
+// view, so it reflects the selected data and field values. Kept separate from
+// the rendered document itself (see buildPreviewHtml).
+function buildHtmlPreviewChrome(rendered) {
+    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
+    const sourcePanel = `<div class="lp-source">
+<div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
+<pre>${highlightHtml(formatHtml(rendered))}</pre>
+</div>`;
+    return toolbar + sourcePanel;
+}
+
+function findCssPaths(templateUri) {
     const fs = require('fs');
     let cssPaths = [];
 
@@ -817,7 +1141,11 @@ function buildCssLinks(templateUri, webview) {
         }
     }
 
-    return cssPaths
+    return cssPaths;
+}
+
+function buildCssLinks(templateUri, webview) {
+    return findCssPaths(templateUri)
         .map(p => {
             let uri = webview.asWebviewUri(vscode.Uri.file(p));
             return `<link rel="stylesheet" href="${uri}">`;
@@ -825,8 +1153,17 @@ function buildCssLinks(templateUri, webview) {
         .join('\n');
 }
 
-function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
-    const haserrors = errors.length > 0;
+// Concatenated contents of the workspace/template CSS files, for inlining into
+// a standalone document.
+function readCssContents(templateUri) {
+    const fs = require('fs');
+    return findCssPaths(templateUri)
+        .map(p => `/* ${path.basename(p)} */\n${fs.readFileSync(p, 'utf8')}`)
+        .join('\n');
+}
+
+function buildErrorPaneHtml(errors) {
+    if (errors.length === 0) return '';
     const warnings = errors.filter(e => e.isWarning);
     const nonWarnings = errors.filter(e => !e.isWarning);
 
@@ -839,16 +1176,31 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
         errorBlocks.push(`<div class="warning-block"><span class="warning-block-title">&#9432; Warning</span><ul class="warning-list">${items}</ul></div>`);
     }
 
-    const errorPaneHtml = haserrors ? `
+    return `
 <div id="error-pane">
   ${errorBlocks.join('')}
-</div>` : '';
+</div>`;
+}
 
+// Full webview document. chrome (the extension's own UI, including the error
+// pane) and rendered (the template's output) live in separate containers,
+// with chrome first: nothing that precedes the template content in the parse
+// can be damaged by its malformed HTML, and content escaping #lp-rendered-root
+// only ever spills into following siblings, which the source-view CSS hides
+// along with the container itself.
+//
+// The document is set once per panel; later renders are posted as 'update'
+// messages and patched into the two containers by the script below, so a live
+// edit doesn't reload the document — scroll position and toggle checkboxes
+// survive it. Patching each container separately via innerHTML also uses
+// fragment parsing, which cannot leak content outside its container.
+function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '') {
     return `<!DOCTYPE html>
 <html>
 <head>
 <style>
-  body { background-color: white; color: black; margin: 0; padding: 8px; ${haserrors ? 'padding-bottom: 160px;' : ''} box-sizing: border-box; }
+  body { background-color: white; color: black; margin: 0; padding: 8px; box-sizing: border-box; }
+  body:has(#error-pane) { padding-bottom: 160px; }
   h1, h2, h3, h4, h5, h6 { color: black; }
   #error-pane { position: fixed; bottom: 0; left: 0; right: 0; background: #1e1a10; border-top: 2px solid #f14c4c; padding: 6px 12px; max-height: 150px; overflow-y: auto; z-index: 9999; }
   .error-block, .warning-block { margin-bottom: 6px; }
@@ -862,8 +1214,168 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
 ${cssLinks}
 </head>
 <body>
+<div id="lp-chrome">
+${chrome}
+</div>
+<div id="lp-rendered-root">
 ${rendered}
-${errorPaneHtml}
+</div>
+<script>
+    window.addEventListener('message', event => {
+        const msg = event.data;
+        if (!msg || msg.type !== 'update') return;
+        const toggles = {};
+        for (const input of document.querySelectorAll('.lp-toggle input[id]')) {
+            toggles[input.id] = input.checked;
+        }
+        const legend = document.querySelector('.lp-legend');
+        const legendOpen = legend ? legend.open : null;
+        const x = window.scrollX, y = window.scrollY;
+        document.getElementById('lp-chrome').innerHTML = msg.chrome;
+        document.getElementById('lp-rendered-root').innerHTML = msg.rendered;
+        for (const id in toggles) {
+            const input = document.getElementById(id);
+            if (input) input.checked = toggles[id];
+        }
+        const newLegend = document.querySelector('.lp-legend');
+        if (newLegend && legendOpen !== null) newLegend.open = legendOpen;
+        window.scrollTo(x, y);
+    });
+
+    // ---- Scroll sync between the rendered view and the HTML source view ----
+    // On toggle, anchor on the text at the top of the viewport in the view
+    // being left and scroll the view being entered to that same text. If the
+    // anchor can't be found (e.g. entity differences), the scroll is left
+    // alone rather than jumping to the top.
+
+    const sourcePre = () => document.querySelector('.lp-source pre');
+    const toolbarBottom = () => {
+        const bar = document.querySelector('.lp-toolbar');
+        return bar ? bar.getBoundingClientRect().bottom : 0;
+    };
+
+    const escapeRegex = s => s.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+    // Whitespace-tolerant matcher from the first few words of a snippet.
+    const snippetRegex = snippet => {
+        const words = String(snippet).trim().split(/\\s+/).slice(0, 8);
+        return words.length ? new RegExp(words.map(escapeRegex).join('\\\\s+')) : null;
+    };
+
+    // First meaningful text currently visible in the rendered view.
+    function renderedTopSnippet() {
+        const root = document.getElementById('lp-rendered-root');
+        const limit = toolbarBottom() + 4;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) {
+            if (!node.textContent.trim()) continue;
+            const el = node.parentElement;
+            if (!el) continue;
+            const r = el.getBoundingClientRect();
+            if (r.height > 0 && r.bottom > limit) return node.textContent.trim().slice(0, 80);
+        }
+        return '';
+    }
+
+    // A Range covering [start, start+1) of a container's concatenated text.
+    function rangeAtOffset(container, start) {
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        let node, pos = 0;
+        while ((node = walker.nextNode())) {
+            const next = pos + node.length;
+            if (start < next) {
+                const range = document.createRange();
+                range.setStart(node, start - pos);
+                range.setEnd(node, Math.min(start - pos + 1, node.length));
+                return range;
+            }
+            pos = next;
+        }
+        return null;
+    }
+
+    function scrollSourceToSnippet(snippet) {
+        const pre = sourcePre();
+        const re = snippet && snippetRegex(snippet);
+        if (!pre || !re) return;
+        const m = re.exec(pre.textContent);
+        if (!m) return;
+        const range = rangeAtOffset(pre, m.index);
+        if (!range) return;
+        const rect = range.getBoundingClientRect();
+        window.scrollTo(0, Math.max(0, window.scrollY + rect.top - toolbarBottom() - 16));
+    }
+
+    // Plain-text snippet (tag markup skipped) at the top of the source view.
+    function sourceTopSnippet() {
+        const pre = sourcePre();
+        if (!pre) return '';
+        const text = pre.textContent;
+        let offset = 0;
+        const caret = document.caretRangeFromPoint ? document.caretRangeFromPoint(24, toolbarBottom() + 12) : null;
+        if (caret && pre.contains(caret.startContainer)) {
+            const walker = document.createTreeWalker(pre, NodeFilter.SHOW_TEXT);
+            let node;
+            while ((node = walker.nextNode()) && node !== caret.startContainer) offset += node.length;
+            offset += caret.startOffset;
+        }
+        // If the offset lands inside a tag, skip to the end of that tag.
+        const nextLt = text.indexOf('<', offset), nextGt = text.indexOf('>', offset);
+        let i = (nextGt !== -1 && (nextLt === -1 || nextGt < nextLt)) ? nextGt + 1 : offset;
+        let out = '', inTag = false;
+        while (i < text.length && out.length < 60) {
+            const c = text[i++];
+            if (c === '<') inTag = true;
+            else if (c === '>') inTag = false;
+            else if (!inTag) out += c;
+        }
+        return out;
+    }
+
+    function scrollRenderedToSnippet(snippet) {
+        const root = document.getElementById('lp-rendered-root');
+        const re = snippet && snippetRegex(snippet);
+        if (!root || !re) return;
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        let node, buf = '';
+        while ((node = walker.nextNode())) {
+            nodes.push({ start: buf.length, node });
+            // Separate nodes with a newline: adjacent block elements have no
+            // whitespace between their text nodes, but the source does, and
+            // the whitespace-tolerant regex absorbs the extra separator.
+            buf += node.textContent + '\\n';
+        }
+        const m = re.exec(buf);
+        if (!m) return;
+        let target = null;
+        for (const entry of nodes) {
+            if (entry.start <= m.index) target = entry.node; else break;
+        }
+        const el = target && target.parentElement;
+        if (!el) return;
+        window.scrollTo(0, Math.max(0, window.scrollY + el.getBoundingClientRect().top - toolbarBottom() - 16));
+    }
+
+    // Delegated so the listener survives content patches. The checkbox is
+    // flipped back briefly to measure the view being left — this happens
+    // within a single frame, so nothing visibly flickers.
+    document.addEventListener('change', event => {
+        const input = event.target;
+        if (!input || input.id !== 'lp-show-source') return;
+        if (input.checked) {
+            input.checked = false;
+            const snippet = renderedTopSnippet();
+            input.checked = true;
+            scrollSourceToSnippet(snippet);
+        } else {
+            input.checked = true;
+            const snippet = sourceTopSnippet();
+            input.checked = false;
+            scrollRenderedToSnippet(snippet);
+        }
+    });
+</script>
 </body>
 </html>`;
 }
