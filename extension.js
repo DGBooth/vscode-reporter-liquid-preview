@@ -825,6 +825,104 @@ ${content}
 </html>`;
 }
 
+// Tags that get their own indented line when formatting; everything else is
+// treated as inline and left verbatim.
+const HTML_BLOCK_TAGS = new Set(['html', 'head', 'body', 'title', 'meta', 'link', 'style', 'script', 'div', 'section', 'article', 'header', 'footer', 'nav', 'aside', 'main', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col', 'form', 'fieldset', 'legend', 'blockquote', 'hr', 'details', 'summary', 'figure', 'figcaption', 'address']);
+// Elements with no closing tag, so an opening tag must not increase the indent.
+const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
+// Elements whose body is whitespace-sensitive and must be kept verbatim.
+const HTML_RAW_TAGS = new Set(['pre', 'textarea', 'script', 'style']);
+
+// Split HTML into tag/text/raw tokens. The scanner respects quoted attribute
+// values (a '>' inside quotes does not end the tag), comments and doctypes,
+// and captures raw-tag bodies verbatim.
+function tokenizeHtml(html) {
+    const tokens = [];
+    let i = 0;
+    let textStart = 0;
+    const flushText = end => { if (end > textStart) tokens.push({ type: 'text', text: html.slice(textStart, end) }); };
+
+    while (i < html.length) {
+        if (html[i] !== '<' || !/[a-zA-Z\/!]/.test(html[i + 1] || '')) { i++; continue; }
+        flushText(i);
+
+        if (html.startsWith('<!--', i)) {
+            const end = html.indexOf('-->', i + 4);
+            const close = end === -1 ? html.length : end + 3;
+            tokens.push({ type: 'tag', kind: 'comment', name: '', text: html.slice(i, close) });
+            i = textStart = close;
+            continue;
+        }
+
+        // Scan to the matching '>', ignoring any inside quoted attribute values.
+        let j = i + 1;
+        let quote = null;
+        while (j < html.length && (quote !== null || html[j] !== '>')) {
+            if (quote === null && (html[j] === '"' || html[j] === "'")) quote = html[j];
+            else if (html[j] === quote) quote = null;
+            j++;
+        }
+        const close = j < html.length ? j + 1 : html.length;
+        const text = html.slice(i, close);
+        const nameMatch = text.match(/^<\/?([a-zA-Z][a-zA-Z0-9-]*)/);
+        const name = nameMatch ? nameMatch[1].toLowerCase() : '';
+        const kind = text[1] === '!' ? 'doctype' : (text[1] === '/' ? 'close' : 'open');
+        i = textStart = close;
+
+        if (kind === 'open' && HTML_RAW_TAGS.has(name)) {
+            const closeRegex = new RegExp(`</${name}\\s*>`, 'i');
+            const m = closeRegex.exec(html.slice(i));
+            const bodyEnd = m ? i + m.index : html.length;
+            const rawClose = m ? bodyEnd + m[0].length : html.length;
+            tokens.push({ type: 'raw', name, openTag: text, body: html.slice(i, bodyEnd), closeTag: m ? m[0] : '' });
+            i = textStart = rawClose;
+        } else {
+            tokens.push({ type: 'tag', kind, name, text });
+        }
+    }
+    flushText(html.length);
+    return tokens;
+}
+
+// Conservative HTML pretty-printer for the source views: block-level tags get
+// their own indented lines and inline runs are kept together, with newlines
+// inside them collapsed to a space. Only whitespace that cannot affect
+// rendering is changed — inline content is otherwise verbatim and raw-tag
+// bodies (pre, textarea, script, style) are untouched — so the formatted
+// markup renders identically to the original.
+function formatHtml(html) {
+    const out = [];
+    let indent = 0;
+    let line = '';
+    const pushLine = () => {
+        const trimmed = line.replace(/\s*\n\s*/g, ' ').trim();
+        if (trimmed) out.push('  '.repeat(indent) + trimmed);
+        line = '';
+    };
+
+    for (const tok of tokenizeHtml(html)) {
+        if (tok.type === 'text') {
+            line += tok.text;
+        } else if (tok.type === 'raw') {
+            pushLine();
+            out.push('  '.repeat(indent) + tok.openTag + tok.body + tok.closeTag);
+        } else if (HTML_BLOCK_TAGS.has(tok.name) || tok.kind === 'comment' || tok.kind === 'doctype') {
+            pushLine();
+            if (tok.kind === 'close') {
+                indent = Math.max(0, indent - 1);
+                out.push('  '.repeat(indent) + tok.text);
+            } else {
+                out.push('  '.repeat(indent) + tok.text);
+                if (tok.kind === 'open' && !HTML_VOID_TAGS.has(tok.name)) indent++;
+            }
+        } else {
+            line += tok.text;
+        }
+    }
+    pushLine();
+    return out.join('\n');
+}
+
 // Body of the Full HTML Preview webview: the header (with view toggles), the
 // annotated document, and a hidden panel holding the standalone HTML source
 // that the "Show HTML source" toggle swaps in.
@@ -846,7 +944,7 @@ function buildFullPreviewContent(templateText, templateUri) {
 
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">Standalone HTML for this document — styles are included, so it works on its own. Click the code below to select it all, copy, and paste into SharePoint or save as an .html file.</div>
-<pre>${escapeHtml(standalone)}</pre>
+<pre>${escapeHtml(formatHtml(standalone))}</pre>
 </div>`;
 
     return buildFullPreviewHeader(templateUri, stats, toolbar)
@@ -942,7 +1040,7 @@ function buildHtmlPreviewContent(rendered) {
     const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">The HTML behind the view above, as rendered with the current data and field values.</div>
-<pre>${escapeHtml(rendered)}</pre>
+<pre>${escapeHtml(formatHtml(rendered))}</pre>
 </div>`;
     return toolbar + `<div class="lp-rendered">${rendered}</div>` + sourcePanel;
 }
