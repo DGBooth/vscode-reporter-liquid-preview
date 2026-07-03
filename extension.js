@@ -743,7 +743,8 @@ const viewSourceStyles = `
   body:has(#lp-show-source:checked) { background-color: var(--vscode-editor-background, white); }
   body:has(#lp-show-source:checked) .lp-toggle { color: var(--vscode-foreground, #444); }
   body:has(#lp-show-source:checked) .lp-toolbar { border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
-  body:has(#lp-show-source:checked) .lp-rendered { display: none; }
+  body:has(#lp-show-source:checked) #lp-rendered-root,
+  body:has(#lp-show-source:checked) #lp-rendered-root ~ * { display: none; }
   body:has(#lp-show-source:checked) .lp-source { display: block; }`;
 
 const htmlPreviewStyles = `
@@ -923,9 +924,12 @@ function formatHtml(html) {
     return out.join('\n');
 }
 
-// Body of the Full HTML Preview webview: the header (with view toggles), the
-// annotated document, and a hidden panel holding the standalone HTML source
-// that the "Show HTML source" toggle swaps in.
+// Content of the Full HTML Preview webview, split into two parts: 'chrome' is
+// the extension's own markup — header with view toggles and the hidden panel
+// holding the standalone HTML source — and 'rendered' is the annotated
+// document. They are kept in separate containers (chrome first) so malformed
+// HTML in the template — stray closing tags, unclosed elements — can never
+// swallow or break out into the extension's UI when the browser parses it.
 function buildFullPreviewContent(templateText, templateUri) {
     const { html, stats } = annotateLiquid(templateText);
     const cssText = readCssContents(templateUri);
@@ -933,8 +937,8 @@ function buildFullPreviewContent(templateText, templateUri) {
     const exportContent = buildFullPreviewHeader(templateUri, stats) + html;
     const standalone = buildStandaloneHtml(exportContent, cssText);
 
-    // Scripts are disabled in the webview, so the toggles are plain checkboxes
-    // wired up purely with CSS (body:has(...) rules in fullPreviewStyles).
+    // The toggles are plain checkboxes wired up purely with CSS
+    // (body:has(...) rules in fullPreviewStyles).
     const toggles = [];
     if (stats.notes) {
         toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-notes" checked=""> Show ${pluralize(stats.notes, 'author note')}</label>`);
@@ -947,14 +951,15 @@ function buildFullPreviewContent(templateText, templateUri) {
 <pre>${escapeHtml(formatHtml(standalone))}</pre>
 </div>`;
 
-    return buildFullPreviewHeader(templateUri, stats, toolbar)
-        + `<div class="lp-rendered">${html}</div>`
-        + sourcePanel;
+    return {
+        chrome: buildFullPreviewHeader(templateUri, stats, toolbar) + sourcePanel,
+        rendered: html
+    };
 }
 
 async function refreshHtmlFullPanel(preview, panel) {
     let errors = [];
-    let content = '';
+    let content = null;
 
     try {
         let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
@@ -962,21 +967,21 @@ async function refreshHtmlFullPanel(preview, panel) {
         preview.lastRenderedHtml = content;
     } catch (err) {
         errors.push({ title: 'Template error', message: err.message });
-        content = preview.lastRenderedHtml || '';
+        content = preview.lastRenderedHtml || { chrome: '', rendered: '' };
     }
 
-    updatePreviewPanel(panel, preview, content + buildErrorPaneHtml(errors), fullPreviewStyles);
+    updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(errors), content.rendered, fullPreviewStyles);
 }
 
 // Push new content into a preview panel: the first call sets the full webview
 // document, later calls patch it in place via a message (see buildPreviewHtml)
 // so the view isn't reloaded on every edit.
-function updatePreviewPanel(panel, preview, bodyContent, styles) {
+function updatePreviewPanel(panel, preview, chrome, rendered, styles) {
     if (panel._rlpInitialized) {
-        panel.webview.postMessage({ type: 'update', content: bodyContent });
+        panel.webview.postMessage({ type: 'update', chrome, rendered });
     } else {
         let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-        panel.webview.html = buildPreviewHtml(cssLinks, bodyContent, styles);
+        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles);
         panel._rlpInitialized = true;
     }
 }
@@ -1029,20 +1034,20 @@ async function refreshHtmlPanel(preview, panel) {
         _currentWarnings = null;
     }
 
-    updatePreviewPanel(panel, preview, buildHtmlPreviewContent(rendered) + buildErrorPaneHtml(errors), htmlPreviewStyles);
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(errors), rendered, htmlPreviewStyles);
 }
 
-// Body of the HTML Preview webview: a toolbar with a source toggle, the
-// rendered document, and a hidden panel with the document's underlying HTML —
-// the same render currently in view, so it reflects the selected data and
-// field values.
-function buildHtmlPreviewContent(rendered) {
+// The HTML Preview's own UI: a toolbar with a source toggle and a hidden
+// panel with the document's underlying HTML — the same render currently in
+// view, so it reflects the selected data and field values. Kept separate from
+// the rendered document itself (see buildPreviewHtml).
+function buildHtmlPreviewChrome(rendered) {
     const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
     const sourcePanel = `<div class="lp-source">
-<div class="lp-source-hint">The HTML behind the view above, as rendered with the current data and field values.</div>
+<div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
 <pre>${escapeHtml(formatHtml(rendered))}</pre>
 </div>`;
-    return toolbar + `<div class="lp-rendered">${rendered}</div>` + sourcePanel;
+    return toolbar + sourcePanel;
 }
 
 function findCssPaths(templateUri) {
@@ -1111,11 +1116,19 @@ function buildErrorPaneHtml(errors) {
 </div>`;
 }
 
-// Full webview document. bodyContent already includes the error pane. This is
-// set once per panel; later renders are posted as 'update' messages and
-// patched into #lp-root by the script below, so a live edit doesn't reload the
-// document — scroll position and toggle checkboxes survive it.
-function buildPreviewHtml(cssLinks, bodyContent, extraStyles = '') {
+// Full webview document. chrome (the extension's own UI, including the error
+// pane) and rendered (the template's output) live in separate containers,
+// with chrome first: nothing that precedes the template content in the parse
+// can be damaged by its malformed HTML, and content escaping #lp-rendered-root
+// only ever spills into following siblings, which the source-view CSS hides
+// along with the container itself.
+//
+// The document is set once per panel; later renders are posted as 'update'
+// messages and patched into the two containers by the script below, so a live
+// edit doesn't reload the document — scroll position and toggle checkboxes
+// survive it. Patching each container separately via innerHTML also uses
+// fragment parsing, which cannot leak content outside its container.
+function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '') {
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -1135,8 +1148,11 @@ function buildPreviewHtml(cssLinks, bodyContent, extraStyles = '') {
 ${cssLinks}
 </head>
 <body>
-<div id="lp-root">
-${bodyContent}
+<div id="lp-chrome">
+${chrome}
+</div>
+<div id="lp-rendered-root">
+${rendered}
 </div>
 <script>
     window.addEventListener('message', event => {
@@ -1146,12 +1162,17 @@ ${bodyContent}
         for (const input of document.querySelectorAll('.lp-toggle input[id]')) {
             toggles[input.id] = input.checked;
         }
+        const legend = document.querySelector('.lp-legend');
+        const legendOpen = legend ? legend.open : null;
         const x = window.scrollX, y = window.scrollY;
-        document.getElementById('lp-root').innerHTML = msg.content;
+        document.getElementById('lp-chrome').innerHTML = msg.chrome;
+        document.getElementById('lp-rendered-root').innerHTML = msg.rendered;
         for (const id in toggles) {
             const input = document.getElementById(id);
             if (input) input.checked = toggles[id];
         }
+        const newLegend = document.querySelector('.lp-legend');
+        if (newLegend && legendOpen !== null) newLegend.open = legendOpen;
         window.scrollTo(x, y);
     });
 </script>
