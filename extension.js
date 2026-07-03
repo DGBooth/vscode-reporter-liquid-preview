@@ -773,6 +773,13 @@ const htmlPreviewStyles = `
     + viewSourceStyles;
 
 const fullPreviewStyles = `
+  /* Annotation boxes hang 10px of decoration outside their parent (see the
+     note above .lp-choice); the webview body's own 8px padding isn't quite
+     enough for a top-level box, so the rendered view adds a small gutter.
+     The standalone export has no #lp-rendered-root — its 16px body padding
+     already covers the overhang. */
+  #lp-rendered-root { padding: 0 8px; }
+
   .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
   .lp-detail { font-family: sans-serif; font-size: 12px; font-style: italic; color: #555; margin-right: 6px; vertical-align: middle; }
 
@@ -789,34 +796,43 @@ const fullPreviewStyles = `
   .lg-loop { background: #00796b; }
   .lg-note { background: #9e9e9e; }
 
-  /* Documents often cap their width (e.g. section { max-width: 1024px }), so
-     an annotated table can be wider than the box it sits in. Boxes clip at
-     rounded corners (overflow: hidden), which would make the table's right
-     edge unreachable — the inner branch/option containers scroll horizontally
-     instead, so every column can still be read. */
-  .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px 0; overflow: hidden; background: white; }
-  .lp-choice-head { background: #e3f2fd; border-bottom: 1px solid #bbdefb; padding: 5px 10px; }
+  /* Documents usually cap their own width (e.g. section { max-width: 1024px })
+     and size tables to fill it (width: 100%), so every pixel an annotation box
+     spends on borders and padding inside the flow squeezes the real content
+     narrower than the finished document would be — badly, once boxes nest.
+     Each box therefore hangs its decoration OUTSIDE its parent's bounds: a
+     negative horizontal margin of 10px cancels all but the border out of the
+     box's own overhead, so nested content keeps within a few px per level of
+     the full document width. 10px is safe to hang because every box has at
+     least that much padding for a child box to bleed into (and a top-level
+     box bleeds harmlessly into the page margin), so no box ever covers an
+     ancestor's border or rail. Nothing here may set overflow other than
+     visible: any clipping ancestor would cut off exactly the part of a child
+     box that hangs outside it. */
+  .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px -10px; background: white; }
+  .lp-choice-head { background: #e3f2fd; border-bottom: 1px solid #bbdefb; border-radius: 5px 5px 0 0; padding: 5px 10px; }
   .lp-choice .lp-label { background: #1976d2; }
-  .lp-option { padding: 6px 12px; overflow-x: auto; }
+  .lp-option { padding: 6px 12px; }
   .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
   .lp-opt-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; color: #1565c0; background: #e3f2fd; border: 1px solid #90caf9; padding: 1px 8px; border-radius: 9px; margin: 2px 8px 2px 0; vertical-align: middle; }
 
-  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px 0; overflow-x: auto; }
+  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px -10px; }
   .lp-optional .lp-label { background: #388e3c; }
 
-  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px 0; overflow-x: auto; }
+  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px -10px; }
   .lp-editor .lp-label { background: #ef6c00; }
 
-  .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px 0; overflow: hidden; background: #faf5fb; }
-  .lp-cond > .lp-branch { padding: 6px 12px; overflow-x: auto; }
+  .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px -10px; background: #faf5fb; }
+  .lp-cond > .lp-branch { padding: 6px 12px; }
   .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
   .lp-cond .lp-label { background: #7b1fa2; }
 
   /* Loops are marked with a left rail and a label strip rather than a full
      box: they nest inside one another, and a padded box on both sides quickly
      narrows the usable width until tables inside deep loops get crushed.
-     The rail costs 13px on the left per level and nothing on the right. */
-  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0; overflow-x: auto; }
+     The -10px margin hangs the padding outside the parent's bounds (see the
+     note above .lp-choice), so a nesting level costs only the 3px rail. */
+  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0 10px -10px; }
   .lp-loop-head { display: inline-block; background: #e0f2f1; border: 1px solid #80cbc4; border-left: none; border-radius: 0 9px 9px 0; padding: 2px 8px 2px 6px; margin: 0 0 4px -10px; }
   .lp-loop .lp-label { background: #00796b; }
 
