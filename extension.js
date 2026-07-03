@@ -738,7 +738,18 @@ const viewSourceStyles = `
   .lp-toggle input { margin: 0; }
   .lp-source { display: none; }
   .lp-source-hint { font-family: sans-serif; font-size: 12px; color: var(--vscode-descriptionForeground, #444); margin-bottom: 8px; }
-  .lp-source pre { background: var(--vscode-textCodeBlock-background, #f5f5f5); color: var(--vscode-editor-foreground, black); border: 1px solid var(--vscode-panel-border, #ddd); border-radius: 6px; padding: 12px; font-size: 11px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
+  .lp-source pre { background: none; border: none; margin: 0; padding: 2px 4px; color: var(--vscode-editor-foreground, #333); font-family: var(--vscode-editor-font-family, "SF Mono", Monaco, Menlo, Consolas, monospace); font-size: var(--vscode-editor-font-size, 12px); line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
+
+  .lp-tk-tag, .lp-tk-doctype, .lp-tk-punct { color: #800000; }
+  .lp-tk-attr { color: #e50000; }
+  .lp-tk-str { color: #0000ff; }
+  .lp-tk-comment { color: #008000; }
+  body.vscode-dark .lp-tk-tag, body.vscode-dark .lp-tk-doctype,
+  body.vscode-high-contrast .lp-tk-tag, body.vscode-high-contrast .lp-tk-doctype { color: #569cd6; }
+  body.vscode-dark .lp-tk-punct, body.vscode-high-contrast .lp-tk-punct { color: #808080; }
+  body.vscode-dark .lp-tk-attr, body.vscode-high-contrast .lp-tk-attr { color: #9cdcfe; }
+  body.vscode-dark .lp-tk-str, body.vscode-high-contrast .lp-tk-str { color: #ce9178; }
+  body.vscode-dark .lp-tk-comment, body.vscode-high-contrast .lp-tk-comment { color: #6a9955; }
   body:has(#lp-show-source:checked) { background-color: var(--vscode-editor-background, white); }
   body:has(#lp-show-source:checked) .lp-toggle { color: var(--vscode-foreground, #444); }
   body:has(#lp-show-source:checked) .lp-toolbar { background: var(--vscode-editor-background, white); border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
@@ -922,6 +933,63 @@ function formatHtml(html) {
     return out.join('\n');
 }
 
+// Syntax-highlight a tag's markup: punctuation, tag name, attribute names and
+// quoted values each get a token span. All token text is escaped, and the
+// combined textContent of the output equals the input exactly — the
+// scroll-sync script and copy behaviour rely on that.
+function highlightTagMarkup(text) {
+    const m = text.match(/^(<\/?)([a-zA-Z][a-zA-Z0-9-]*)/);
+    if (!m) return `<span class="lp-tk-punct">${escapeHtml(text)}</span>`;
+    let out = `<span class="lp-tk-punct">${escapeHtml(m[1])}</span><span class="lp-tk-tag">${escapeHtml(m[2])}</span>`;
+    const rest = text.slice(m[0].length);
+    let j = 0;
+    while (j < rest.length) {
+        const c = rest[j];
+        if (/\s/.test(c)) {
+            let k = j;
+            while (k < rest.length && /\s/.test(rest[k])) k++;
+            out += rest.slice(j, k);
+            j = k;
+        } else if (c === '"' || c === "'") {
+            let k = rest.indexOf(c, j + 1);
+            k = k === -1 ? rest.length : k + 1;
+            out += `<span class="lp-tk-str">${escapeHtml(rest.slice(j, k))}</span>`;
+            j = k;
+        } else if (c === '=' || c === '>' || c === '/') {
+            out += `<span class="lp-tk-punct">${escapeHtml(c)}</span>`;
+            j++;
+        } else {
+            let k = j;
+            while (k < rest.length && !/[\s=>\/"']/.test(rest[k])) k++;
+            out += `<span class="lp-tk-attr">${escapeHtml(rest.slice(j, k))}</span>`;
+            j = k;
+        }
+    }
+    return out;
+}
+
+// Convert HTML source text into escaped, token-coloured markup for the source
+// views, so the source reads like VS Code's own HTML highlighting. Colours
+// follow the editor's default light/dark themes (see the .lp-tk-* rules).
+function highlightHtml(html) {
+    let out = '';
+    for (const tok of tokenizeHtml(html)) {
+        if (tok.type === 'text') {
+            out += escapeHtml(tok.text);
+        } else if (tok.type === 'raw') {
+            out += highlightTagMarkup(tok.openTag) + escapeHtml(tok.body)
+                + (tok.closeTag ? highlightTagMarkup(tok.closeTag) : '');
+        } else if (tok.kind === 'comment') {
+            out += `<span class="lp-tk-comment">${escapeHtml(tok.text)}</span>`;
+        } else if (tok.kind === 'doctype') {
+            out += `<span class="lp-tk-doctype">${escapeHtml(tok.text)}</span>`;
+        } else {
+            out += highlightTagMarkup(tok.text);
+        }
+    }
+    return out;
+}
+
 // Content of the Full HTML Preview webview, split into two parts: 'chrome' is
 // the extension's own markup — header with view toggles and the hidden panel
 // holding the standalone HTML source — and 'rendered' is the annotated
@@ -946,7 +1014,7 @@ function buildFullPreviewContent(templateText, templateUri) {
 
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">Standalone HTML for this document — styles are included, so it works on its own. Click the code below to select it all, copy, and paste into SharePoint or save as an .html file.</div>
-<pre>${escapeHtml(formatHtml(standalone))}</pre>
+<pre>${highlightHtml(formatHtml(standalone))}</pre>
 </div>`;
 
     return {
@@ -1043,7 +1111,7 @@ function buildHtmlPreviewChrome(rendered) {
     const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
-<pre>${escapeHtml(formatHtml(rendered))}</pre>
+<pre>${highlightHtml(formatHtml(rendered))}</pre>
 </div>`;
     return toolbar + sourcePanel;
 }
