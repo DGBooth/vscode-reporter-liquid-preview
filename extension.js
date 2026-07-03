@@ -301,7 +301,9 @@ function activate(context) {
                 vscode.ViewColumn.Beside,
                 // retainContextWhenHidden keeps the webview alive when its tab is
                 // hidden, preserving scroll position and toggle state on return.
-                { enableScripts: false, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
+                // Scripts are needed only for the in-place update listener in
+                // buildPreviewHtml; the preview content itself uses none.
+                { enableScripts: true, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
             );
 
             htmlPreviews[preview.id] = { preview, panel };
@@ -326,7 +328,9 @@ function activate(context) {
                 vscode.ViewColumn.Beside,
                 // retainContextWhenHidden keeps the webview alive when its tab is
                 // hidden, preserving scroll position and toggle state on return.
-                { enableScripts: false, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
+                // Scripts are needed only for the in-place update listener in
+                // buildPreviewHtml; the preview content itself uses none.
+                { enableScripts: true, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
             );
 
             htmlFullPreviews[preview.id] = { preview, panel };
@@ -863,8 +867,20 @@ async function refreshHtmlFullPanel(preview, panel) {
         content = preview.lastRenderedHtml || '';
     }
 
-    let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, content, errors, fullPreviewStyles);
+    updatePreviewPanel(panel, preview, content + buildErrorPaneHtml(errors), fullPreviewStyles);
+}
+
+// Push new content into a preview panel: the first call sets the full webview
+// document, later calls patch it in place via a message (see buildPreviewHtml)
+// so the view isn't reloaded on every edit.
+function updatePreviewPanel(panel, preview, bodyContent, styles) {
+    if (panel._rlpInitialized) {
+        panel.webview.postMessage({ type: 'update', content: bodyContent });
+    } else {
+        let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
+        panel.webview.html = buildPreviewHtml(cssLinks, bodyContent, styles);
+        panel._rlpInitialized = true;
+    }
 }
 
 async function refreshHtmlPanel(preview, panel) {
@@ -915,8 +931,7 @@ async function refreshHtmlPanel(preview, panel) {
         _currentWarnings = null;
     }
 
-    let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-    panel.webview.html = buildPreviewHtml(cssLinks, buildHtmlPreviewContent(rendered), errors, htmlPreviewStyles);
+    updatePreviewPanel(panel, preview, buildHtmlPreviewContent(rendered) + buildErrorPaneHtml(errors), htmlPreviewStyles);
 }
 
 // Body of the HTML Preview webview: a toolbar with a source toggle, the
@@ -978,8 +993,8 @@ function readCssContents(templateUri) {
         .join('\n');
 }
 
-function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
-    const haserrors = errors.length > 0;
+function buildErrorPaneHtml(errors) {
+    if (errors.length === 0) return '';
     const warnings = errors.filter(e => e.isWarning);
     const nonWarnings = errors.filter(e => !e.isWarning);
 
@@ -992,16 +1007,23 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
         errorBlocks.push(`<div class="warning-block"><span class="warning-block-title">&#9432; Warning</span><ul class="warning-list">${items}</ul></div>`);
     }
 
-    const errorPaneHtml = haserrors ? `
+    return `
 <div id="error-pane">
   ${errorBlocks.join('')}
-</div>` : '';
+</div>`;
+}
 
+// Full webview document. bodyContent already includes the error pane. This is
+// set once per panel; later renders are posted as 'update' messages and
+// patched into #lp-root by the script below, so a live edit doesn't reload the
+// document — scroll position and toggle checkboxes survive it.
+function buildPreviewHtml(cssLinks, bodyContent, extraStyles = '') {
     return `<!DOCTYPE html>
 <html>
 <head>
 <style>
-  body { background-color: white; color: black; margin: 0; padding: 8px; ${haserrors ? 'padding-bottom: 160px;' : ''} box-sizing: border-box; }
+  body { background-color: white; color: black; margin: 0; padding: 8px; box-sizing: border-box; }
+  body:has(#error-pane) { padding-bottom: 160px; }
   h1, h2, h3, h4, h5, h6 { color: black; }
   #error-pane { position: fixed; bottom: 0; left: 0; right: 0; background: #1e1a10; border-top: 2px solid #f14c4c; padding: 6px 12px; max-height: 150px; overflow-y: auto; z-index: 9999; }
   .error-block, .warning-block { margin-bottom: 6px; }
@@ -1015,8 +1037,26 @@ function buildPreviewHtml(cssLinks, rendered, errors, extraStyles = '') {
 ${cssLinks}
 </head>
 <body>
-${rendered}
-${errorPaneHtml}
+<div id="lp-root">
+${bodyContent}
+</div>
+<script>
+    window.addEventListener('message', event => {
+        const msg = event.data;
+        if (!msg || msg.type !== 'update') return;
+        const toggles = {};
+        for (const input of document.querySelectorAll('.lp-toggle input[id]')) {
+            toggles[input.id] = input.checked;
+        }
+        const x = window.scrollX, y = window.scrollY;
+        document.getElementById('lp-root').innerHTML = msg.content;
+        for (const id in toggles) {
+            const input = document.getElementById(id);
+            if (input) input.checked = toggles[id];
+        }
+        window.scrollTo(x, y);
+    });
+</script>
 </body>
 </html>`;
 }
