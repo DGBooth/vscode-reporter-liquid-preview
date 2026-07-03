@@ -507,6 +507,22 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
     const append = s => { (peek() || root).html += s; };
     const hasVisibleContent = html => /\S/.test(html);
 
+    // Horizontal width (px) each construct's box adds around its content:
+    // borders plus padding on both sides, mirroring the .lp-* rules in
+    // fullPreviewStyles (keep in sync). The running total over the open
+    // stack is how much wider the annotated document is than the finished
+    // one at that point; its maximum is returned as extraWidth so that
+    // width-capped sections can be widened by exactly that amount (see
+    // buildSectionWidthOverrides).
+    const FRAME_COSTS = { choice: 26, optional: 25, editor: 25, if: 26, case: 26, for: 13, tablerow: 13 };
+    let overhead = 0;
+    let extraWidth = 0;
+    const pushFrame = frame => {
+        stack.push(frame);
+        overhead += FRAME_COSTS[frame.type];
+        if (overhead > extraWidth) extraWidth = overhead;
+    };
+
     // Render a completed frame to HTML. Returns '' for hidden logic-only blocks.
     const closeFrame = frame => {
         switch (frame.type) {
@@ -547,6 +563,7 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
         const frame = peek();
         if (frame && frame.type === type) {
             stack.pop();
+            overhead -= FRAME_COSTS[frame.type];
             append(closeFrame(frame));
         }
     };
@@ -563,7 +580,7 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
             case 'choice': {
                 const args = parseTagArgs(rest);
                 const what = args.title || humanizeName(args.name || args.nameVar);
-                stack.push({ type: 'choice', head: annotationLabel('Choose one', what), options: [], html: '' });
+                pushFrame({ type: 'choice', head: annotationLabel('Choose one', what), options: [], html: '' });
                 break;
             }
             case 'or': {
@@ -579,7 +596,7 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
                 break;
             case 'optional': {
                 const args = parseTagArgs(rest);
-                stack.push({ type: 'optional', label: annotationLabel('Optional', humanizeName(args.name || args.nameVar)), html: '' });
+                pushFrame({ type: 'optional', label: annotationLabel('Optional', humanizeName(args.name || args.nameVar)), html: '' });
                 break;
             }
             case 'endoptional':
@@ -588,17 +605,17 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
             case 'editor': {
                 const args = parseTagArgs(rest);
                 const what = args.placeholder || humanizeName(args.name || args.nameVar);
-                stack.push({ type: 'editor', label: annotationLabel('Fill in', what), html: '' });
+                pushFrame({ type: 'editor', label: annotationLabel('Fill in', what), html: '' });
                 break;
             }
             case 'endeditor':
                 closeIf('editor');
                 break;
             case 'if':
-                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown when', humanizeCondition(rest)), html: '' });
+                pushFrame({ type: 'if', branches: [], label: annotationLabel('Shown when', humanizeCondition(rest)), html: '' });
                 break;
             case 'unless':
-                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown unless', humanizeCondition(rest)), html: '' });
+                pushFrame({ type: 'if', branches: [], label: annotationLabel('Shown unless', humanizeCondition(rest)), html: '' });
                 break;
             case 'elsif': {
                 const frame = peek();
@@ -625,7 +642,7 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
             case 'case':
                 // label stays null (and the buffered text is discarded) until the
                 // first 'when' — Liquid ignores content between case and when.
-                stack.push({ type: 'case', subject: humanizeCondition(rest), branches: [], label: null, html: '' });
+                pushFrame({ type: 'case', subject: humanizeCondition(rest), branches: [], label: null, html: '' });
                 break;
             case 'when': {
                 const frame = peek();
@@ -645,7 +662,7 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
                 const detail = m
                     ? `once for each ${humanizeName(m[1])} in ${humanizeCondition(m[2].split('|')[0])}`
                     : humanizeCondition(rest);
-                stack.push({ type: tag, label: annotationLabel('Repeats', detail), html: '' });
+                pushFrame({ type: tag, label: annotationLabel('Repeats', detail), html: '' });
                 break;
             }
             case 'endfor':
@@ -679,7 +696,7 @@ function annotateLiquid(text, { includeNotes = true } = {}) {
         return `<span class="lp-var">${escapeHtml(humanizeName(expr))}</span>`;
     });
 
-    return { html: text, stats };
+    return { html: text, stats, extraWidth };
 }
 
 function pluralize(count, singular, plural) {
@@ -773,13 +790,6 @@ const htmlPreviewStyles = `
     + viewSourceStyles;
 
 const fullPreviewStyles = `
-  /* Annotation boxes hang 10px of decoration outside their parent (see the
-     note above .lp-choice); the webview body's own 8px padding isn't quite
-     enough for a top-level box, so the rendered view adds a small gutter.
-     The standalone export has no #lp-rendered-root — its 16px body padding
-     already covers the overhang. */
-  #lp-rendered-root { padding: 0 8px; }
-
   .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
   .lp-detail { font-family: sans-serif; font-size: 12px; font-style: italic; color: #555; margin-right: 6px; vertical-align: middle; }
 
@@ -796,33 +806,29 @@ const fullPreviewStyles = `
   .lg-loop { background: #00796b; }
   .lg-note { background: #9e9e9e; }
 
-  /* Documents usually cap their own width (e.g. section { max-width: 1024px })
-     and size tables to fill it (width: 100%), so every pixel an annotation box
-     spends on borders and padding inside the flow squeezes the real content
-     narrower than the finished document would be — badly, once boxes nest.
-     Each box therefore hangs its decoration OUTSIDE its parent's bounds: a
-     negative horizontal margin of 10px cancels all but the border out of the
-     box's own overhead, so nested content keeps within a few px per level of
-     the full document width. 10px is safe to hang because every box has at
-     least that much padding for a child box to bleed into (and a top-level
-     box bleeds harmlessly into the page margin), so no box ever covers an
-     ancestor's border or rail. Nothing here may set overflow other than
-     visible: any clipping ancestor would cut off exactly the part of a child
-     box that hangs outside it. */
-  .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px -10px; background: white; }
+  /* The width a box's borders and padding consume is compensated for at the
+     section level — documents that pin a px width on their sections get
+     those widths increased by the annotation overhead at the deepest nesting
+     (see buildSectionWidthOverrides), so the real content keeps the full
+     width of the finished page. Boxes must not clip (overflow stays
+     visible): content genuinely wider than a box spills over its border and
+     stays readable instead of losing its right edge. FRAME_COSTS in
+     annotateLiquid mirrors the border+padding widths set here — keep them in
+     sync. */
+  .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px 0; background: white; }
   .lp-choice-head { background: #e3f2fd; border-bottom: 1px solid #bbdefb; border-radius: 5px 5px 0 0; padding: 5px 10px; }
   .lp-choice .lp-label { background: #1976d2; }
   .lp-option { padding: 6px 12px; }
   .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
   .lp-opt-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; color: #1565c0; background: #e3f2fd; border: 1px solid #90caf9; padding: 1px 8px; border-radius: 9px; margin: 2px 8px 2px 0; vertical-align: middle; }
 
-  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px -10px; }
+  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px 0; }
   .lp-optional .lp-label { background: #388e3c; }
 
-  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px -10px; }
+  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px 0; }
   .lp-editor .lp-label { background: #ef6c00; }
 
-  .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px -10px; background: #faf5fb; }
+  .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px 0; background: #faf5fb; }
   .lp-cond > .lp-branch { padding: 6px 12px; }
   .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
   .lp-cond .lp-label { background: #7b1fa2; }
@@ -830,9 +836,8 @@ const fullPreviewStyles = `
   /* Loops are marked with a left rail and a label strip rather than a full
      box: they nest inside one another, and a padded box on both sides quickly
      narrows the usable width until tables inside deep loops get crushed.
-     The -10px margin hangs the padding outside the parent's bounds (see the
-     note above .lp-choice), so a nesting level costs only the 3px rail. */
-  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0 10px -10px; }
+     The rail and its padding cost 13px on the left and nothing on the right. */
+  .lp-loop { border-left: 3px solid #00796b; padding: 0 0 0 10px; margin: 10px 0; }
   .lp-loop-head { display: inline-block; background: #e0f2f1; border: 1px solid #80cbc4; border-left: none; border-radius: 0 9px 9px 0; padding: 2px 8px 2px 6px; margin: 0 0 4px -10px; }
   .lp-loop .lp-label { background: #00796b; }
 
@@ -1026,6 +1031,39 @@ function highlightHtml(html) {
     return out;
 }
 
+// The annotated view is wider than the finished document: every annotation
+// box spends border and padding around the real content — extraWidth px of
+// it at the deepest nesting. Documents usually pin their sections to a fixed
+// px width (e.g. section { max-width: 1024px }) and size tables to fill it,
+// so the overhead would squeeze the content — tables most visibly — narrower
+// than the finished page. This scans the document's own CSS for px
+// width/max-width declarations on section selectors and returns override
+// rules with those widths increased by extraWidth. Emitted after the
+// document's CSS, the overrides win the cascade at equal specificity, and
+// the content keeps the full width it has in production.
+function buildSectionWidthOverrides(cssText, extraPx) {
+    if (!extraPx || !cssText) return '';
+    const overrides = [];
+    const ruleRegex = /([^{}]+)\{([^{}]*)\}/g;
+    let m;
+    while ((m = ruleRegex.exec(cssText)) !== null) {
+        const selector = m[1].trim();
+        // Only selectors targeting section elements (so not .report-section),
+        // and not at-rule preludes.
+        if (selector.startsWith('@') || !/(^|[\s,>+~])section\b/.test(' ' + selector)) continue;
+        const widened = [];
+        m[2].replace(/(?:^|[;\s])(max-width|width)\s*:\s*(\d+(?:\.\d+)?)px\s*(!important)?/gi, (decl, prop, px, important) => {
+            widened.push(`${prop.toLowerCase()}: ${parseFloat(px) + extraPx}px${important ? ' !important' : ''}`);
+            return decl;
+        });
+        if (widened.length) overrides.push(`${selector} { ${widened.join('; ')}; }`);
+    }
+    if (!overrides.length) return '';
+    return `/* Sections widened by ${extraPx}px so the annotation boxes' borders and
+   padding don't squeeze the document content below its real width. */
+${overrides.join('\n')}`;
+}
+
 // Content of the Full HTML Preview webview, split into two parts: 'chrome' is
 // the extension's own markup — header with view toggles and the hidden panel
 // holding the standalone HTML source — and 'rendered' is the annotated
@@ -1033,16 +1071,26 @@ function highlightHtml(html) {
 // HTML in the template — stray closing tags, unclosed elements — can never
 // swallow or break out into the extension's UI when the browser parses it.
 function buildFullPreviewContent(templateText, templateUri) {
-    const { html, stats } = annotateLiquid(templateText);
+    const { html, stats, extraWidth } = annotateLiquid(templateText);
     const cssText = readCssContents(templateUri);
+
+    // The document's CSS reaches the webview as <link> tags set once when the
+    // panel opens, so the width overrides ride along in the chrome, which is
+    // re-patched on every render. A <style> inside the body is unusual but
+    // valid to browsers, and coming after the head's links it wins the
+    // cascade.
+    const widthOverrides = buildSectionWidthOverrides(cssText, extraWidth);
+    const overrideStyle = widthOverrides ? `<style>\n${widthOverrides}\n</style>` : '';
 
     // The standalone export is the publishable document, so author notes are
     // left out of it entirely — a second annotation pass without notes also
     // drops any loop or conditional that held nothing but a note, and its
-    // stats keep the export's own summary header accurate.
+    // stats keep the export's own summary header accurate. Its section
+    // widths are widened by its own (possibly smaller) annotation overhead.
     const exported = annotateLiquid(templateText, { includeNotes: false });
     const exportContent = buildFullPreviewHeader(templateUri, exported.stats) + exported.html;
-    const standalone = buildStandaloneHtml(exportContent, cssText);
+    const exportCss = [cssText, buildSectionWidthOverrides(cssText, exported.extraWidth)].filter(Boolean).join('\n');
+    const standalone = buildStandaloneHtml(exportContent, exportCss);
 
     // The toggles are plain checkboxes wired up purely with CSS
     // (body:has(...) rules in fullPreviewStyles).
@@ -1059,7 +1107,7 @@ function buildFullPreviewContent(templateText, templateUri) {
 </div>`;
 
     return {
-        chrome: toolbar + buildFullPreviewHeader(templateUri, stats) + sourcePanel,
+        chrome: overrideStyle + toolbar + buildFullPreviewHeader(templateUri, stats) + sourcePanel,
         rendered: html
     };
 }
