@@ -79,6 +79,7 @@ The extension registers several Reporter-specific Liquid tags beyond the standar
 | Filter | Description |
 |--------|-------------|
 | `money` | Formats a number to two decimal places with comma separators (e.g. `1234.5` → `1,234.50`). |
+| `json` | Serialises a value as JSON, as in [LiquidJS](https://liquidjs.com/filters/json.html). An optional argument sets the pretty-print indentation (e.g. `{{ value \| json: 4 }}`). |
 | `slice` | Overrides the built-in to warn instead of erroring when the value is missing. |
 | `where` | Overrides the built-in to warn instead of erroring when the array is missing. |
 | `sort` | Overrides the built-in with null-safe sorting and property-key support. |
