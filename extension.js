@@ -112,10 +112,12 @@ function registerCustomFilters(engine) {
         return sorted;
     });
 
-    // json filter: serialize a value as JSON, matching the LiquidJS built-in
-    // (https://liquidjs.com/filters/json.html). An optional argument sets the
-    // indentation for pretty-printing, e.g. {{ value | json: 4 }}.
-    engine.registerFilter('json', (value, space = 0) => JSON.stringify(value, null, space));
+    // json filter: serialize a value as JSON, as in the LiquidJS built-in
+    // (https://liquidjs.com/filters/json.html), but pretty-printed with a
+    // 2-space indent by default for readability. An optional argument
+    // overrides the indentation, e.g. {{ value | json: 4 }} or
+    // {{ value | json: 0 }} for compact single-line output.
+    engine.registerFilter('json', (value, space = 2) => JSON.stringify(value, null, space));
 
     // sort_natural filter: case-insensitive sort, optionally by property key
     engine.registerFilter('sort_natural', (arr, property) => {
