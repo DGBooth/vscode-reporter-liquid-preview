@@ -195,13 +195,17 @@ function markdownToHtml(md) {
 
 function registerCustomFilters(engine) {
     // markdownify filter: render Markdown text as HTML, as in Reporter
-    // (e.g. "- Test" becomes a bullet point).
+    // (e.g. "- Test" becomes a bullet point). The wrapper div lets the
+    // preview stylesheet trim the outer margins of the first/last block, so
+    // the output sits flush with surrounding content as it does in Reporter
+    // instead of showing a blank line where the leading <p>'s default
+    // margin-top would be.
     engine.registerFilter('markdownify', value => {
         if (value == null) {
             if (_currentWarnings) _currentWarnings.push(`markdownify filter: value is missing (returned empty)`);
             return '';
         }
-        return markdownToHtml(value);
+        return `<div class="rlp-markdown">${markdownToHtml(value)}</div>`;
     });
 
     // money filter: rounds to 2 decimal places or appends .00 if no decimals, with comma separators
@@ -914,6 +918,8 @@ const viewSourceStyles = `
   body:has(#lp-show-source:checked) .lp-source { display: block; }`;
 
 const htmlPreviewStyles = `
+  .rlp-markdown > :first-child { margin-top: 0; }
+  .rlp-markdown > :last-child { margin-bottom: 0; }
   .editor { border-radius: 4px; padding: 8px 12px; margin: 8px 0; }
   .editor:has(input[type="checkbox"]) { border: 2px dashed #388e3c; background: #f1f8e9; }
   .editor:has(input[type="radio"]) { border: 2px solid #1976d2; background: #e3f2fd; }

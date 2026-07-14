@@ -79,7 +79,7 @@ The extension registers several Reporter-specific Liquid tags beyond the standar
 | Filter | Description |
 |--------|-------------|
 | `money` | Formats a number to two decimal places with comma separators (e.g. `1234.5` → `1,234.50`). |
-| `markdownify` | Renders Markdown text as HTML, as in Reporter (e.g. `- Test` becomes a bullet point). Supports headings, paragraphs, nested bullet/numbered lists, blockquotes, fenced code blocks, horizontal rules, and inline bold/italic/code/links/images; raw HTML passes through untouched. Warns instead of erroring when the value is missing. |
+| `markdownify` | Renders Markdown text as HTML, as in Reporter (e.g. `- Test` becomes a bullet point). Supports headings, paragraphs, nested bullet/numbered lists, blockquotes, fenced code blocks, horizontal rules, and inline bold/italic/code/links/images; raw HTML passes through untouched. Warns instead of erroring when the value is missing. The output is wrapped in a `<div class="rlp-markdown">` whose first/last block margins the HTML preview trims, so the content sits flush with its surroundings as it does in Reporter. |
 | `json` | Serialises a value as JSON, as in [LiquidJS](https://liquidjs.com/filters/json.html), pretty-printed with a 2-space indent by default. An optional argument overrides the indentation (e.g. `{{ value \| json: 4 }}`, or `{{ value \| json: 0 }}` for compact single-line output). |
 | `slice` | Overrides the built-in to warn instead of erroring when the value is missing. |
 | `where` | Overrides the built-in to warn instead of erroring when the array is missing. |
