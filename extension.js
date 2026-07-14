@@ -54,7 +54,156 @@ function trackTagName(name, ctx) {
     }
 }
 
+// Convert Markdown text to HTML for the markdownify filter. Supports the
+// common constructs used in Reporter templates: headings, paragraphs,
+// unordered/ordered lists (nested by indentation), blockquotes, fenced code
+// blocks, horizontal rules, and inline bold/italic/code/links/images.
+// Raw HTML in the source passes through untouched, as in standard Markdown.
+function markdownToHtml(md) {
+    const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+
+    // Inline markdown within a single block of text.
+    const renderInline = text => {
+        // Code spans are extracted first so their contents are not treated as markup.
+        const codeSpans = [];
+        text = text.replace(/`([^`]+)`/g, (_, code) => {
+            codeSpans.push(`<code>${escapeHtml(code)}</code>`);
+            return `\u0000${codeSpans.length - 1}\u0000`;
+        });
+        text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img src="$2" alt="$1">');
+        text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
+        text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+        text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+        text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+        // Underscore emphasis only at word boundaries, so snake_case survives.
+        text = text.replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, '$1<em>$2</em>');
+        return text.replace(/\u0000(\d+)\u0000/g, (_, i) => codeSpans[i]);
+    };
+
+    // Stack of currently open lists: { indent, tag } from outermost to innermost.
+    let listStack = [];
+    const closeListsTo = depth => {
+        while (listStack.length > depth) {
+            out.push(`</li></${listStack.pop().tag}>`);
+        }
+    };
+
+    let paragraph = [];
+    const flushParagraph = () => {
+        if (paragraph.length === 0) return;
+        // Two or more trailing spaces on a line force a hard break.
+        const body = paragraph.map(l => l.replace(/ {2,}$/, '<br>')).join('\n');
+        out.push(`<p>${renderInline(body)}</p>`);
+        paragraph = [];
+    };
+    const flushBlocks = () => { flushParagraph(); closeListsTo(0); };
+
+    let i = 0;
+    while (i < lines.length) {
+        const line = lines[i];
+
+        // Fenced code block: everything up to the closing fence is literal.
+        const fence = line.match(/^\s*```/);
+        if (fence) {
+            flushBlocks();
+            const body = [];
+            i++;
+            while (i < lines.length && !/^\s*```/.test(lines[i])) {
+                body.push(lines[i]);
+                i++;
+            }
+            i++; // skip the closing fence
+            out.push(`<pre><code>${escapeHtml(body.join('\n'))}</code></pre>`);
+            continue;
+        }
+
+        // Blank line ends the current paragraph and any open lists.
+        if (!line.trim()) {
+            flushBlocks();
+            i++;
+            continue;
+        }
+
+        const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
+        if (heading) {
+            flushBlocks();
+            out.push(`<h${heading[1].length}>${renderInline(heading[2])}</h${heading[1].length}>`);
+            i++;
+            continue;
+        }
+
+        if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+            flushBlocks();
+            out.push('<hr>');
+            i++;
+            continue;
+        }
+
+        const quote = line.match(/^\s*>\s?(.*)$/);
+        if (quote) {
+            flushBlocks();
+            const body = [quote[1]];
+            i++;
+            while (i < lines.length) {
+                const m = lines[i].match(/^\s*>\s?(.*)$/);
+                if (!m) break;
+                body.push(m[1]);
+                i++;
+            }
+            out.push(`<blockquote>${markdownToHtml(body.join('\n'))}</blockquote>`);
+            continue;
+        }
+
+        const listItem = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+        if (listItem) {
+            flushParagraph();
+            const indent = listItem[1].length;
+            const tag = /\d/.test(listItem[2]) ? 'ol' : 'ul';
+            // Close lists deeper than this item's indentation.
+            while (listStack.length && indent < listStack[listStack.length - 1].indent) {
+                out.push(`</li></${listStack.pop().tag}>`);
+            }
+            const top = listStack[listStack.length - 1];
+            if (!top || indent > top.indent) {
+                listStack.push({ indent, tag });
+                out.push(`<${tag}><li>` + renderInline(listItem[3]));
+            } else if (top.tag !== tag) {
+                out.push(`</li></${listStack.pop().tag}>`);
+                listStack.push({ indent, tag });
+                out.push(`<${tag}><li>` + renderInline(listItem[3]));
+            } else {
+                out.push('</li><li>' + renderInline(listItem[3]));
+            }
+            i++;
+            continue;
+        }
+
+        // A non-blank, non-marker line while a list is open continues the last item.
+        if (listStack.length > 0) {
+            out[out.length - 1] += ' ' + renderInline(line.trim());
+            i++;
+            continue;
+        }
+
+        paragraph.push(line);
+        i++;
+    }
+    flushBlocks();
+    return out.join('\n');
+}
+
 function registerCustomFilters(engine) {
+    // markdownify filter: render Markdown text as HTML, as in Reporter
+    // (e.g. "- Test" becomes a bullet point).
+    engine.registerFilter('markdownify', value => {
+        if (value == null) {
+            if (_currentWarnings) _currentWarnings.push(`markdownify filter: value is missing (returned empty)`);
+            return '';
+        }
+        return markdownToHtml(value);
+    });
+
     // money filter: rounds to 2 decimal places or appends .00 if no decimals, with comma separators
     engine.registerFilter('money', value => {
         const num = parseFloat(value);
