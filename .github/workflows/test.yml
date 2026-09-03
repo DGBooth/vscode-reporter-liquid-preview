@@ -37,3 +37,21 @@ jobs:
       - run: npm ci
 
       - run: npm test
+
+  # The repository ships its build artifact, so a change can land without the
+  # .vsix being rebuilt and the stale one is what gets installed. One version is
+  # enough: this compares packages, not runtimes.
+  package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run check:package

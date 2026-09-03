@@ -123,7 +123,9 @@ While a template does not parse, the preview keeps showing the last version that
 
 ```
 npm install
-npm test
+npm test                # the test suite
+npm run package         # rebuild the committed .vsix
+npm run check:package   # is the committed .vsix built from this source?
 ```
 
 The test suite runs on Node's built-in runner (Node 20 or newer) against a
@@ -133,7 +135,19 @@ comparison against a stock LiquidJS engine, which guards the wrapper that lets
 warnings name their line — the located problems panel, and the HTML handed to
 the webview. See [`test/README.md`](test/README.md).
 
-Every push and pull request runs it on Node 20, 22 and 24 via GitHub Actions.
+The `.vsix` is committed alongside the source, so it can go stale when a change
+lands without a repackage — and the stale one is what gets installed.
+`npm run check:package` builds a fresh package and compares it with the
+committed one entry by entry, naming any file that differs. Two builds of the
+same source are not byte-identical as archives, so it compares what the entries
+hold rather than the file itself.
+
+`npm run package` pins the vsce version and passes explicit base URLs: vsce
+rewrites relative links in the README, and would otherwise infer where they
+point from whatever the checkout looks like.
+
+Both checks run on every push and pull request via GitHub Actions, the test
+suite across all three Node versions.
 
 ## Credits
 

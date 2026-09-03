@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.1.19",
+    "version": "1.1.20",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -73,7 +73,9 @@
         ]
     },
     "scripts": {
-        "test": "node --test test/*.test.js"
+        "test": "node --test test/*.test.js",
+        "package": "npx --yes @vscode/vsce@2.32.0 package --baseContentUrl https://github.com/DGBooth/vscode-reporter-liquid-preview/blob/HEAD --baseImagesUrl https://github.com/DGBooth/vscode-reporter-liquid-preview/raw/HEAD",
+        "check:package": "node scripts/check-package.js"
     },
     "devDependencies": {
         "@types/vscode": "^1.32.0"
