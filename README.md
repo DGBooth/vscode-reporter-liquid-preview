@@ -93,9 +93,24 @@ Two status bar items show the health of the active preview at a glance:
 - **Template** — shows a check or error icon reflecting the last template parse attempt.
 - **Data** — shows a check or error icon reflecting the last JSON data parse attempt.
 
-### Error Display
+### Problems Panel
 
-Parse and render errors are shown in a fixed panel at the bottom of the preview webview, so the last successfully rendered output stays visible while the error details are reported. The panel also reports warnings from the null-tolerant filters and flags field names used more than once in a template.
+Parse and render errors are shown in a panel pinned to the bottom of the preview webview, so the last successfully rendered output stays visible while the details are reported. The panel also reports warnings from the null-tolerant filters and flags field names used more than once in a template.
+
+Every entry says **where** the problem is, not just what it is:
+
+- **A file, line and column**, shown as a button — click it and the file opens with the caret on that spot. A file already open keeps its editor column, so clicking a problem doesn't rearrange your layout.
+- **The offending source**, quoted underneath, so you can recognise the construct without leaving the preview.
+- Warnings raised inside a filter are traced back to the `{{ ... }}` or `{% ... %}` that ran it — including filters called from inside a loop or a nested tag, which have no way to name their own position otherwise.
+- **Duplicate field names** point at the repeat and name the line it collides with, rather than just listing the names.
+- **Data errors** are located in the `.json` file, not the template, using the position `JSON.parse` reports.
+- The **Full HTML Preview** locates a missing end tag by line, alongside the "Not closed" markers in the annotated document that show where it starts.
+
+Identical repeats are collapsed into one entry with a count, so a warning raised on every iteration of a loop doesn't push everything else out of view, and a **Hide** checkbox collapses the panel to a one-line summary when it is covering something you want to see.
+
+The same problems are published to VS Code's **Problems** panel and underlined in the editor, so they are visible while you are editing the template with the preview off-screen. They are cleared when the preview is closed.
+
+While a template does not parse, the preview keeps showing the last version that did — but its warnings are suppressed, because their line numbers describe a file that is no longer on disk. Only the parse error, which is current, is reported.
 
 ## Usage
 
@@ -104,6 +119,36 @@ Parse and render errors are shown in a fixed panel at the bottom of the preview 
 3. Select a `.json` data file when prompted (not required for Full HTML Preview).
 4. Edit your template or data file — the preview updates automatically.
 
+## Development
+
+```
+npm install
+npm test                # the test suite
+npm run package         # rebuild the committed .vsix
+npm run check:package   # is the committed .vsix built from this source?
+```
+
+The test suite runs on Node's built-in runner (Node 20 or newer) against a
+stubbed `vscode` module, so it needs no dependencies beyond the extension's own
+and no extension host. It covers the rendering path — including a byte-for-byte
+comparison against a stock LiquidJS engine, which guards the wrapper that lets
+warnings name their line — the located problems panel, and the HTML handed to
+the webview. See [`test/README.md`](test/README.md).
+
+The `.vsix` is committed alongside the source, so it can go stale when a change
+lands without a repackage — and the stale one is what gets installed.
+`npm run check:package` builds a fresh package and compares it with the
+committed one entry by entry, naming any file that differs. Two builds of the
+same source are not byte-identical as archives, so it compares what the entries
+hold rather than the file itself.
+
+`npm run package` pins the vsce version and passes explicit base URLs: vsce
+rewrites relative links in the README, and would otherwise infer where they
+point from whatever the checkout looks like.
+
+Both checks run on every push and pull request via GitHub Actions, the test
+suite across all three Node versions.
+
 ## Credits
 
 This extension is based on [Shopify Liquid Preview for Visual Studio Code](https://github.com/kirchner-trevor/vscode-shopify-liquid-preview) by [kirchner-trevor](https://github.com/kirchner-trevor), which was itself inspired by:
@@ -111,7 +156,7 @@ This extension is based on [Shopify Liquid Preview for Visual Studio Code](https
 - [Handlebars Preview for Visual Studio Code](https://github.com/chaliy/vscode-handlebars-preview/)
 - [A HTML previewer for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=tht13.html-preview-vscode)
 
-New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, error display, and status bar indicators.
+New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, the located problems panel with editor navigation and Problems-panel integration, and status bar indicators.
 
 ## License
 

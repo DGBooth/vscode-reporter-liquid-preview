@@ -1,6 +1,9 @@
+.github/
 .vscode-test/
 .vscode/
 out/
+scripts/
+test/
 *.vsix
 .gitignore
 .vscodeignore
