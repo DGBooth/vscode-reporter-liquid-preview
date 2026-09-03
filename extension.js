@@ -6,8 +6,14 @@ const liquidEngine = new liquid();
 // Accumulates warnings during a single render pass. Set to [] before rendering, null otherwise.
 let _currentWarnings = null;
 
+// The token of the template currently being rendered — see trackRenderPosition.
+// Filters and custom tags are handed their arguments and nothing else, so this
+// is the only way for a warning raised inside one to say where it came from.
+let _currentToken = null;
+
 // register custom Liquid tags used in templates
 registerCustomTags(liquidEngine);
+trackRenderPosition(liquidEngine);
 
 // Parse a Liquid tag argument string into an object.
 // e.g. '"fieldName", title: "My Title", lines: 1' → { name: "fieldName", title: "My Title", lines: 1 }
@@ -43,15 +49,76 @@ function resolveTagName(args, ctx) {
     return '';
 }
 
-// Record a tag name into the per-render duplicate tracker (injected via render context).
+// Record a tag name into the per-render duplicate tracker (injected via render
+// context), along with where each use appeared, so a clash can be pointed at
+// rather than only named.
 function trackTagName(name, ctx) {
     const tracker = ctx && ctx.environments && ctx.environments._rlpTracker;
     if (!tracker || !name) return;
-    if (tracker.seen.includes(name)) {
+    const uses = tracker.seen.get(name);
+    if (uses) {
+        uses.push(currentLocation());
         if (!tracker.dupes.includes(name)) tracker.dupes.push(name);
     } else {
-        tracker.seen.push(name);
+        tracker.seen.set(name, [currentLocation()]);
     }
+}
+
+// Keep _currentToken pointing at the template being rendered, so warnings and
+// errors raised deep inside a filter or a custom tag can name their line.
+//
+// The loop mirrors LiquidJS's own Render.renderTemplates rather than handing it
+// the whole list at once, so each template can be bracketed individually. Error
+// handling is left to the original — each single-template call still wraps its
+// own RenderError — except for RenderBreakError, which carries the HTML
+// rendered before a {% break %} and would otherwise only see the one template
+// we passed down.
+function trackRenderPosition(engine) {
+    const renderTemplates = engine.renderer.renderTemplates.bind(engine.renderer);
+    engine.renderer.renderTemplates = async function (templates, ctx) {
+        let html = '';
+        for (const template of templates) {
+            const previousToken = _currentToken;
+            _currentToken = template.token || previousToken;
+            try {
+                html += await renderTemplates([template], ctx);
+            } catch (err) {
+                if (err.name === 'RenderBreakError') err.resolvedHTML = html + (err.resolvedHTML || '');
+                throw err;
+            } finally {
+                _currentToken = previousToken;
+            }
+        }
+        return html;
+    };
+}
+
+// Record a warning raised at the position currently being rendered.
+function addWarning(message) {
+    if (_currentWarnings) _currentWarnings.push({ message, location: currentLocation() });
+}
+
+// Where in the template rendering has reached, or null outside a render pass.
+function currentLocation() {
+    return tokenLocation(_currentToken);
+}
+
+// A position from a LiquidJS token: 1-based line and column, plus the source
+// text of the construct itself so a pane entry is recognisable without having
+// to leave the preview to look it up.
+function tokenLocation(token) {
+    if (!token || typeof token.line !== 'number') return null;
+    return {
+        line: token.line,
+        col: typeof token.col === 'number' ? token.col : 1,
+        snippet: snippetOf(token.raw)
+    };
+}
+
+// Collapse a chunk of source to a single readable line for display.
+function snippetOf(text) {
+    const oneLine = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+    return oneLine.length > 120 ? oneLine.slice(0, 119) + '\u2026' : oneLine;
 }
 
 // Convert Markdown text to HTML for the markdownify filter. Supports the
@@ -202,7 +269,7 @@ function registerCustomFilters(engine) {
     // margin-top would be.
     engine.registerFilter('markdownify', value => {
         if (value == null) {
-            if (_currentWarnings) _currentWarnings.push(`markdownify filter: value is missing (returned empty)`);
+            addWarning('markdownify filter: value is missing (returned empty)');
             return '';
         }
         return `<div class="rlp-markdown">${markdownToHtml(value)}</div>`;
@@ -218,7 +285,7 @@ function registerCustomFilters(engine) {
     // slice filter: override built-in to warn instead of error when the value is missing
     engine.registerFilter('slice', (v, begin, length = 1) => {
         if (v == null) {
-            if (_currentWarnings) _currentWarnings.push(`slice filter: value is missing (returned empty)`);
+            addWarning('slice filter: value is missing (returned empty)');
             return '';
         }
         begin = begin < 0 ? v.length + begin : begin;
@@ -228,7 +295,7 @@ function registerCustomFilters(engine) {
     // where filter: override built-in to warn instead of error when the value is missing
     engine.registerFilter('where', (arr, property, value) => {
         if (arr == null) {
-            if (_currentWarnings) _currentWarnings.push(`where filter: array is missing (filtering by property "${property}")`);
+            addWarning(`where filter: array is missing (filtering by property "${property}")`);
             return [];
         }
         return arr.filter(obj => value === undefined ? (obj[property] !== false && obj[property] !== undefined && obj[property] !== null) : obj[property] === value);
@@ -237,7 +304,7 @@ function registerCustomFilters(engine) {
     // sort filter: override built-in to warn on null and support sorting by property key
     engine.registerFilter('sort', (arr, property) => {
         if (arr == null) {
-            if (_currentWarnings) _currentWarnings.push(`sort filter: array is missing (returned empty)`);
+            addWarning('sort filter: array is missing (returned empty)');
             return [];
         }
         const sorted = [...arr];
@@ -275,7 +342,7 @@ function registerCustomFilters(engine) {
     // sort_natural filter: case-insensitive sort, optionally by property key
     engine.registerFilter('sort_natural', (arr, property) => {
         if (arr == null) {
-            if (_currentWarnings) _currentWarnings.push(`sort_natural filter: array is missing (returned empty)`);
+            addWarning('sort_natural filter: array is missing (returned empty)');
             return [];
         }
         const sorted = [...arr];
@@ -380,6 +447,11 @@ function registerCustomTags(engine) {
 function activate(context) {
     let templateStatusBarItem;
     let dataStatusBarItem;
+
+    // Backs the squiggles and Problems-panel entries that mirror each preview's
+    // problems pane (see publishDiagnostics).
+    _diagnosticCollection = vscode.languages.createDiagnosticCollection('reporterLiquidPreview');
+    context.subscriptions.push(_diagnosticCollection);
     let previewContentProvider = new class {
         constructor() {
             this.onDidChangeEmitter = new vscode.EventEmitter();
@@ -467,11 +539,13 @@ function activate(context) {
             );
 
             htmlPreviews[preview.id] = { preview, panel };
+            wirePreviewMessages(panel);
 
             await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
 
             panel.onDidDispose(() => {
                 delete htmlPreviews[preview.id];
+                clearPreviewDiagnostics(preview);
             });
         }
     }));
@@ -494,11 +568,13 @@ function activate(context) {
             );
 
             htmlFullPreviews[preview.id] = { preview, panel };
+            wirePreviewMessages(panel);
 
             await queueRefresh(preview, () => refreshHtmlFullPanel(preview, panel));
 
             panel.onDidDispose(() => {
                 delete htmlFullPreviews[preview.id];
+                clearPreviewDiagnostics(preview);
             });
         }
     }));
@@ -1312,19 +1388,31 @@ function buildFullPreviewContent(templateText, templateUri) {
 }
 
 async function refreshHtmlFullPanel(preview, panel) {
-    let errors = [];
+    let diagnostics = [];
     let content = null;
 
     try {
         let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
-        content = buildFullPreviewContent(templateDocument.getText(), preview.templateUri);
+        let templateText = templateDocument.getText();
+        // The annotated view is built by its own scanner, which recovers from a
+        // missing end tag instead of failing on it — so it can say that a
+        // section is unclosed, but not which line to go and fix. Parse the
+        // template as well, purely to borrow LiquidJS's exact position for the
+        // first structural problem.
+        try {
+            liquidEngine.parse(templateText);
+        } catch (err) {
+            diagnostics.push(liquidDiagnostic('Template error', err, preview.templateUri));
+        }
+        content = buildFullPreviewContent(templateText, preview.templateUri);
         preview.lastRenderedHtml = content;
     } catch (err) {
-        errors.push({ title: 'Template error', message: err.message });
+        diagnostics.push(liquidDiagnostic('Template error', err, preview.templateUri));
         content = preview.lastRenderedHtml || { chrome: '', rendered: '' };
     }
 
-    updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(errors), content.rendered, fullPreviewStyles);
+    publishDiagnostics(preview, diagnostics);
+    updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(diagnostics), content.rendered, fullPreviewStyles);
 }
 
 // Run panel refreshes for one preview one at a time. The change handler is
@@ -1351,7 +1439,13 @@ function updatePreviewPanel(panel, preview, chrome, rendered, styles) {
 }
 
 async function refreshHtmlPanel(preview, panel) {
-    let errors = [];
+    let diagnostics = [];
+    // Set when the file on disk no longer parses: the render below then runs
+    // against the last version that did, so anything it reports describes a
+    // template that is no longer there. Those positions would send the reader
+    // to whatever now sits on that line, so they are dropped and only the parse
+    // error — which is current, and the thing to fix — is reported.
+    let templateIsStale = false;
 
     if (preview.templateUri && preview.templateDirty) {
         try {
@@ -1360,45 +1454,48 @@ async function refreshHtmlPanel(preview, panel) {
             preview.templateDirty = false;
         } catch (err) {
             // Keep the previously parsed template so rendering can still proceed
-            errors.push({ title: 'Template error', message: err.message });
+            diagnostics.push(liquidDiagnostic('Template error', err, preview.templateUri));
+            templateIsStale = true;
         }
     }
 
     if (preview.dataUri && preview.dataDirty) {
+        let dataText = '';
         try {
             let dataDocument = await vscode.workspace.openTextDocument(preview.dataUri);
-            preview.data = JSON.parse(dataDocument.getText());
+            dataText = dataDocument.getText();
+            preview.data = JSON.parse(dataText);
             preview.dataDirty = false;
         } catch (err) {
             // Keep the previously parsed data so rendering can still proceed
-            errors.push({ title: 'Data error', message: err.message });
+            diagnostics.push(jsonDiagnostic('Data error', err, dataText, preview.dataUri));
         }
     }
 
     let rendered;
     try {
-        const nameTracker = { seen: [], dupes: [] };
+        const nameTracker = { seen: new Map(), dupes: [] };
         const dataWithTracker = Object.assign({}, preview.data, { _rlpTracker: nameTracker });
         _currentWarnings = [];
         rendered = await liquidEngine.render(preview.template, dataWithTracker);
         preview.lastRenderedHtml = rendered;
-        if (nameTracker.dupes.length > 0) {
-            errors.push({
-                title: 'Duplicate field names',
-                message: `The following field names are used more than once: ${nameTracker.dupes.join(', ')}`
-            });
-        }
-        for (const w of _currentWarnings) {
-            errors.push({ title: 'Warning', message: w, isWarning: true });
+        if (!templateIsStale) {
+            for (const name of nameTracker.dupes) {
+                diagnostics.push(duplicateNameDiagnostic(name, nameTracker.seen.get(name) || [], preview.templateUri));
+            }
+            for (const warning of _currentWarnings) {
+                diagnostics.push(diagnostic('warning', 'Warning', warning.message, preview.templateUri, warning.location));
+            }
         }
     } catch (err) {
-        errors.push({ title: 'Render error', message: err.message });
+        if (!templateIsStale) diagnostics.push(liquidDiagnostic('Render error', err, preview.templateUri));
         rendered = preview.lastRenderedHtml || '';
     } finally {
         _currentWarnings = null;
     }
 
-    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(errors), rendered, htmlPreviewStyles);
+    publishDiagnostics(preview, diagnostics);
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles);
 }
 
 // The HTML Preview's own UI: a toolbar with a source toggle and a hidden
@@ -1460,24 +1557,215 @@ function readCssContents(templateUri) {
         .join('\n');
 }
 
-function buildErrorPaneHtml(errors) {
-    if (errors.length === 0) return '';
-    const warnings = errors.filter(e => e.isWarning);
-    const nonWarnings = errors.filter(e => !e.isWarning);
-
-    const errorBlocks = nonWarnings.map(e =>
-        `<div class="error-block"><span class="error-block-title">&#9888; ${escapeHtml(e.title)}</span><pre>${escapeHtml(e.message)}</pre></div>`
+// One row of the problems pane: what went wrong and, wherever we can work it
+// out, which file, line and column to send the reader to. `location` is the
+// {line, col, snippet} shape produced by tokenLocation.
+function diagnostic(severity, title, message, file, location) {
+    return Object.assign(
+        { severity, title, message, file: file || null, line: null, col: null, snippet: '' },
+        location || {}
     );
+}
 
-    if (warnings.length > 0) {
-        const items = warnings.map(w => `<li>${escapeHtml(w.message)}</li>`).join('');
-        errorBlocks.push(`<div class="warning-block"><span class="warning-block-title">&#9432; Warning</span><ul class="warning-list">${items}</ul></div>`);
+// A diagnostic from a LiquidJS error. Parse, tokenization and render errors all
+// carry the token they failed on, which is the position the reader wants.
+function liquidDiagnostic(title, err, file) {
+    return diagnostic('error', title, cleanLiquidMessage(err.message), file, tokenLocation(err.token));
+}
+
+// LiquidJS appends ", file:…, line:N, col:M" to its messages. The pane shows
+// that position as a link of its own, so it is stripped from the prose rather
+// than repeated in it.
+function cleanLiquidMessage(message) {
+    return String(message).replace(/,\s*(?:file:[^,]*,\s*)?line:\d+,\s*col:\d+\s*$/, '');
+}
+
+// A diagnostic from a failed JSON.parse of the data file. JSON.parse reports
+// the position inside the message text and the wording varies by Node version:
+// newer ones give "(line 3 column 5)", older ones only a character offset.
+// Both are turned into a real position, and the trailing position prose — now
+// shown properly — is trimmed off the message.
+function jsonDiagnostic(title, err, text, file) {
+    const message = String(err.message);
+    const lineColumn = /line (\d+) column (\d+)/.exec(message);
+    const position = /position (\d+)/.exec(message);
+    let line = null;
+    let col = null;
+    if (lineColumn) {
+        line = Number(lineColumn[1]);
+        col = Number(lineColumn[2]);
+    } else if (position) {
+        const before = text.slice(0, Number(position[1])).split('\n');
+        line = before.length;
+        col = before[before.length - 1].length + 1;
     }
+    const location = line
+        ? { line, col, snippet: snippetOf(text.split('\n')[line - 1] || '') }
+        : null;
+    return diagnostic('error', title, message.replace(/\s*in JSON at position \d+.*$/, ''), file, location);
+}
+
+// Reporter keys the writer's answers by field name, so a repeated name silently
+// ties two fields together. Point at the repeat itself and name the line it
+// collides with, rather than listing the names and leaving the hunt to the
+// reader.
+function duplicateNameDiagnostic(name, uses, file) {
+    const located = uses.filter(Boolean);
+    const first = located[0];
+    const repeat = located[1] || first;
+    const elsewhere = first && repeat !== first ? ` It is first used on line ${first.line}.` : '';
+    return diagnostic(
+        'error',
+        'Duplicate field name',
+        `“${name}” is used ${pluralize(uses.length, 'time')} — every field needs its own name.${elsewhere}`,
+        file,
+        repeat
+    );
+}
+
+// Collapse identical repeats into a single row with a count. A warning raised
+// by a filter inside a loop fires once per iteration, and fifty copies of the
+// same line push everything else out of a pane 200px tall.
+function dedupeDiagnostics(diagnostics) {
+    const byKey = new Map();
+    for (const item of diagnostics) {
+        const key = JSON.stringify([item.severity, item.title, item.message, item.file, item.line, item.col]);
+        const existing = byKey.get(key);
+        if (existing) existing.count++;
+        else byKey.set(key, Object.assign({ count: 1 }, item));
+    }
+    return Array.from(byKey.values());
+}
+
+// The pane pinned to the bottom of the preview. Errors first, then warnings,
+// each row carrying the position it came from as a button: the webview posts
+// the position back and the extension opens the file there (see
+// wirePreviewMessages).
+function buildErrorPaneHtml(diagnostics) {
+    if (!diagnostics || diagnostics.length === 0) return '';
+    const rows = dedupeDiagnostics(diagnostics);
+    const errors = rows.filter(d => d.severity !== 'warning');
+    const warnings = rows.filter(d => d.severity === 'warning');
+
+    const counts = [];
+    if (errors.length) counts.push(pluralize(errors.length, 'error'));
+    if (warnings.length) counts.push(pluralize(warnings.length, 'warning'));
 
     return `
 <div id="error-pane">
-  ${errorBlocks.join('')}
+  <div class="diag-head">
+    <span class="diag-head-title">${joinWithAnd(counts)}</span>
+    <label class="diag-collapse"><input type="checkbox" id="lp-hide-problems"> Hide</label>
+  </div>
+  <div class="diag-list">
+${errors.concat(warnings).map(buildDiagnosticHtml).join('\n')}
+  </div>
 </div>`;
+}
+
+function buildDiagnosticHtml(item) {
+    const icon = item.severity === 'warning' ? '&#9432;' : '&#9888;';
+    const count = item.count > 1 ? `<span class="diag-count">&times;${item.count}</span>` : '';
+    const snippet = item.snippet ? `<div class="diag-snippet">${escapeHtml(item.snippet)}</div>` : '';
+    return `<div class="diag diag-${item.severity}">
+  <div class="diag-line"><span class="diag-title">${icon} ${escapeHtml(item.title)}</span>${buildDiagnosticLocationHtml(item)}${count}</div>
+  <pre class="diag-message">${escapeHtml(item.message)}</pre>
+  ${snippet}
+</div>`;
+}
+
+// The clickable position. Without a line there is nowhere to jump to, so what
+// we do know is rendered as plain text rather than as a button that would do
+// nothing when pressed.
+function buildDiagnosticLocationHtml(item) {
+    const name = item.file ? path.basename(item.file) : '';
+    if (!item.line) return name ? `<span class="diag-where">${escapeHtml(name)}</span>` : '';
+    const label = `${name ? name + ':' : 'line '}${item.line}:${item.col || 1}`;
+    if (!item.file) return `<span class="diag-where">${escapeHtml(label)}</span>`;
+    return `<button type="button" class="diag-where diag-goto"`
+        + ` data-diag-file="${escapeHtml(item.file)}"`
+        + ` data-diag-line="${item.line}" data-diag-col="${item.col || 1}"`
+        + ` title="Go to line ${item.line} in ${escapeHtml(name)}">${escapeHtml(label)}</button>`;
+}
+
+// The Problems panel mirror of the pane, so the same positions show up as
+// squiggles in the editor. Rows are held per preview — closing one preview must
+// not wipe another's — and the whole collection is rebuilt on every change,
+// because a DiagnosticCollection is keyed by file rather than by contributor.
+let _diagnosticCollection = null;
+const _previewDiagnostics = new Map();
+
+function publishDiagnostics(preview, diagnostics) {
+    _previewDiagnostics.set(preview.id, diagnostics.filter(d => d.file && d.line));
+    republishDiagnostics();
+}
+
+function clearPreviewDiagnostics(preview) {
+    _previewDiagnostics.delete(preview.id);
+    republishDiagnostics();
+}
+
+function republishDiagnostics() {
+    if (!_diagnosticCollection) return;
+    const all = [];
+    for (const diagnostics of _previewDiagnostics.values()) all.push(...diagnostics);
+
+    const byFile = new Map();
+    for (const item of dedupeDiagnostics(all)) {
+        if (!byFile.has(item.file)) byFile.set(item.file, []);
+        byFile.get(item.file).push(toVsCodeDiagnostic(item));
+    }
+
+    _diagnosticCollection.clear();
+    for (const [file, items] of byFile) {
+        _diagnosticCollection.set(vscode.Uri.file(file), items);
+    }
+}
+
+// Underline the construct itself rather than a single character, so the
+// squiggle covers the tag that went wrong. VS Code clamps a range that runs
+// past the end of the line, which is what happens when the original spanned
+// several lines and the snippet collapsed it onto one.
+function toVsCodeDiagnostic(item) {
+    const line = Math.max(0, item.line - 1);
+    const col = Math.max(0, (item.col || 1) - 1);
+    const range = new vscode.Range(line, col, line, col + Math.max(1, item.snippet.length));
+    const severity = item.severity === 'warning'
+        ? vscode.DiagnosticSeverity.Warning
+        : vscode.DiagnosticSeverity.Error;
+    const result = new vscode.Diagnostic(range, `${item.title}: ${item.message}`, severity);
+    result.source = 'Reporter Liquid Preview';
+    return result;
+}
+
+// Listen for the position a reader clicked in the problems pane and open it.
+function wirePreviewMessages(panel) {
+    panel.webview.onDidReceiveMessage(message => {
+        if (message && message.type === 'reveal' && message.file) {
+            revealInEditor(message.file, message.line, message.col);
+        }
+    });
+}
+
+// Show `file` with the caret at the given 1-based line and column. An editor
+// already showing the file keeps its column, so clicking a problem does not
+// shuffle the reader's layout around; otherwise the file opens in the first
+// column rather than on top of the preview.
+async function revealInEditor(file, line, col) {
+    try {
+        const document = await vscode.workspace.openTextDocument(file);
+        const visible = vscode.window.visibleTextEditors
+            .filter(editor => editor.document && editor.document.uri.fsPath === document.uri.fsPath)[0];
+        const editor = await vscode.window.showTextDocument(document, {
+            viewColumn: visible ? visible.viewColumn : vscode.ViewColumn.One,
+            preview: false
+        });
+        const position = new vscode.Position(Math.max(0, (line || 1) - 1), Math.max(0, (col || 1) - 1));
+        editor.selection = new vscode.Selection(position, position);
+        editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);
+    } catch (err) {
+        vscode.window.showErrorMessage(`Reporter Liquid Preview: could not open ${file} (${err.message})`);
+    }
 }
 
 // Full webview document. chrome (the extension's own UI, including the error
@@ -1498,16 +1786,28 @@ function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '') {
 <head>
 <style>
   body { background-color: white; color: black; margin: 0; padding: 8px; box-sizing: border-box; }
-  body:has(#error-pane) { padding-bottom: 160px; }
+  body:has(#error-pane) { padding-bottom: 230px; }
+  /* Collapsing the pane frees the space it was reserving. Same specificity as
+     the rule above, so it has to come after it to win. */
+  body:has(#lp-hide-problems:checked) { padding-bottom: 46px; }
   h1, h2, h3, h4, h5, h6 { color: black; }
-  #error-pane { position: fixed; bottom: 0; left: 0; right: 0; background: #1e1a10; border-top: 2px solid #f14c4c; padding: 6px 12px; max-height: 150px; overflow-y: auto; z-index: 9999; }
-  .error-block, .warning-block { margin-bottom: 6px; }
-  .error-block:last-child, .warning-block:last-child { margin-bottom: 0; }
-  .error-block-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #f14c4c; margin-bottom: 2px; }
-  .warning-block-title { display: block; font-family: sans-serif; font-weight: bold; font-size: 12px; color: #cca700; margin-bottom: 2px; }
-  #error-pane pre { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }
-  .warning-list { margin: 2px 0 0 0; padding-left: 16px; }
-  .warning-list li { font-family: monospace; font-size: 11px; color: #d4d4d4; }${extraStyles}
+  #error-pane { position: fixed; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; max-height: 220px; background: #1e1a10; border-top: 2px solid #f14c4c; font-family: sans-serif; z-index: 9999; }
+  #error-pane:has(#lp-hide-problems:checked) .diag-list { display: none; }
+  .diag-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 12px; }
+  .diag-head-title { font-size: 12px; font-weight: bold; color: #e8d9b0; }
+  .diag-collapse { display: flex; align-items: center; gap: 4px; font-size: 11px; color: #b9ad8e; cursor: pointer; }
+  .diag-list { overflow-y: auto; padding: 0 12px 8px 12px; }
+  .diag { margin-bottom: 8px; }
+  .diag:last-child { margin-bottom: 0; }
+  .diag-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-bottom: 2px; }
+  .diag-title { font-size: 12px; font-weight: bold; color: #f14c4c; }
+  .diag-warning .diag-title { color: #cca700; }
+  .diag-count { font-size: 11px; color: #1e1a10; background: #b9ad8e; border-radius: 8px; padding: 0 6px; }
+  .diag-where { font-family: monospace; font-size: 11px; color: #9cdcfe; background: transparent; border: 1px solid #4a4130; border-radius: 4px; padding: 0 5px; }
+  button.diag-goto { cursor: pointer; }
+  button.diag-goto:hover, button.diag-goto:focus { background: #2d2718; color: #cfe9ff; outline: none; }
+  #error-pane pre.diag-message { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }
+  .diag-snippet { margin-top: 3px; padding-left: 6px; border-left: 2px solid #4a4130; font-family: monospace; font-size: 11px; color: #b9ad8e; white-space: pre-wrap; word-break: break-word; }${extraStyles}
 </style>
 ${cssLinks}
 </head>
@@ -1523,7 +1823,7 @@ ${rendered}
         const msg = event.data;
         if (!msg || msg.type !== 'update') return;
         const toggles = {};
-        for (const input of document.querySelectorAll('.lp-toggle input[id]')) {
+        for (const input of document.querySelectorAll('.lp-toggle input[id], #error-pane input[id]')) {
             toggles[input.id] = input.checked;
         }
         const legend = document.querySelector('.lp-legend');
@@ -1538,6 +1838,23 @@ ${rendered}
         const newLegend = document.querySelector('.lp-legend');
         if (newLegend && legendOpen !== null) newLegend.open = legendOpen;
         window.scrollTo(x, y);
+    });
+
+    // ---- Jump to the source of a problem ----
+    // Clicking a position in the problems pane asks the extension to open that
+    // file at that line (see wirePreviewMessages). The listener is delegated so
+    // it survives the content patch above, and no-ops outside VS Code, where
+    // there is no extension to post to.
+    const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+    document.addEventListener('click', event => {
+        const button = event.target && event.target.closest && event.target.closest('.diag-goto');
+        if (!button || !vscodeApi) return;
+        vscodeApi.postMessage({
+            type: 'reveal',
+            file: button.getAttribute('data-diag-file'),
+            line: Number(button.getAttribute('data-diag-line')),
+            col: Number(button.getAttribute('data-diag-col'))
+        });
     });
 
     // ---- Scroll sync between the rendered view and the HTML source view ----

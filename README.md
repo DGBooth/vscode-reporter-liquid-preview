@@ -93,9 +93,24 @@ Two status bar items show the health of the active preview at a glance:
 - **Template** — shows a check or error icon reflecting the last template parse attempt.
 - **Data** — shows a check or error icon reflecting the last JSON data parse attempt.
 
-### Error Display
+### Problems Panel
 
-Parse and render errors are shown in a fixed panel at the bottom of the preview webview, so the last successfully rendered output stays visible while the error details are reported. The panel also reports warnings from the null-tolerant filters and flags field names used more than once in a template.
+Parse and render errors are shown in a panel pinned to the bottom of the preview webview, so the last successfully rendered output stays visible while the details are reported. The panel also reports warnings from the null-tolerant filters and flags field names used more than once in a template.
+
+Every entry says **where** the problem is, not just what it is:
+
+- **A file, line and column**, shown as a button — click it and the file opens with the caret on that spot. A file already open keeps its editor column, so clicking a problem doesn't rearrange your layout.
+- **The offending source**, quoted underneath, so you can recognise the construct without leaving the preview.
+- Warnings raised inside a filter are traced back to the `{{ ... }}` or `{% ... %}` that ran it — including filters called from inside a loop or a nested tag, which have no way to name their own position otherwise.
+- **Duplicate field names** point at the repeat and name the line it collides with, rather than just listing the names.
+- **Data errors** are located in the `.json` file, not the template, using the position `JSON.parse` reports.
+- The **Full HTML Preview** locates a missing end tag by line, alongside the "Not closed" markers in the annotated document that show where it starts.
+
+Identical repeats are collapsed into one entry with a count, so a warning raised on every iteration of a loop doesn't push everything else out of view, and a **Hide** checkbox collapses the panel to a one-line summary when it is covering something you want to see.
+
+The same problems are published to VS Code's **Problems** panel and underlined in the editor, so they are visible while you are editing the template with the preview off-screen. They are cleared when the preview is closed.
+
+While a template does not parse, the preview keeps showing the last version that did — but its warnings are suppressed, because their line numbers describe a file that is no longer on disk. Only the parse error, which is current, is reported.
 
 ## Usage
 
@@ -111,7 +126,7 @@ This extension is based on [Shopify Liquid Preview for Visual Studio Code](https
 - [Handlebars Preview for Visual Studio Code](https://github.com/chaliy/vscode-handlebars-preview/)
 - [A HTML previewer for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=tht13.html-preview-vscode)
 
-New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, error display, and status bar indicators.
+New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, the located problems panel with editor navigation and Problems-panel integration, and status bar indicators.
 
 ## License
 
