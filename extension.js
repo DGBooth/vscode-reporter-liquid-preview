@@ -2069,4 +2069,32 @@ function deactivate() { }
 module.exports = {
     activate,
     deactivate
-}
+};
+
+// VS Code only ever calls activate and deactivate. The rest is exported for the
+// test suite (see test/README.md), which drives the preview refreshes against a
+// stubbed vscode module and checks the HTML they produce.
+Object.assign(module.exports, {
+    annotateLiquid,
+    buildErrorPaneHtml,
+    buildFullPreviewContent,
+    buildPreviewHtml,
+    cleanLiquidMessage,
+    clearPreviewDiagnostics,
+    dedupeDiagnostics,
+    formatHtml,
+    fullPreviewStyles,
+    htmlPreviewStyles,
+    jsonDiagnostic,
+    liquidEngine,
+    markdownToHtml,
+    parseTagArgs,
+    refreshHtmlFullPanel,
+    refreshHtmlPanel,
+    registerCustomFilters,
+    registerCustomTags,
+    snippetOf,
+    stripLiquidFromHtmlTags,
+    tokenLocation,
+    wirePreviewMessages
+});

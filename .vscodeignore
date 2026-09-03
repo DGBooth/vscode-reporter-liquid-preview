@@ -1,6 +1,7 @@
 .vscode-test/
 .vscode/
 out/
+test/
 *.vsix
 .gitignore
 .vscodeignore

@@ -119,6 +119,20 @@ While a template does not parse, the preview keeps showing the last version that
 3. Select a `.json` data file when prompted (not required for Full HTML Preview).
 4. Edit your template or data file — the preview updates automatically.
 
+## Development
+
+```
+npm install
+npm test
+```
+
+The test suite runs on Node's built-in runner against a stubbed `vscode` module,
+so it needs no dependencies beyond the extension's own and no extension host.
+It covers the rendering path — including a byte-for-byte comparison against a
+stock LiquidJS engine, which guards the wrapper that lets warnings name their
+line — the located problems panel, and the HTML handed to the webview. See
+[`test/README.md`](test/README.md).
+
 ## Credits
 
 This extension is based on [Shopify Liquid Preview for Visual Studio Code](https://github.com/kirchner-trevor/vscode-shopify-liquid-preview) by [kirchner-trevor](https://github.com/kirchner-trevor), which was itself inspired by:
