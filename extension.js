@@ -468,7 +468,7 @@ function activate(context) {
 
             htmlPreviews[preview.id] = { preview, panel };
 
-            await refreshHtmlPanel(preview, panel);
+            await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
 
             panel.onDidDispose(() => {
                 delete htmlPreviews[preview.id];
@@ -495,7 +495,7 @@ function activate(context) {
 
             htmlFullPreviews[preview.id] = { preview, panel };
 
-            await refreshHtmlFullPanel(preview, panel);
+            await queueRefresh(preview, () => refreshHtmlFullPanel(preview, panel));
 
             panel.onDidDispose(() => {
                 delete htmlFullPreviews[preview.id];
@@ -508,8 +508,11 @@ function activate(context) {
         let documentPreviews = getDocumentPreviews(previewContentProvider, textDocumentChangeEvent.document);
         for (let documentPreview of documentPreviews) {
             if (documentPreview.isTemplate || documentPreview.isData) {
-                documentPreview.preview.templateDirty = documentPreview.isTemplate;
-                documentPreview.preview.dataDirty = documentPreview.isData;
+                // OR the flags in: a template edit that failed to parse leaves
+                // templateDirty set, and a later edit to the data file must not
+                // clear it or the stale template is never re-parsed.
+                documentPreview.preview.templateDirty = documentPreview.preview.templateDirty || documentPreview.isTemplate;
+                documentPreview.preview.dataDirty = documentPreview.preview.dataDirty || documentPreview.isData;
 
                 previewContentProvider.onDidChangeEmitter.fire(documentPreview.preview.uri());
             }
@@ -521,9 +524,9 @@ function activate(context) {
             let isTemplate = preview.templateUri === textDocumentChangeEvent.document.fileName;
             let isData = preview.dataUri === textDocumentChangeEvent.document.fileName;
             if (isTemplate || isData) {
-                preview.templateDirty = isTemplate;
-                preview.dataDirty = isData;
-                await refreshHtmlPanel(preview, panel);
+                preview.templateDirty = preview.templateDirty || isTemplate;
+                preview.dataDirty = preview.dataDirty || isData;
+                await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
             }
         }
 
@@ -531,7 +534,7 @@ function activate(context) {
         for (let id in htmlFullPreviews) {
             let { preview, panel } = htmlFullPreviews[id];
             if (preview.templateUri === textDocumentChangeEvent.document.fileName) {
-                await refreshHtmlFullPanel(preview, panel);
+                await queueRefresh(preview, () => refreshHtmlFullPanel(preview, panel));
             }
         }
     }));
@@ -545,43 +548,115 @@ function activate(context) {
     context.subscriptions.push(dataStatusBarItem);
 }
 
-function stripLiquidFromHtmlTags(text) {
-    // Remove liquid tags/expressions that appear inside HTML element open/close tags
-    // (attribute-level liquid). Uses a character scanner so that '>' inside liquid
-    // conditions (e.g. {% if x > 3 %}) does not prematurely end the HTML tag match.
+// Index just past the Liquid tag or expression starting at `i`, or the end of
+// the text when it is never closed.
+function skipLiquid(text, i) {
+    const closeSeq = text[i + 1] === '%' ? '%}' : '}}';
+    i += 2;
+    while (i < text.length) {
+        if (text[i] === closeSeq[0] && text[i + 1] === closeSeq[1]) return i + 2;
+        i++;
+    }
+    return text.length;
+}
+
+// Locate the HTML element tag opening at `start` (where text[start] is '<') and
+// return the index of its closing '>', or -1 when this '<' does not in fact open
+// a tag. Quoted attribute values and whole Liquid regions are skipped, so a '>'
+// inside either (e.g. {% if x > 3 %}) does not end the tag early.
+//
+// Rejecting non-tags matters as much as finding real ones: a '<' that is a
+// comparison ({% if a<b %}), prose ("a<b"), or an element whose '>' has not been
+// typed yet must not put the scanner into attribute mode, or every Liquid tag up
+// to the next '>' — or to the end of the file — is discarded as attribute-level
+// logic. Losing an {% endfor %} or {% endif %} that way leaves the block open, so
+// it swallows the rest of the document.
+function matchHtmlTag(text, start) {
+    let j = start + 1;
+    if (text[j] === '/') j++;
+    if (!/[a-zA-Z!]/.test(text[j] || '')) return -1;
+
+    let quote = null;
+    while (j < text.length) {
+        const ch = text[j];
+        if (quote !== null) {
+            if (ch === quote) quote = null;
+            j++;
+        } else if (ch === '"' || ch === "'") {
+            quote = ch;
+            j++;
+        } else if (ch === '{' && (text[j + 1] === '%' || text[j + 1] === '{')) {
+            j = skipLiquid(text, j);
+        } else if (ch === '<') {
+            return -1; // an unquoted '<' cannot appear inside a tag
+        } else if (ch === '>') {
+            return j;
+        } else {
+            j++;
+        }
+    }
+    return -1; // no closing '>' — not a tag
+}
+
+// Drop the Liquid tags and expressions from within a single HTML element tag,
+// keeping everything else — including quoted attribute values — verbatim.
+function stripLiquidInsideHtmlTag(tag) {
     let result = '';
     let i = 0;
-    let inHtmlTag = false;
-    let inQuote = null; // '"' or "'" when inside a quoted attribute value
+    while (i < tag.length) {
+        if (tag[i] === '{' && (tag[i + 1] === '%' || tag[i + 1] === '{')) {
+            i = skipLiquid(tag, i);
+        } else {
+            result += tag[i];
+            i++;
+        }
+    }
+    return result;
+}
+
+function stripLiquidFromHtmlTags(text) {
+    // Remove liquid tags/expressions that appear inside HTML element open/close tags
+    // (attribute-level liquid). These modify HTML structure rather than producing
+    // standalone output. Everything else — Liquid between elements above all — is
+    // passed through untouched.
+    let result = '';
+    let i = 0;
 
     while (i < text.length) {
         const ch = text[i];
-        if (!inHtmlTag && ch === '<' && /[a-zA-Z\/!]/.test(text[i + 1] || '')) {
-            inHtmlTag = true;
-            result += ch; i++;
-        } else if (inHtmlTag && inQuote === null && ch === '>') {
-            inHtmlTag = false;
-            result += ch; i++;
-        } else if (inHtmlTag && inQuote === null && (ch === '"' || ch === "'")) {
-            inQuote = ch;
-            result += ch; i++;
-        } else if (inHtmlTag && inQuote !== null && ch === inQuote) {
-            inQuote = null;
-            result += ch; i++;
-        } else if (inHtmlTag && ch === '{' && (text[i + 1] === '%' || text[i + 1] === '{')) {
-            // Liquid tag or expression inside an HTML tag – discard it entirely
-            const closeSeq = text[i + 1] === '%' ? '%}' : '}}';
-            i += 2;
-            if (text[i] === '-') i++; // optional leading whitespace-strip dash
-            while (i < text.length) {
-                if (text[i] === '-' && text[i + 1] === closeSeq[0] && text[i + 2] === closeSeq[1]) { i += 3; break; }
-                if (text[i] === closeSeq[0] && text[i + 1] === closeSeq[1]) { i += 2; break; }
-                i++;
-            }
-        } else {
-            result += ch; i++;
+
+        // Liquid outside an element tag is kept, and skipped as a unit so a '<'
+        // inside it is never read as markup.
+        if (ch === '{' && (text[i + 1] === '%' || text[i + 1] === '{')) {
+            const end = skipLiquid(text, i);
+            result += text.slice(i, end);
+            i = end;
+            continue;
         }
+
+        // HTML comments are copied verbatim: their body is not an element tag, so
+        // any Liquid inside it is left for the caller to interpret.
+        if (ch === '<' && text.startsWith('<!--', i)) {
+            const end = text.indexOf('-->', i);
+            const close = end === -1 ? text.length : end + 3;
+            result += text.slice(i, close);
+            i = close;
+            continue;
+        }
+
+        if (ch === '<') {
+            const end = matchHtmlTag(text, i);
+            if (end !== -1) {
+                result += stripLiquidInsideHtmlTag(text.slice(i, end + 1));
+                i = end + 1;
+                continue;
+            }
+        }
+
+        result += ch;
+        i++;
     }
+
     return result;
 }
 
@@ -626,7 +701,7 @@ function annotationLabel(labelText, detailText) {
 // labelled box, and data placeholders appear inline as chips. Returns the HTML
 // plus counts of each construct for the summary header.
 function annotateLiquid(text) {
-    const stats = { choices: 0, options: 0, optionals: 0, editors: 0, conditionals: 0, loops: 0, notes: 0, variables: 0 };
+    const stats = { choices: 0, options: 0, optionals: 0, editors: 0, conditionals: 0, loops: 0, notes: 0, variables: 0, unclosed: 0 };
 
     // Protect literal text so it is not mistaken for live Liquid constructs below.
     const neutralizeBraces = s => s.replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
@@ -661,8 +736,22 @@ function annotateLiquid(text) {
     const append = s => { (peek() || root).html += s; };
     const hasVisibleContent = html => /\S/.test(html);
 
+    // The end tag each block type expects, for the unclosed-block notice.
+    const END_TAGS = { choice: 'endchoice', optional: 'endoptional', editor: 'endeditor', if: 'endif', case: 'endcase', for: 'endfor', tablerow: 'endtablerow' };
+
     // Render a completed frame to HTML. Returns '' for hidden logic-only blocks.
+    // A frame still open at the end of the template has absorbed everything after
+    // it — the usual cause of a section that appears to run on past the end of the
+    // document — so it is labelled rather than rendered as if it were intentional.
     const closeFrame = frame => {
+        const html = renderFrame(frame);
+        if (!frame.unclosed || !html) return html;
+        stats.unclosed++;
+        const detail = `no {% ${END_TAGS[frame.type] || 'end'} %} was found, so the rest of the document is inside it`;
+        return `<div class="lp-unclosed">${annotationLabel('Not closed', detail)}${html}</div>`;
+    };
+
+    const renderFrame = frame => {
         switch (frame.type) {
             case 'choice': {
                 frame.options.push(frame.html);
@@ -688,20 +777,38 @@ function annotateLiquid(text) {
                 return `<div class="lp-cond">${kept.map(b => `<div class="lp-branch">${b.label}${b.html}</div>`).join('')}</div>`;
             }
             case 'for':
-            case 'tablerow':
-                if (!hasVisibleContent(frame.html)) return '';
-                stats.loops++;
-                return `<div class="lp-loop">${frame.label}${frame.html}</div>`;
+            case 'tablerow': {
+                // With {% else %}, the buffered html is the empty-collection body
+                // and the repeated body was set aside when the else was reached.
+                const body = frame.emptyLabel ? frame.body : frame.html;
+                const empty = frame.emptyLabel ? frame.html : '';
+                let out = '';
+                if (hasVisibleContent(body)) {
+                    stats.loops++;
+                    out += `<div class="lp-loop">${frame.label}${body}</div>`;
+                }
+                if (hasVisibleContent(empty)) {
+                    stats.conditionals++;
+                    out += `<div class="lp-cond"><div class="lp-branch">${frame.emptyLabel}${empty}</div></div>`;
+                }
+                return out;
+            }
         }
         return frame.html;
     };
 
-    // Pop the top frame if it matches and append its rendered form.
-    const closeIf = type => {
-        const frame = peek();
-        if (frame && frame.type === type) {
-            stack.pop();
+    // Close the nearest open frame of `type`, rendering any frames left open
+    // inside it on the way out. An end tag with no matching frame open is a
+    // stray and is ignored. Closing only an exactly-matching top frame is not
+    // enough: a single mismatched end tag then left its block open, so the
+    // block ran on and swallowed everything after it — a loop, for instance,
+    // appearing to repeat well past the end of the document.
+    const closeBlock = type => {
+        if (!stack.some(frame => frame.type === type)) return;
+        for (;;) {
+            const frame = stack.pop();
             append(closeFrame(frame));
+            if (frame.type === type) return;
         }
     };
 
@@ -729,7 +836,7 @@ function annotateLiquid(text) {
                 break;
             }
             case 'endchoice':
-                closeIf('choice');
+                closeBlock('choice');
                 break;
             case 'optional': {
                 const args = parseTagArgs(rest);
@@ -737,7 +844,7 @@ function annotateLiquid(text) {
                 break;
             }
             case 'endoptional':
-                closeIf('optional');
+                closeBlock('optional');
                 break;
             case 'editor': {
                 const args = parseTagArgs(rest);
@@ -746,7 +853,7 @@ function annotateLiquid(text) {
                 break;
             }
             case 'endeditor':
-                closeIf('editor');
+                closeBlock('editor');
                 break;
             case 'if':
                 stack.push({ type: 'if', branches: [], label: annotationLabel('Shown when', humanizeCondition(rest)), html: '' });
@@ -769,12 +876,18 @@ function annotateLiquid(text) {
                     if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
                     frame.label = annotationLabel('Otherwise');
                     frame.html = '';
+                } else if (frame && (frame.type === 'for' || frame.type === 'tablerow') && !frame.emptyLabel) {
+                    // A loop's else body shows when there is nothing to repeat over,
+                    // so it is a separate section rather than part of the repeated body.
+                    frame.emptyLabel = annotationLabel('If there are none');
+                    frame.body = frame.html;
+                    frame.html = '';
                 }
                 break;
             }
             case 'endif':
             case 'endunless':
-                closeIf('if');
+                closeBlock('if');
                 break;
             case 'case':
                 // label stays null (and the buffered text is discarded) until the
@@ -791,7 +904,7 @@ function annotateLiquid(text) {
                 break;
             }
             case 'endcase':
-                closeIf('case');
+                closeBlock('case');
                 break;
             case 'for':
             case 'tablerow': {
@@ -803,10 +916,10 @@ function annotateLiquid(text) {
                 break;
             }
             case 'endfor':
-                closeIf('for');
+                closeBlock('for');
                 break;
             case 'endtablerow':
-                closeIf('tablerow');
+                closeBlock('tablerow');
                 break;
             default:
                 // assign, increment, decrement, render, include, cycle, break, … – no visible output
@@ -818,6 +931,7 @@ function annotateLiquid(text) {
     // Close any blocks left open (e.g. while the template is being edited).
     while (stack.length) {
         const frame = stack.pop();
+        frame.unclosed = true;
         append(closeFrame(frame));
     }
     text = root.html;
@@ -862,6 +976,12 @@ function buildFullPreviewHeader(templateUri, stats) {
         ? `This document contains ${joinWithAnd(summaryParts)}.`
         : 'This document has no options — it always reads exactly as shown below.';
 
+    // An unclosed block absorbs everything after it, which is why the document
+    // below can appear to run on past its end. Say so up front.
+    const unclosedNotice = stats.unclosed
+        ? `<div class="lp-warn">${pluralize(stats.unclosed, 'section is', 'sections are')} missing an end tag, so the content after ${stats.unclosed === 1 ? 'it' : 'them'} has been drawn inside. Look for the red “Not closed” markers below.</div>`
+        : '';
+
     const legendRows = [];
     const legendRow = (cls, label, description) =>
         `<span class="lp-label ${cls}">${label}</span><span>${description}</span>`;
@@ -881,6 +1001,7 @@ function buildFullPreviewHeader(templateUri, stats) {
     return `<div class="lp-header">
 <div class="lp-doc-title">Document options${fileName ? ' — ' + escapeHtml(fileName) : ''}</div>
 <div class="lp-summary">${summary}</div>
+${unclosedNotice}
 ${legend}
 </div>`;
 }
@@ -972,6 +1093,11 @@ const fullPreviewStyles = `
   .lp-legend-note { display: contents; }
   body:has(#lp-show-notes:not(:checked)) .lp-note,
   body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
+
+  .lp-warn { font-family: sans-serif; font-size: 12.5px; color: #b71c1c; background: #ffebee; border: 1px solid #ef9a9a; border-radius: 6px; padding: 5px 10px; margin: 6px 0 4px 0; }
+
+  .lp-unclosed { border: 1px solid #ef9a9a; border-radius: 6px; background: #fff5f5; padding: 6px 10px; margin: 10px 0; }
+  .lp-unclosed > .lp-label { background: #c62828; }
 
   .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`
     + viewSourceStyles + `
@@ -1199,6 +1325,16 @@ async function refreshHtmlFullPanel(preview, panel) {
     }
 
     updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(errors), content.rendered, fullPreviewStyles);
+}
+
+// Run panel refreshes for one preview one at a time. The change handler is
+// async and fires on every keystroke, so without a queue two refreshes overlap:
+// they race on the shared warning buffer, and whichever render finishes last
+// wins, which can leave the pane showing an older version of the template.
+function queueRefresh(preview, run) {
+    const next = (preview.refreshQueue || Promise.resolve()).then(run, run);
+    preview.refreshQueue = next.catch(() => { });
+    return next;
 }
 
 // Push new content into a preview panel: the first call sets the full webview
