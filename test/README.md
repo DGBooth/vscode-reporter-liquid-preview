@@ -5,14 +5,24 @@ npm test
 ```
 
 Runs every `test/*.test.js` with Node's built-in test runner — no dependencies
-beyond the ones the extension already has. Needs Node 18 or newer, or Node 21 or
-newer on Windows, where the shell leaves the glob for Node itself to expand.
-Individual files and filters work as usual:
+beyond the ones the extension already has. Individual files and filters work as
+usual:
 
 ```
 node --test test/render.test.js
 node --test --test-name-pattern "duplicate" test/*.test.js
 ```
+
+CI runs the suite on Node 20, 22 and 24 (see
+[`.github/workflows/test.yml`](../.github/workflows/test.yml)).
+
+**Node 20 or newer.** The suite reads the positions V8 puts in `JSON.parse`
+error messages, and Node 18 leaves them out of some of them — the extension
+handles that (the entry just has no position to offer), but one test asserts
+that a broken data file *is* located, and it fails there. On Windows the floor
+is Node 21, where Node gained glob expansion of its own; below that `cmd` leaves
+the pattern alone and the run stops with `Could not find 'test/*.test.js'` rather
+than quietly passing nothing.
 
 The script names `test/*.test.js` rather than the directory on purpose: Node
 treats every `.js` file inside a folder called `test` as a test file, which would

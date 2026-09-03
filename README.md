@@ -126,12 +126,14 @@ npm install
 npm test
 ```
 
-The test suite runs on Node's built-in runner against a stubbed `vscode` module,
-so it needs no dependencies beyond the extension's own and no extension host.
-It covers the rendering path — including a byte-for-byte comparison against a
-stock LiquidJS engine, which guards the wrapper that lets warnings name their
-line — the located problems panel, and the HTML handed to the webview. See
-[`test/README.md`](test/README.md).
+The test suite runs on Node's built-in runner (Node 20 or newer) against a
+stubbed `vscode` module, so it needs no dependencies beyond the extension's own
+and no extension host. It covers the rendering path — including a byte-for-byte
+comparison against a stock LiquidJS engine, which guards the wrapper that lets
+warnings name their line — the located problems panel, and the HTML handed to
+the webview. See [`test/README.md`](test/README.md).
+
+Every push and pull request runs it on Node 20, 22 and 24 via GitHub Actions.
 
 ## Credits
 
