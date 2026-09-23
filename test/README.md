@@ -68,6 +68,21 @@ files are separate processes, so state never leaks across a file.
   warnings, parse errors, duplicate field names and broken data files; the
   Problems-panel rows that mirror them; the cases where a position is withheld
   on purpose; and click-to-open.
+- **`template-tests.test.js`** — `*.liquidtest.json` suites: how cases are
+  parsed and resolved, every verdict (golden files, fragments, warnings,
+  duplicate names, parse errors, missing files), the diff, the report's
+  escaping, accepting actual output, and the Test Explorer mapping. The stub
+  models just enough of the Testing API (`vscode.tests`) to record what a run
+  reports for each case.
+- **`create-tests.test.js`** — creating cases from known cases: the plan for
+  a new or existing suite (paths, unique names, what is skipped), the guards
+  against freezing bad output (render errors, duplicate names, warnings,
+  unsaved edits), and both ways in: the command and the preview's
+  "Save as test" button.
+- **`cli.test.js`** — the command-line runner: exit codes (including finding
+  no suites, which must not pass), verdicts that match the editor's, suite
+  discovery, `--junit`, `--report` and `--update`, and that it loads in a
+  plain Node process with no `vscode` module anywhere on its path.
 - **`preview-html.test.js`** — the preview document is assembled as a string, so
   escaping, unbalanced markup and a broken inline script would all fail
   silently. These check the document actually handed to the webview.

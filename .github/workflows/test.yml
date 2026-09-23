@@ -38,6 +38,10 @@ jobs:
 
       - run: npm test
 
+      # The command-line runner on the example suite — the same thing a
+      # templates repository runs in its own CI.
+      - run: npm run test:templates
+
   # The repository ships its build artifact, so a change can land without the
   # .vsix being rebuilt and the stale one is what gets installed. One version is
   # enough: this compares packages, not runtimes.

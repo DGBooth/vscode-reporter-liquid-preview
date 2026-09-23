@@ -1,0 +1,22 @@
+{
+  "template": "invoice.liquid",
+  "cases": [
+    {
+      "name": "two items",
+      "data": "data/two-items.json",
+      "expected": "expected/two-items.html"
+    },
+    {
+      "name": "no items shows the empty message",
+      "data": { "customer": { "name": "Charles Babbage" }, "items": [] },
+      "contains": "<p>No items.</p>",
+      "notContains": "<table>"
+    },
+    {
+      "name": "notes are unchecked by default",
+      "data": { "customer": { "name": "Grace" }, "items": [], "notes": "" },
+      "notContains": "checked=\"\"",
+      "whitespace": "collapse"
+    }
+  ]
+}

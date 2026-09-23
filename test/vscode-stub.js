@@ -18,6 +18,18 @@ const publishedDiagnostics = new Map();
 const revealed = [];
 // Every window.showErrorMessage call, in order.
 const shownErrors = [];
+// Every showInformationMessage / showWarningMessage call, in order.
+const shownMessages = [];
+// Answers for the next showWarningMessage calls (a modal's chosen button).
+const warningAnswers = [];
+// Every test controller the extension created, with what its runs reported.
+const testControllers = [];
+// Answers for the next showQuickPick / showInputBox calls, in order. A quick
+// pick answer may be a function of the items offered.
+const quickPickAnswers = [];
+const inputBoxAnswers = [];
+// Every webview panel the extension opened itself (the report panel).
+const createdPanels = [];
 
 // ---- API types ------------------------------------------------------------
 
@@ -72,6 +84,85 @@ class Disposable {
     dispose() { }
 }
 
+class Location {
+    constructor(uri, rangeOrPosition) {
+        this.uri = uri;
+        this.range = rangeOrPosition;
+    }
+}
+
+// ---- the Testing API (VS Code 1.59+) ---------------------------------------
+
+class TestMessage {
+    constructor(message) {
+        this.message = message;
+    }
+    static diff(message, expected, actual) {
+        const result = new TestMessage(message);
+        result.expectedOutput = expected;
+        result.actualOutput = actual;
+        return result;
+    }
+}
+
+// A TestItemCollection: insertion-ordered, keyed by id.
+function itemCollection(parent) {
+    const items = new Map();
+    return {
+        get size() { return items.size; },
+        get: id => items.get(id),
+        add: item => { item.parent = parent; items.set(item.id, item); },
+        delete: id => items.delete(id),
+        replace: list => { items.clear(); for (const item of list) { item.parent = parent; items.set(item.id, item); } },
+        forEach: fn => { for (const item of Array.from(items.values())) fn(item); }
+    };
+}
+
+function createTestController(id, label) {
+    const controller = {
+        id,
+        label,
+        profiles: [],
+        // Every createTestRun, each with the calls made on it: { state, id, messages }.
+        runs: [],
+        items: itemCollection(undefined),
+        createTestItem(itemId, itemLabel, uri) {
+            const item = { id: itemId, label: itemLabel, uri, range: undefined, error: undefined, parent: undefined };
+            item.children = itemCollection(item);
+            return item;
+        },
+        createRunProfile(profileLabel, kind, runHandler, isDefault) {
+            const profile = { label: profileLabel, kind, runHandler, isDefault, dispose() { } };
+            controller.profiles.push(profile);
+            return profile;
+        },
+        createTestRun(request) {
+            const calls = [];
+            const record = state => (item, messages, duration) => calls.push({
+                state, id: item.id, messages: messages === undefined ? [] : [].concat(messages), duration
+            });
+            const run = {
+                request,
+                calls,
+                ended: false,
+                enqueued: record('enqueued'),
+                started: record('started'),
+                passed: (item, duration) => calls.push({ state: 'passed', id: item.id, messages: [], duration }),
+                failed: record('failed'),
+                errored: record('errored'),
+                skipped: record('skipped'),
+                appendOutput() { },
+                end() { run.ended = true; }
+            };
+            controller.runs.push(run);
+            return run;
+        },
+        dispose() { }
+    };
+    testControllers.push(controller);
+    return controller;
+}
+
 // ---- the module itself ----------------------------------------------------
 
 const vscode = {
@@ -81,6 +172,10 @@ const vscode = {
     Diagnostic,
     EventEmitter,
     Disposable,
+    Location,
+    TestMessage,
+    TestRunProfileKind: { Run: 1, Debug: 2, Coverage: 3 },
+    ProgressLocation: { SourceControl: 1, Window: 10, Notification: 15 },
     DiagnosticSeverity: { Error: 'Error', Warning: 'Warning', Information: 'Information', Hint: 'Hint' },
     TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
     ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
@@ -107,9 +202,30 @@ const vscode = {
         visibleTextEditors: [],
         activeTextEditor: undefined,
         createStatusBarItem: () => ({ text: '', tooltip: '', show() { }, hide() { }, dispose() { } }),
-        createWebviewPanel: () => { throw new Error('createWebviewPanel: tests build panels themselves'); },
+        // Preview tests build their panels themselves (harness.makePanel); this
+        // serves the panels the extension opens on its own, like the report.
+        createWebviewPanel: (viewType, title) => {
+            const panel = {
+                viewType,
+                title,
+                disposed: false,
+                webview: { html: '', onDidReceiveMessage: () => new Disposable(), postMessage: () => Promise.resolve(true) },
+                reveal() { },
+                onDidDispose: listener => { panel._onDispose = listener; return new Disposable(); },
+                dispose() { panel.disposed = true; if (panel._onDispose) panel._onDispose(); }
+            };
+            createdPanels.push(panel);
+            return panel;
+        },
         showErrorMessage: message => { shownErrors.push(message); return Promise.resolve(undefined); },
-        showQuickPick: async () => undefined,
+        showInformationMessage: message => { shownMessages.push(message); return Promise.resolve(undefined); },
+        showWarningMessage: message => { shownMessages.push(message); return Promise.resolve(warningAnswers.shift()); },
+        withProgress: (options, task) => task({ report() { } }, { isCancellationRequested: false }),
+        showQuickPick: async items => {
+            const answer = quickPickAnswers.shift();
+            return typeof answer === 'function' ? answer(await items) : answer;
+        },
+        showInputBox: async () => inputBoxAnswers.shift(),
         showTextDocument: async (document, options) => {
             const editor = {
                 document,
@@ -130,22 +246,53 @@ const vscode = {
 
     workspace: {
         workspaceFolders: [],
+        // Open documents; tests push { fileName, isDirty, save() } to model
+        // unsaved edits.
+        textDocuments: [],
+        // workspaceFiles stands in for open editors and wins; anything else is
+        // read from disk, as VS Code would, so files the extension writes with
+        // fs can be read back.
         openTextDocument: async target => {
             const fsPath = typeof target === 'string' ? target : target.fsPath;
-            if (!workspaceFiles.has(fsPath)) throw new Error(`cannot open ${fsPath}: no such file`);
+            let text = workspaceFiles.get(fsPath);
+            if (text === undefined) {
+                try {
+                    text = require('fs').readFileSync(fsPath, 'utf8');
+                } catch (err) {
+                    throw new Error(`cannot open ${fsPath}: no such file`);
+                }
+            }
             return {
                 fileName: fsPath,
                 uri: vscode.Uri.file(fsPath),
-                getText: () => workspaceFiles.get(fsPath)
+                getText: () => text
             };
         },
-        findFiles: async () => [],
+        // Every workspace file whose name matches the pattern's final segment —
+        // enough for the extension's '**/*.ext' globs.
+        findFiles: async pattern => {
+            const suffix = String(pattern).replace(/^.*\*/, '');
+            return Array.from(workspaceFiles.keys())
+                .filter(fsPath => fsPath.endsWith(suffix))
+                .map(fsPath => vscode.Uri.file(fsPath));
+        },
+        asRelativePath: fsPath => String(fsPath).replace(/^\/w\//, ''),
+        createFileSystemWatcher: () => ({
+            onDidCreate: () => new Disposable(),
+            onDidChange: () => new Disposable(),
+            onDidDelete: () => new Disposable(),
+            dispose() { }
+        }),
         registerTextDocumentContentProvider: () => new Disposable(),
         onDidChangeTextDocument: () => new Disposable()
     },
 
     commands: {
         registerCommand: () => new Disposable()
+    },
+
+    tests: {
+        createTestController
     }
 };
 
@@ -171,6 +318,13 @@ function reset() {
     publishedDiagnostics.clear();
     revealed.length = 0;
     shownErrors.length = 0;
+    shownMessages.length = 0;
+    warningAnswers.length = 0;
+    quickPickAnswers.length = 0;
+    inputBoxAnswers.length = 0;
+    for (const panel of createdPanels.splice(0)) if (!panel.disposed) panel.dispose();
+    vscode.workspace.textDocuments = [];
+    for (const controller of testControllers) controller.runs.length = 0;
     vscode.window.visibleTextEditors = [];
 }
 
@@ -181,5 +335,11 @@ module.exports = {
     workspaceFiles,
     publishedDiagnostics,
     revealed,
-    shownErrors
+    shownErrors,
+    shownMessages,
+    warningAnswers,
+    quickPickAnswers,
+    inputBoxAnswers,
+    createdPanels,
+    testControllers
 };

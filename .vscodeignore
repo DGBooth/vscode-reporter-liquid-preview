@@ -3,8 +3,10 @@
 .vscode/
 out/
 scripts/
+bin/
 test/
 *.vsix
 .gitignore
 .vscodeignore
 package-lock.json
+examples/

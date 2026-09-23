@@ -1,448 +1,30 @@
 const path = require('path');
 const vscode = require('vscode');
 const liquid = require('liquidjs');
-const liquidEngine = new liquid();
-
-// Accumulates warnings during a single render pass. Set to [] before rendering, null otherwise.
-let _currentWarnings = null;
-
-// The token of the template currently being rendered — see trackRenderPosition.
-// Filters and custom tags are handed their arguments and nothing else, so this
-// is the only way for a warning raised inside one to say where it came from.
-let _currentToken = null;
-
-// register custom Liquid tags used in templates
-registerCustomTags(liquidEngine);
-trackRenderPosition(liquidEngine);
-
-// Parse a Liquid tag argument string into an object.
-// e.g. '"fieldName", title: "My Title", lines: 1' → { name: "fieldName", title: "My Title", lines: 1 }
-// An unquoted first argument is treated as a Liquid variable reference → { nameVar: "varName", ... }
-function parseTagArgs(argsStr) {
-    const result = {};
-    if (!argsStr) return result;
-    const nameMatch = argsStr.match(/^\s*['"]([^'"]+)['"]/);
-    if (nameMatch) {
-        result.name = nameMatch[1];
-    } else {
-        // Unquoted first argument (not a key:value pair) is a variable whose runtime value is the name
-        const varMatch = argsStr.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\s*:)/);
-        if (varMatch) result.nameVar = varMatch[1];
-    }
-    const kvRegex = /(\w+):\s*(?:"([^"]*)"|'([^']*)'|(\d+(?:\.\d+)?))/g;
-    let m;
-    while ((m = kvRegex.exec(argsStr)) !== null) {
-        const key = m[1];
-        result[key] = m[4] !== undefined ? parseFloat(m[4]) : (m[2] !== undefined ? m[2] : m[3]);
-    }
-    return result;
-}
-
-// Resolve the tag name from parsed args: either a literal string or a variable looked up in context.
-function resolveTagName(args, ctx) {
-    if (args.name) return args.name;
-    if (args.nameVar) {
-        const envs = (ctx && ctx.environments) || {};
-        const resolved = envs[args.nameVar];
-        return resolved !== undefined ? String(resolved) : '';
-    }
-    return '';
-}
-
-// Record a tag name into the per-render duplicate tracker (injected via render
-// context), along with where each use appeared, so a clash can be pointed at
-// rather than only named.
-function trackTagName(name, ctx) {
-    const tracker = ctx && ctx.environments && ctx.environments._rlpTracker;
-    if (!tracker || !name) return;
-    const uses = tracker.seen.get(name);
-    if (uses) {
-        uses.push(currentLocation());
-        if (!tracker.dupes.includes(name)) tracker.dupes.push(name);
-    } else {
-        tracker.seen.set(name, [currentLocation()]);
-    }
-}
-
-// Keep _currentToken pointing at the template being rendered, so warnings and
-// errors raised deep inside a filter or a custom tag can name their line.
-//
-// The loop mirrors LiquidJS's own Render.renderTemplates rather than handing it
-// the whole list at once, so each template can be bracketed individually. Error
-// handling is left to the original — each single-template call still wraps its
-// own RenderError — except for RenderBreakError, which carries the HTML
-// rendered before a {% break %} and would otherwise only see the one template
-// we passed down.
-function trackRenderPosition(engine) {
-    const renderTemplates = engine.renderer.renderTemplates.bind(engine.renderer);
-    engine.renderer.renderTemplates = async function (templates, ctx) {
-        let html = '';
-        for (const template of templates) {
-            const previousToken = _currentToken;
-            _currentToken = template.token || previousToken;
-            try {
-                html += await renderTemplates([template], ctx);
-            } catch (err) {
-                if (err.name === 'RenderBreakError') err.resolvedHTML = html + (err.resolvedHTML || '');
-                throw err;
-            } finally {
-                _currentToken = previousToken;
-            }
-        }
-        return html;
-    };
-}
-
-// Record a warning raised at the position currently being rendered.
-function addWarning(message) {
-    if (_currentWarnings) _currentWarnings.push({ message, location: currentLocation() });
-}
-
-// Where in the template rendering has reached, or null outside a render pass.
-function currentLocation() {
-    return tokenLocation(_currentToken);
-}
-
-// A position from a LiquidJS token: 1-based line and column, plus the source
-// text of the construct itself so a pane entry is recognisable without having
-// to leave the preview to look it up.
-function tokenLocation(token) {
-    if (!token || typeof token.line !== 'number') return null;
-    return {
-        line: token.line,
-        col: typeof token.col === 'number' ? token.col : 1,
-        snippet: snippetOf(token.raw)
-    };
-}
-
-// Collapse a chunk of source to a single readable line for display.
-function snippetOf(text) {
-    const oneLine = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
-    return oneLine.length > 120 ? oneLine.slice(0, 119) + '\u2026' : oneLine;
-}
-
-// Convert Markdown text to HTML for the markdownify filter. Supports the
-// common constructs used in Reporter templates: headings, paragraphs,
-// unordered/ordered lists (nested by indentation), blockquotes, fenced code
-// blocks, horizontal rules, and inline bold/italic/code/links/images.
-// Raw HTML in the source passes through untouched, as in standard Markdown.
-function markdownToHtml(md) {
-    const lines = String(md).replace(/\r\n?/g, '\n').split('\n');
-    const out = [];
-
-    // Inline markdown within a single block of text.
-    const renderInline = text => {
-        // Code spans are extracted first so their contents are not treated as markup.
-        const codeSpans = [];
-        text = text.replace(/`([^`]+)`/g, (_, code) => {
-            codeSpans.push(`<code>${escapeHtml(code)}</code>`);
-            return `\u0000${codeSpans.length - 1}\u0000`;
-        });
-        text = text.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, '<img src="$2" alt="$1">');
-        text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>');
-        text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-        text = text.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-        text = text.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-        // Underscore emphasis only at word boundaries, so snake_case survives.
-        text = text.replace(/(^|[^\w])_([^_]+)_(?=[^\w]|$)/g, '$1<em>$2</em>');
-        return text.replace(/\u0000(\d+)\u0000/g, (_, i) => codeSpans[i]);
-    };
-
-    // Stack of currently open lists: { indent, tag } from outermost to innermost.
-    let listStack = [];
-    const closeListsTo = depth => {
-        while (listStack.length > depth) {
-            out.push(`</li></${listStack.pop().tag}>`);
-        }
-    };
-
-    let paragraph = [];
-    const flushParagraph = () => {
-        if (paragraph.length === 0) return;
-        // Two or more trailing spaces on a line force a hard break.
-        const body = paragraph.map(l => l.replace(/ {2,}$/, '<br>')).join('\n');
-        out.push(`<p>${renderInline(body)}</p>`);
-        paragraph = [];
-    };
-    const flushBlocks = () => { flushParagraph(); closeListsTo(0); };
-
-    let i = 0;
-    while (i < lines.length) {
-        const line = lines[i];
-
-        // Fenced code block: everything up to the closing fence is literal.
-        const fence = line.match(/^\s*```/);
-        if (fence) {
-            flushBlocks();
-            const body = [];
-            i++;
-            while (i < lines.length && !/^\s*```/.test(lines[i])) {
-                body.push(lines[i]);
-                i++;
-            }
-            i++; // skip the closing fence
-            out.push(`<pre><code>${escapeHtml(body.join('\n'))}</code></pre>`);
-            continue;
-        }
-
-        // Blank line ends the current paragraph and any open lists.
-        if (!line.trim()) {
-            flushBlocks();
-            i++;
-            continue;
-        }
-
-        const heading = line.match(/^(#{1,6})\s+(.*?)\s*#*\s*$/);
-        if (heading) {
-            flushBlocks();
-            out.push(`<h${heading[1].length}>${renderInline(heading[2])}</h${heading[1].length}>`);
-            i++;
-            continue;
-        }
-
-        if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-            flushBlocks();
-            out.push('<hr>');
-            i++;
-            continue;
-        }
-
-        const quote = line.match(/^\s*>\s?(.*)$/);
-        if (quote) {
-            flushBlocks();
-            const body = [quote[1]];
-            i++;
-            while (i < lines.length) {
-                const m = lines[i].match(/^\s*>\s?(.*)$/);
-                if (!m) break;
-                body.push(m[1]);
-                i++;
-            }
-            out.push(`<blockquote>${markdownToHtml(body.join('\n'))}</blockquote>`);
-            continue;
-        }
-
-        const listItem = line.match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
-        if (listItem) {
-            flushParagraph();
-            const indent = listItem[1].length;
-            const tag = /\d/.test(listItem[2]) ? 'ol' : 'ul';
-            // Close lists deeper than this item's indentation.
-            while (listStack.length && indent < listStack[listStack.length - 1].indent) {
-                out.push(`</li></${listStack.pop().tag}>`);
-            }
-            const top = listStack[listStack.length - 1];
-            if (!top || indent > top.indent) {
-                listStack.push({ indent, tag });
-                out.push(`<${tag}><li>` + renderInline(listItem[3]));
-            } else if (top.tag !== tag) {
-                out.push(`</li></${listStack.pop().tag}>`);
-                listStack.push({ indent, tag });
-                out.push(`<${tag}><li>` + renderInline(listItem[3]));
-            } else {
-                out.push('</li><li>' + renderInline(listItem[3]));
-            }
-            i++;
-            continue;
-        }
-
-        // A non-blank, non-marker line while a list is open continues the last item.
-        if (listStack.length > 0) {
-            out[out.length - 1] += ' ' + renderInline(line.trim());
-            i++;
-            continue;
-        }
-
-        paragraph.push(line);
-        i++;
-    }
-    flushBlocks();
-    return out.join('\n');
-}
-
-function registerCustomFilters(engine) {
-    // markdownify filter: render Markdown text as HTML, as in Reporter
-    // (e.g. "- Test" becomes a bullet point). The wrapper div lets the
-    // preview stylesheet trim the outer margins of the first/last block, so
-    // the output sits flush with surrounding content as it does in Reporter
-    // instead of showing a blank line where the leading <p>'s default
-    // margin-top would be.
-    engine.registerFilter('markdownify', value => {
-        if (value == null) {
-            addWarning('markdownify filter: value is missing (returned empty)');
-            return '';
-        }
-        return `<div class="rlp-markdown">${markdownToHtml(value)}</div>`;
-    });
-
-    // money filter: rounds to 2 decimal places or appends .00 if no decimals, with comma separators
-    engine.registerFilter('money', value => {
-        const num = parseFloat(value);
-        if (isNaN(num)) return value;
-        return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    });
-
-    // slice filter: override built-in to warn instead of error when the value is missing
-    engine.registerFilter('slice', (v, begin, length = 1) => {
-        if (v == null) {
-            addWarning('slice filter: value is missing (returned empty)');
-            return '';
-        }
-        begin = begin < 0 ? v.length + begin : begin;
-        return v.slice(begin, begin + length);
-    });
-
-    // where filter: override built-in to warn instead of error when the value is missing
-    engine.registerFilter('where', (arr, property, value) => {
-        if (arr == null) {
-            addWarning(`where filter: array is missing (filtering by property "${property}")`);
-            return [];
-        }
-        return arr.filter(obj => value === undefined ? (obj[property] !== false && obj[property] !== undefined && obj[property] !== null) : obj[property] === value);
-    });
-
-    // sort filter: override built-in to warn on null and support sorting by property key
-    engine.registerFilter('sort', (arr, property) => {
-        if (arr == null) {
-            addWarning('sort filter: array is missing (returned empty)');
-            return [];
-        }
-        const sorted = [...arr];
-        if (property) {
-            sorted.sort((a, b) => {
-                const av = a == null ? null : a[property];
-                const bv = b == null ? null : b[property];
-                if (av == null && bv == null) return 0;
-                if (av == null) return 1;
-                if (bv == null) return -1;
-                if (av < bv) return -1;
-                if (av > bv) return 1;
-                return 0;
-            });
-        } else {
-            sorted.sort((a, b) => {
-                if (a == null && b == null) return 0;
-                if (a == null) return 1;
-                if (b == null) return -1;
-                if (a < b) return -1;
-                if (a > b) return 1;
-                return 0;
-            });
-        }
-        return sorted;
-    });
-
-    // json filter: serialize a value as JSON, as in the LiquidJS built-in
-    // (https://liquidjs.com/filters/json.html), but pretty-printed with a
-    // 2-space indent by default for readability. An optional argument
-    // overrides the indentation, e.g. {{ value | json: 4 }} or
-    // {{ value | json: 0 }} for compact single-line output.
-    engine.registerFilter('json', (value, space = 2) => JSON.stringify(value, null, space));
-
-    // sort_natural filter: case-insensitive sort, optionally by property key
-    engine.registerFilter('sort_natural', (arr, property) => {
-        if (arr == null) {
-            addWarning('sort_natural filter: array is missing (returned empty)');
-            return [];
-        }
-        const sorted = [...arr];
-        const cmpNatural = (a, b) => {
-            if (a == null && b == null) return 0;
-            if (a == null) return 1;
-            if (b == null) return -1;
-            return String(a).toLowerCase().localeCompare(String(b).toLowerCase());
-        };
-        if (property) {
-            sorted.sort((a, b) => cmpNatural(a == null ? null : a[property], b == null ? null : b[property]));
-        } else {
-            sorted.sort(cmpNatural);
-        }
-        return sorted;
-    });
-}
-
-// register custom Liquid filters used in templates
-registerCustomFilters(liquidEngine);
-
-function registerCustomTags(engine) {
-    // optional tag: renders a checkbox wrapper with inner content
-    engine.registerTag('optional', {
-        parse(tagToken, remainTokens) {
-            this.args = parseTagArgs(tagToken.args);
-            this.templates = [];
-            const stream = this.liquid.parser.parseStream(remainTokens)
-                .on('tag:endoptional', () => stream.stop())
-                .on('template', tpl => this.templates.push(tpl))
-                .on('end', () => { throw new Error('optional tag not closed'); });
-            stream.start();
-        },
-        async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
-            trackTagName(name, ctx);
-            const fields = (ctx.environments && ctx.environments.fields) || {};
-            const checkedAttr = fields[name] === 'true' ? ' checked=""' : '';
-            const inner = await this.liquid.renderer.renderTemplates(this.templates, ctx);
-            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}"><label for="${name}"><input type="checkbox" id="${name}" name="${name}" data-editor-id="${name}" value="true"${checkedAttr}><span class="optional-content">${inner}</span></label></div>`;
-        }
-    });
-
-    // editor tag: renders an input or textarea wrapped in a div
-    engine.registerTag('editor', {
-        parse(tagToken, remainTokens) {
-            this.args = parseTagArgs(tagToken.args);
-            this.templates = [];
-            const stream = this.liquid.parser.parseStream(remainTokens)
-                .on('tag:endeditor', () => stream.stop())
-                .on('template', tpl => this.templates.push(tpl))
-                .on('end', () => { throw new Error('editor tag not closed'); });
-            stream.start();
-        },
-        render(ctx) {
-            const name = resolveTagName(this.args, ctx);
-            trackTagName(name, ctx);
-            const lines = this.args.lines !== undefined ? this.args.lines : 1;
-            const placeholder = this.args.placeholder || '';
-            const maxlength = this.args.maxlength !== undefined ? this.args.maxlength : 100;
-            const minlength = this.args.minlength !== undefined ? this.args.minlength : 0;
-            const fields = (ctx.environments && ctx.environments.fields) || {};
-            const value = fields[name] !== undefined ? String(fields[name]) : '';
-            if (lines <= 1) {
-                return `<div id="editor-wrapper-${name}" class="editor "><input type="text" id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"></div>`;
-            } else {
-                return `<div id="editor-wrapper-${name}" class="editor "><textarea id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" rows="${lines}">${escapeHtml(value)}</textarea></div>`;
-            }
-        }
-    });
-
-    // choice tag: renders radio buttons for each 'or'-separated block
-    engine.registerTag('choice', {
-        parse(tagToken, remainTokens) {
-            this.args = parseTagArgs(tagToken.args);
-            this.parts = [[]];
-            const stream = this.liquid.parser.parseStream(remainTokens)
-                .on('tag:or', () => this.parts.push([]))
-                .on('tag:endchoice', () => stream.stop())
-                .on('template', tpl => this.parts[this.parts.length - 1].push(tpl))
-                .on('end', () => { throw new Error('choice tag not closed'); });
-            stream.start();
-        },
-        async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
-            trackTagName(name, ctx);
-            const title = this.args.title !== undefined ? this.args.title : '';
-            const fields = (ctx.environments && ctx.environments.fields) || {};
-            const selectedValue = fields[name] !== undefined ? String(fields[name]) : '0';
-            const titleHtml = title ? `<span class="editor-intro">${escapeHtml(title)}</span>` : '';
-            let labelsHtml = '';
-            for (let i = 0; i < this.parts.length; i++) {
-                const checkedAttr = String(i) === selectedValue ? ' checked=""' : '';
-                const inner = await this.liquid.renderer.renderTemplates(this.parts[i], ctx);
-                labelsHtml += `<label for="${name}-${i + 1}"><input type="radio" id="${name}-${i + 1}" name="${name}" data-editor-id="${name}" value="${i}"${checkedAttr}><span class="choice-content">${inner}</span></label>`;
-            }
-            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}">${titleHtml}${labelsHtml}</div>`;
-        }
-    });
-}
+const templateTests = require('./template-tests');
+const {
+    liquidEngine,
+    parseTagArgs,
+    tokenLocation,
+    snippetOf,
+    markdownToHtml,
+    registerCustomFilters,
+    registerCustomTags,
+    pluralize,
+    HTML_BLOCK_TAGS,
+    HTML_VOID_TAGS,
+    HTML_RAW_TAGS,
+    tokenizeHtml,
+    formatHtml,
+    renderWithDiagnostics,
+    diagnostic,
+    liquidDiagnostic,
+    cleanLiquidMessage,
+    jsonDiagnostic,
+    duplicateNameDiagnostic,
+    escapeHtml,
+    renderForTest
+} = require('./engine');
 
 function activate(context) {
     let templateStatusBarItem;
@@ -539,7 +121,7 @@ function activate(context) {
             );
 
             htmlPreviews[preview.id] = { preview, panel };
-            wirePreviewMessages(panel);
+            wirePreviewMessages(panel, { createTest: () => saveHtmlPreviewAsTest(preview) });
 
             await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
 
@@ -622,6 +204,8 @@ function activate(context) {
     dataStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
     dataStatusBarItem.show();
     context.subscriptions.push(dataStatusBarItem);
+
+    registerTemplateTests(context);
 }
 
 // Index just past the Liquid tag or expression starting at `i`, or the end of
@@ -1026,10 +610,6 @@ function annotateLiquid(text) {
     return { html: text, stats };
 }
 
-function pluralize(count, singular, plural) {
-    return `${count} ${count === 1 ? singular : (plural || singular + 's')}`;
-}
-
 function joinWithAnd(parts) {
     if (parts.length <= 1) return parts.join('');
     return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
@@ -1093,6 +673,8 @@ const viewSourceStyles = `
   .lp-toolbar { position: sticky; top: 0; z-index: 9000; display: flex; flex-wrap: wrap; gap: 6px 18px; background: white; margin: -8px -8px 10px -8px; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
   .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
   .lp-toggle input { margin: 0; }
+  .lp-action { margin-left: auto; font: 12px sans-serif; color: #444; background: #f3f3f3; border: 1px solid #d0d0d0; border-radius: 3px; padding: 1px 8px; cursor: pointer; }
+  .lp-action:hover { background: #e8e8e8; }
   .lp-source { display: none; }
   .lp-source-hint { font-family: sans-serif; font-size: 12px; color: var(--vscode-descriptionForeground, #444); margin-bottom: 8px; }
   .lp-source pre { background: none; border: none; margin: 0; padding: 2px 4px; color: var(--vscode-editor-foreground, #333); font-family: var(--vscode-editor-font-family, "SF Mono", Monaco, Menlo, Consolas, monospace); font-size: var(--vscode-editor-font-size, 12px); line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
@@ -1197,104 +779,6 @@ ${cssText}
 ${content}
 </body>
 </html>`;
-}
-
-// Tags that get their own indented line when formatting; everything else is
-// treated as inline and left verbatim.
-const HTML_BLOCK_TAGS = new Set(['html', 'head', 'body', 'title', 'meta', 'link', 'style', 'script', 'div', 'section', 'article', 'header', 'footer', 'nav', 'aside', 'main', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col', 'form', 'fieldset', 'legend', 'blockquote', 'hr', 'details', 'summary', 'figure', 'figcaption', 'address']);
-// Elements with no closing tag, so an opening tag must not increase the indent.
-const HTML_VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr']);
-// Elements whose body is whitespace-sensitive and must be kept verbatim.
-const HTML_RAW_TAGS = new Set(['pre', 'textarea', 'script', 'style']);
-
-// Split HTML into tag/text/raw tokens. The scanner respects quoted attribute
-// values (a '>' inside quotes does not end the tag), comments and doctypes,
-// and captures raw-tag bodies verbatim.
-function tokenizeHtml(html) {
-    const tokens = [];
-    let i = 0;
-    let textStart = 0;
-    const flushText = end => { if (end > textStart) tokens.push({ type: 'text', text: html.slice(textStart, end) }); };
-
-    while (i < html.length) {
-        if (html[i] !== '<' || !/[a-zA-Z\/!]/.test(html[i + 1] || '')) { i++; continue; }
-        flushText(i);
-
-        if (html.startsWith('<!--', i)) {
-            const end = html.indexOf('-->', i + 4);
-            const close = end === -1 ? html.length : end + 3;
-            tokens.push({ type: 'tag', kind: 'comment', name: '', text: html.slice(i, close) });
-            i = textStart = close;
-            continue;
-        }
-
-        // Scan to the matching '>', ignoring any inside quoted attribute values.
-        let j = i + 1;
-        let quote = null;
-        while (j < html.length && (quote !== null || html[j] !== '>')) {
-            if (quote === null && (html[j] === '"' || html[j] === "'")) quote = html[j];
-            else if (html[j] === quote) quote = null;
-            j++;
-        }
-        const close = j < html.length ? j + 1 : html.length;
-        const text = html.slice(i, close);
-        const nameMatch = text.match(/^<\/?([a-zA-Z][a-zA-Z0-9-]*)/);
-        const name = nameMatch ? nameMatch[1].toLowerCase() : '';
-        const kind = text[1] === '!' ? 'doctype' : (text[1] === '/' ? 'close' : 'open');
-        i = textStart = close;
-
-        if (kind === 'open' && HTML_RAW_TAGS.has(name)) {
-            const closeRegex = new RegExp(`</${name}\\s*>`, 'i');
-            const m = closeRegex.exec(html.slice(i));
-            const bodyEnd = m ? i + m.index : html.length;
-            const rawClose = m ? bodyEnd + m[0].length : html.length;
-            tokens.push({ type: 'raw', name, openTag: text, body: html.slice(i, bodyEnd), closeTag: m ? m[0] : '' });
-            i = textStart = rawClose;
-        } else {
-            tokens.push({ type: 'tag', kind, name, text });
-        }
-    }
-    flushText(html.length);
-    return tokens;
-}
-
-// Conservative HTML pretty-printer for the source views: block-level tags get
-// their own indented lines and inline runs are kept together, with newlines
-// inside them collapsed to a space. Only whitespace that cannot affect
-// rendering is changed — inline content is otherwise verbatim and raw-tag
-// bodies (pre, textarea, script, style) are untouched — so the formatted
-// markup renders identically to the original.
-function formatHtml(html) {
-    const out = [];
-    let indent = 0;
-    let line = '';
-    const pushLine = () => {
-        const trimmed = line.replace(/\s*\n\s*/g, ' ').trim();
-        if (trimmed) out.push('  '.repeat(indent) + trimmed);
-        line = '';
-    };
-
-    for (const tok of tokenizeHtml(html)) {
-        if (tok.type === 'text') {
-            line += tok.text;
-        } else if (tok.type === 'raw') {
-            pushLine();
-            out.push('  '.repeat(indent) + tok.openTag + tok.body + tok.closeTag);
-        } else if (HTML_BLOCK_TAGS.has(tok.name) || tok.kind === 'comment' || tok.kind === 'doctype') {
-            pushLine();
-            if (tok.kind === 'close') {
-                indent = Math.max(0, indent - 1);
-                out.push('  '.repeat(indent) + tok.text);
-            } else {
-                out.push('  '.repeat(indent) + tok.text);
-                if (tok.kind === 'open' && !HTML_VOID_TAGS.has(tok.name)) indent++;
-            }
-        } else {
-            line += tok.text;
-        }
-    }
-    pushLine();
-    return out.join('\n');
 }
 
 // Syntax-highlight a tag's markup: punctuation, tag name, attribute names and
@@ -1474,24 +958,13 @@ async function refreshHtmlPanel(preview, panel) {
 
     let rendered;
     try {
-        const nameTracker = { seen: new Map(), dupes: [] };
-        const dataWithTracker = Object.assign({}, preview.data, { _rlpTracker: nameTracker });
-        _currentWarnings = [];
-        rendered = await liquidEngine.render(preview.template, dataWithTracker);
+        const result = await renderWithDiagnostics(preview.template, preview.data, preview.templateUri);
+        rendered = result.rendered;
         preview.lastRenderedHtml = rendered;
-        if (!templateIsStale) {
-            for (const name of nameTracker.dupes) {
-                diagnostics.push(duplicateNameDiagnostic(name, nameTracker.seen.get(name) || [], preview.templateUri));
-            }
-            for (const warning of _currentWarnings) {
-                diagnostics.push(diagnostic('warning', 'Warning', warning.message, preview.templateUri, warning.location));
-            }
-        }
+        if (!templateIsStale) diagnostics.push(...result.diagnostics);
     } catch (err) {
         if (!templateIsStale) diagnostics.push(liquidDiagnostic('Render error', err, preview.templateUri));
         rendered = preview.lastRenderedHtml || '';
-    } finally {
-        _currentWarnings = null;
     }
 
     publishDiagnostics(preview, diagnostics);
@@ -1503,7 +976,8 @@ async function refreshHtmlPanel(preview, panel) {
 // view, so it reflects the selected data and field values. Kept separate from
 // the rendered document itself (see buildPreviewHtml).
 function buildHtmlPreviewChrome(rendered) {
-    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
+    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`
+        + `<button type="button" class="lp-action" data-lp-action="createTest" title="Add this template and data file to a test suite, with the output shown here as the expected output">Save as test&hellip;</button></div>`;
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
 <pre>${highlightHtml(formatHtml(rendered))}</pre>
@@ -1555,72 +1029,6 @@ function readCssContents(templateUri) {
     return findCssPaths(templateUri)
         .map(p => `/* ${path.basename(p)} */\n${fs.readFileSync(p, 'utf8')}`)
         .join('\n');
-}
-
-// One row of the problems pane: what went wrong and, wherever we can work it
-// out, which file, line and column to send the reader to. `location` is the
-// {line, col, snippet} shape produced by tokenLocation.
-function diagnostic(severity, title, message, file, location) {
-    return Object.assign(
-        { severity, title, message, file: file || null, line: null, col: null, snippet: '' },
-        location || {}
-    );
-}
-
-// A diagnostic from a LiquidJS error. Parse, tokenization and render errors all
-// carry the token they failed on, which is the position the reader wants.
-function liquidDiagnostic(title, err, file) {
-    return diagnostic('error', title, cleanLiquidMessage(err.message), file, tokenLocation(err.token));
-}
-
-// LiquidJS appends ", file:…, line:N, col:M" to its messages. The pane shows
-// that position as a link of its own, so it is stripped from the prose rather
-// than repeated in it.
-function cleanLiquidMessage(message) {
-    return String(message).replace(/,\s*(?:file:[^,]*,\s*)?line:\d+,\s*col:\d+\s*$/, '');
-}
-
-// A diagnostic from a failed JSON.parse of the data file. JSON.parse reports
-// the position inside the message text and the wording varies by Node version:
-// newer ones give "(line 3 column 5)", older ones only a character offset.
-// Both are turned into a real position, and the trailing position prose — now
-// shown properly — is trimmed off the message.
-function jsonDiagnostic(title, err, text, file) {
-    const message = String(err.message);
-    const lineColumn = /line (\d+) column (\d+)/.exec(message);
-    const position = /position (\d+)/.exec(message);
-    let line = null;
-    let col = null;
-    if (lineColumn) {
-        line = Number(lineColumn[1]);
-        col = Number(lineColumn[2]);
-    } else if (position) {
-        const before = text.slice(0, Number(position[1])).split('\n');
-        line = before.length;
-        col = before[before.length - 1].length + 1;
-    }
-    const location = line
-        ? { line, col, snippet: snippetOf(text.split('\n')[line - 1] || '') }
-        : null;
-    return diagnostic('error', title, message.replace(/\s*in JSON at position \d+.*$/, ''), file, location);
-}
-
-// Reporter keys the writer's answers by field name, so a repeated name silently
-// ties two fields together. Point at the repeat itself and name the line it
-// collides with, rather than listing the names and leaving the hunt to the
-// reader.
-function duplicateNameDiagnostic(name, uses, file) {
-    const located = uses.filter(Boolean);
-    const first = located[0];
-    const repeat = located[1] || first;
-    const elsewhere = first && repeat !== first ? ` It is first used on line ${first.line}.` : '';
-    return diagnostic(
-        'error',
-        'Duplicate field name',
-        `“${name}” is used ${pluralize(uses.length, 'time')} — every field needs its own name.${elsewhere}`,
-        file,
-        repeat
-    );
 }
 
 // Collapse identical repeats into a single row with a count. A warning raised
@@ -1739,10 +1147,14 @@ function toVsCodeDiagnostic(item) {
 }
 
 // Listen for the position a reader clicked in the problems pane and open it.
-function wirePreviewMessages(panel) {
+// `actions` maps a toolbar button's data-lp-action to what it does — the HTML
+// preview's "Save as test" is the only one so far.
+function wirePreviewMessages(panel, actions = {}) {
     panel.webview.onDidReceiveMessage(message => {
         if (message && message.type === 'reveal' && message.file) {
             revealInEditor(message.file, message.line, message.col);
+        } else if (message && message.type === 'action' && typeof actions[message.action] === 'function') {
+            actions[message.action]();
         }
     });
 }
@@ -1847,6 +1259,11 @@ ${rendered}
     // there is no extension to post to.
     const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
     document.addEventListener('click', event => {
+        const action = event.target && event.target.closest && event.target.closest('[data-lp-action]');
+        if (action && vscodeApi) {
+            vscodeApi.postMessage({ type: 'action', action: action.getAttribute('data-lp-action') });
+            return;
+        }
         const button = event.target && event.target.closest && event.target.closest('.diag-goto');
         if (!button || !vscodeApi) return;
         vscodeApi.postMessage({
@@ -1995,14 +1412,6 @@ ${rendered}
 </html>`;
 }
 
-function escapeHtml(str) {
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-}
-
 function createNewPreview(document) {
     let id = Date.now();
     let preview = {
@@ -2064,6 +1473,477 @@ async function updatePreviewDataFile(preview) {
     }
 }
 
+// ---- Template tests ---------------------------------------------------------
+//
+// *.liquidtest.json suites render templates against known data and check the
+// output (see template-tests.js, which does the work and builds the report).
+// This part connects them to the editor: commands to run them and open the
+// report, and — on VS Code 1.59 or newer, which added the Testing API — the
+// suites and their cases in the Test Explorer, with a diff view for a case
+// whose output changed. Older editors still get the commands and the report.
+
+// The most recent run, whichever way it was started, and the panel showing it.
+let _lastTestReport = null;
+let _testReportPanel = null;
+
+// Read a file the way the preview does: through VS Code, so unsaved edits to a
+// template, data file or expected output count.
+async function readWorkspaceText(file) {
+    const document = await vscode.workspace.openTextDocument(file);
+    return document.getText();
+}
+
+const templateTestDeps = { readText: readWorkspaceText, render: renderForTest, format: formatHtml };
+
+async function discoverSuiteFiles() {
+    const uris = await vscode.workspace.findFiles(templateTests.SUITE_GLOB, '**/node_modules/**');
+    return uris.map(uri => uri.fsPath).sort();
+}
+
+async function loadSuite(file) {
+    try {
+        return templateTests.parseSuite(await readWorkspaceText(file), file);
+    } catch (err) {
+        return { file, error: `Cannot read the suite: ${err.message}`, cases: [] };
+    }
+}
+
+// Run template tests and record the report. `selection` lists the suites to
+// run, each with the case names to limit it to (null for every case); without
+// one, every suite in the workspace runs. The selection is kept on the report
+// so Re-run repeats exactly the same run.
+async function runTemplateTests({ selection = null, isCancelled = () => false, onStart, onResult, onSuite } = {}) {
+    const startedAt = Date.now();
+    const chosen = selection || (await discoverSuiteFiles()).map(file => ({ file, only: null }));
+    const suites = [];
+    for (const { file, only } of chosen) {
+        if (isCancelled()) break;
+        const suite = await loadSuite(file);
+        if (onSuite) onSuite(suite);
+        suites.push(await templateTests.runSuite(suite, templateTestDeps, { only, isCancelled, onStart, onResult }));
+    }
+    const report = { startedAt, durationMs: Date.now() - startedAt, suites, selection: chosen };
+    _lastTestReport = report;
+    if (_testReportPanel) _testReportPanel.webview.html = buildTestReportDocument(report);
+    return report;
+}
+
+function relativePath(file) {
+    return vscode.workspace.asRelativePath ? vscode.workspace.asRelativePath(file) : file;
+}
+
+function buildTestReportDocument(report) {
+    return templateTests.buildReportHtml(report, { interactive: true, relative: relativePath });
+}
+
+// Open the report panel on `report`, or bring it forward if it is already open.
+function showTestReport(report) {
+    if (_testReportPanel) {
+        _testReportPanel.webview.html = buildTestReportDocument(report);
+        _testReportPanel.reveal(undefined, true);
+        return _testReportPanel;
+    }
+    const panel = vscode.window.createWebviewPanel(
+        'reporterLiquidTestReport',
+        'Liquid Test Report',
+        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+        { enableScripts: true, localResourceRoots: [] }
+    );
+    panel.webview.html = buildTestReportDocument(report);
+    panel.webview.onDidReceiveMessage(message => handleTestReportMessage(message));
+    panel.onDidDispose(() => { _testReportPanel = null; });
+    _testReportPanel = panel;
+    return panel;
+}
+
+async function handleTestReportMessage(message) {
+    if (!message) return;
+    if (message.type === 'reveal' && message.file) {
+        await revealInEditor(message.file, message.line, message.col);
+    } else if (message.type === 'rerun') {
+        await runTemplateTestsWithProgress(_lastTestReport && _lastTestReport.selection);
+    } else if (message.type === 'save' && _lastTestReport) {
+        await saveTestReport(_lastTestReport);
+    } else if (message.type === 'accept' && _lastTestReport) {
+        await acceptActualOutput(_lastTestReport);
+    }
+}
+
+async function runTemplateTestsWithProgress(selection) {
+    const report = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Running Liquid template tests', cancellable: true },
+        (progress, token) => runTemplateTests({
+            selection,
+            isCancelled: () => token.isCancellationRequested,
+            onStart: testCase => progress.report({ message: testCase.name })
+        })
+    );
+    showTestReport(report);
+    return report;
+}
+
+// Write the report as a standalone HTML file — for attaching to a ticket or
+// keeping alongside a release. Everything it needs is inline.
+async function saveTestReport(report) {
+    const folders = vscode.workspace.workspaceFolders || [];
+    const defaultUri = folders.length
+        ? vscode.Uri.file(path.join(folders[0].uri.fsPath, 'liquid-test-report.html'))
+        : undefined;
+    const target = await vscode.window.showSaveDialog({ defaultUri, filters: { HTML: ['html'] } });
+    if (!target) return null;
+    await require('fs').promises.writeFile(target.fsPath, templateTests.buildReportHtml(report, { relative: relativePath }), 'utf8');
+    vscode.window.showInformationMessage(`Test report saved to ${relativePath(target.fsPath)}`);
+    return target.fsPath;
+}
+
+// Snapshot workflow: write each case's actual output to its expected file,
+// where that file is missing or differs, then re-run. Overwrites files, so it
+// always asks first and names how many.
+async function acceptActualOutput(report, { confirm = true } = {}) {
+    const results = templateTests.acceptableResults(report);
+    if (results.length === 0) {
+        vscode.window.showInformationMessage('No expected output to update: every case with an expected file already matches.');
+        return [];
+    }
+    if (confirm) {
+        const names = results.slice(0, 5).map(r => relativePath(r.expectedFile)).join(', ') + (results.length > 5 ? ', …' : '');
+        const choice = await vscode.window.showWarningMessage(
+            `Overwrite ${pluralize(results.length, 'expected output file')} with the actual output from the last run? (${names})`,
+            { modal: true },
+            'Overwrite'
+        );
+        if (choice !== 'Overwrite') return [];
+    }
+    const fs = require('fs');
+    for (const r of results) {
+        await fs.promises.mkdir(path.dirname(r.expectedFile), { recursive: true });
+        await fs.promises.writeFile(r.expectedFile, r.actual, 'utf8');
+    }
+    await runTemplateTests({ selection: report.selection });
+    if (_testReportPanel) showTestReport(_lastTestReport);
+    return results.map(r => r.expectedFile);
+}
+
+function registerTemplateTests(context) {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.runTemplateTests', () => runTemplateTestsWithProgress(null)));
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.showTemplateTestReport', () => {
+        return _lastTestReport ? showTestReport(_lastTestReport) : runTemplateTestsWithProgress(null);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.createTemplateTests', uri => createTestsFromDataFiles(uri)));
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.acceptTemplateTestOutput', async () => {
+        if (!_lastTestReport) await runTemplateTests();
+        return acceptActualOutput(_lastTestReport);
+    }));
+    registerTestController(context);
+}
+
+// The Test Explorer side. Suites are top-level items keyed by file path; cases
+// are their children, keyed "<file>::<name>" and placed on the line of the
+// case's "name" so the editor shows run buttons beside each one.
+function registerTestController(context) {
+    if (!vscode.tests || typeof vscode.tests.createTestController !== 'function') return null;
+
+    const controller = vscode.tests.createTestController('reporterLiquidTemplateTests', 'Reporter Liquid templates');
+    context.subscriptions.push(controller);
+
+    const caseId = (file, name) => `${file}::${name}`;
+
+    const syncSuite = async file => {
+        const suite = await loadSuite(file);
+        const uri = vscode.Uri.file(file);
+        let item = controller.items.get(file);
+        if (!item) {
+            item = controller.createTestItem(file, relativePath(file), uri);
+            controller.items.add(item);
+        }
+        item.error = suite.error || undefined;
+        item.children.replace(suite.cases.map(c => {
+            const child = controller.createTestItem(caseId(file, c.name), c.name, uri);
+            child.range = new vscode.Range(c.line - 1, 0, c.line - 1, 0);
+            return child;
+        }));
+        return item;
+    };
+
+    const syncAll = async () => {
+        const files = await discoverSuiteFiles();
+        const keep = new Set(files);
+        const stale = [];
+        controller.items.forEach(item => { if (!keep.has(item.id)) stale.push(item.id); });
+        for (const id of stale) controller.items.delete(id);
+        for (const file of files) await syncSuite(file);
+    };
+
+    controller.resolveHandler = async item => { if (!item) await syncAll(); };
+    // Newer editors show a refresh button when this is set; older ones ignore it.
+    controller.refreshHandler = () => syncAll();
+
+    const watcher = vscode.workspace.createFileSystemWatcher(templateTests.SUITE_GLOB);
+    context.subscriptions.push(watcher);
+    watcher.onDidCreate(uri => syncSuite(uri.fsPath));
+    watcher.onDidChange(uri => syncSuite(uri.fsPath));
+    watcher.onDidDelete(uri => controller.items.delete(uri.fsPath));
+
+    controller.createRunProfile('Run', vscode.TestRunProfileKind.Run, async (request, token) => {
+        await syncAll();
+
+        // Turn the request into the file → case-names selection the runner
+        // takes, dropping anything the request excludes.
+        const excluded = new Set((request.exclude || []).map(item => item.id));
+        const wanted = new Map();
+        const addCase = (suiteItem, child) => {
+            if (excluded.has(child.id)) return;
+            if (!wanted.has(suiteItem.id)) wanted.set(suiteItem.id, new Set());
+            wanted.get(suiteItem.id).add(child.label);
+        };
+        const addSuite = suiteItem => {
+            if (excluded.has(suiteItem.id)) return;
+            if (!wanted.has(suiteItem.id)) wanted.set(suiteItem.id, new Set());
+            suiteItem.children.forEach(child => addCase(suiteItem, child));
+        };
+        if (request.include) {
+            for (const item of request.include) {
+                // Items are re-created on every sync, so look the current one up
+                // by id rather than trusting the object the request carries.
+                if (item.parent) {
+                    const suiteItem = controller.items.get(item.parent.id);
+                    const child = suiteItem && suiteItem.children.get(item.id);
+                    if (child) addCase(suiteItem, child);
+                } else {
+                    const suiteItem = controller.items.get(item.id);
+                    if (suiteItem) addSuite(suiteItem);
+                }
+            }
+        } else {
+            controller.items.forEach(addSuite);
+        }
+
+        const run = controller.createTestRun(request);
+        const itemFor = (file, name) => {
+            const suiteItem = controller.items.get(file);
+            return suiteItem && suiteItem.children.get(caseId(file, name));
+        };
+        for (const [file, names] of wanted) {
+            for (const name of names) {
+                const item = itemFor(file, name);
+                if (item) run.enqueued(item);
+            }
+        }
+
+        await runTemplateTests({
+            selection: Array.from(wanted, ([file, only]) => ({ file, only })),
+            isCancelled: () => token.isCancellationRequested,
+            onSuite: suite => {
+                const suiteItem = controller.items.get(suite.file);
+                if (suite.error && suiteItem) run.errored(suiteItem, new vscode.TestMessage(suite.error));
+            },
+            onStart: testCase => {
+                const item = itemFor(testCase.suiteFile, testCase.name);
+                if (item) run.started(item);
+            },
+            onResult: (testCase, result) => {
+                const item = itemFor(testCase.suiteFile, testCase.name);
+                if (!item) return;
+                if (result.status === 'passed') run.passed(item, result.durationMs);
+                else if (result.status === 'failed') run.failed(item, toTestMessages(result), result.durationMs);
+                else run.errored(item, toTestMessages(result), result.durationMs);
+            }
+        });
+        run.end();
+    }, true);
+
+    return controller;
+}
+
+// One Test Explorer message per failure. An output mismatch becomes a diff
+// message, which the editor opens in its own diff view; everything else points
+// at the file and line the failure names, or at the case itself.
+function toTestMessages(result) {
+    return result.failures.map(failure => {
+        const message = failure.kind === 'mismatch' && result.expected !== null
+            ? vscode.TestMessage.diff(failure.message, result.expected, result.actual)
+            : new vscode.TestMessage(failure.message);
+        const file = failure.kind === 'mismatch' ? result.suiteFile : (failure.file || result.suiteFile);
+        const line = failure.kind === 'mismatch' ? result.line : (failure.file ? (failure.line || 1) : result.line);
+        message.location = new vscode.Location(vscode.Uri.file(file), new vscode.Position(Math.max(0, line - 1), 0));
+        return message;
+    });
+}
+
+// ---- Creating tests from known cases ------------------------------------------
+//
+// A known case is a template and a data file whose rendered output someone has
+// looked at and knows to be right. These turn such cases into test cases: the
+// output is rendered now, frozen as the expected file, and the case added to a
+// suite (beside the template unless one exists already) — then the suite is run,
+// so the reader sees the new cases pass straight away.
+
+// Save the template and data files if they have unsaved edits. A case records
+// paths, so an expected output rendered from an unsaved buffer would describe
+// files that aren't on disk, and the test would fail on its first real run.
+async function saveDirtyInputs(files) {
+    const open = vscode.workspace.textDocuments || [];
+    const dirty = open.filter(d => d.isDirty && files.includes(d.fileName));
+    if (dirty.length === 0) return true;
+    const choice = await vscode.window.showWarningMessage(
+        `${dirty.map(d => path.basename(d.fileName)).join(', ')} ${dirty.length === 1 ? 'has' : 'have'} unsaved changes. The test records the files as saved on disk.`,
+        { modal: true },
+        'Save and continue'
+    );
+    if (choice !== 'Save and continue') return false;
+    for (const document of dirty) await document.save();
+    return true;
+}
+
+// Add a case for each source to the suite beside `templateFile` (or
+// `suiteFile`). `sources` are { name, dataFile } or { name, data }. Returns
+// what was added and what was left out and why, or null if the reader
+// cancelled.
+async function createTestsFromCases(templateFile, sources, { suiteFile = null } = {}) {
+    const fs = require('fs');
+    suiteFile = suiteFile || templateTests.defaultSuiteFile(templateFile);
+
+    if (!await saveDirtyInputs([templateFile].concat(sources.map(s => s.dataFile).filter(Boolean)))) return null;
+
+    let templateText;
+    try {
+        templateText = await readWorkspaceText(templateFile);
+    } catch (err) {
+        vscode.window.showErrorMessage(`Cannot read ${path.basename(templateFile)}: ${err.message}`);
+        return null;
+    }
+
+    // Render every case first. One that fails to render, or that breaks a rule
+    // every case is held to (a duplicate field name), would be a test that
+    // fails the moment it is made, so it is left out and the reason reported.
+    const rendered = [];
+    const rejected = [];
+    for (const source of sources) {
+        let data = source.data || {};
+        if (source.dataFile) {
+            try {
+                data = JSON.parse(await readWorkspaceText(source.dataFile));
+            } catch (err) {
+                rejected.push({ name: source.name, reason: `the data file is not valid JSON (${err.message})` });
+                continue;
+            }
+        }
+        const { html, diagnostics } = await renderForTest(templateText, data, templateFile);
+        const error = diagnostics.find(d => d.severity !== 'warning');
+        if (html === null || error) {
+            rejected.push({ name: source.name, reason: error ? `${error.title}: ${error.message}` : 'the template did not render' });
+            continue;
+        }
+        rendered.push(Object.assign({}, source, { output: html, warnings: diagnostics.length }));
+    }
+
+    // Warnings mean a filter met missing data. Freezing that output as
+    // "expected" would bless the gap, so the reader decides, per run.
+    const warned = rendered.filter(r => r.warnings > 0);
+    let entries = rendered;
+    if (warned.length) {
+        const choice = await vscode.window.showWarningMessage(
+            `${pluralize(warned.length, 'case')} (${warned.map(r => r.name).join(', ')}) ${warned.length === 1 ? 'makes' : 'make'} filters warn about missing data. `
+            + 'Saving them as they are allows warnings in those cases, so a test will no longer catch that data going missing.',
+            { modal: true },
+            'Skip those cases',
+            'Allow warnings'
+        );
+        if (choice === undefined) return null;
+        if (choice === 'Skip those cases') {
+            for (const r of warned) rejected.push({ name: r.name, reason: 'filters warned about missing data' });
+            entries = rendered.filter(r => r.warnings === 0);
+        } else {
+            entries = rendered.map(r => Object.assign({}, r, { allowWarnings: r.warnings > 0 }));
+        }
+    }
+
+    let suiteText = null;
+    try {
+        suiteText = await readWorkspaceText(suiteFile);
+    } catch (err) {
+        // No suite yet: planNewCases starts one.
+    }
+    let plan;
+    try {
+        plan = templateTests.planNewCases({ suiteFile, suiteText, template: templateFile, entries, exists: fs.existsSync });
+    } catch (err) {
+        vscode.window.showErrorMessage(err.message);
+        return null;
+    }
+    const skipped = rejected.concat(plan.skipped);
+
+    if (plan.added.length === 0) {
+        vscode.window.showWarningMessage(`No test cases were created. ${skipped.map(s => `${s.name}: ${s.reason}`).join('; ')}`);
+        return { suiteFile, added: [], skipped };
+    }
+    if (!await saveDirtyInputs([suiteFile])) return null;
+
+    for (const write of plan.writes) {
+        await fs.promises.mkdir(path.dirname(write.file), { recursive: true });
+        await fs.promises.writeFile(write.file, write.text, 'utf8');
+    }
+    await fs.promises.writeFile(suiteFile, plan.suiteText, 'utf8');
+
+    const leftOut = skipped.length ? ` Left out: ${skipped.map(s => `${s.name} (${s.reason})`).join('; ')}.` : '';
+    vscode.window.showInformationMessage(`Added ${pluralize(plan.added.length, 'test case')} to ${relativePath(suiteFile)}. Review the expected output before committing it.${leftOut}`);
+
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(suiteFile), { preview: false, viewColumn: vscode.ViewColumn.One });
+    const report = await runTemplateTests({ selection: [{ file: suiteFile, only: new Set(plan.added) }] });
+    showTestReport(report);
+    return { suiteFile, added: plan.added, skipped, report };
+}
+
+// The HTML preview's "Save as test": this template, this data file, and the
+// output currently on screen — which the reader has just looked at.
+async function saveHtmlPreviewAsTest(preview) {
+    const suggested = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : 'no data';
+    const name = await vscode.window.showInputBox({
+        prompt: `Name the test case for ${path.basename(preview.templateUri)}`,
+        value: suggested,
+        validateInput: value => (value && value.trim() ? null : 'A test case needs a name.')
+    });
+    if (!name) return null;
+    const source = preview.dataUri ? { name: name.trim(), dataFile: preview.dataUri } : { name: name.trim(), data: {} };
+    return createTestsFromCases(preview.templateUri, [source]);
+}
+
+// "Create Tests from Data Files…": one template, any number of data files, a
+// case each. Starts from the file right-clicked in the Explorer, the active
+// editor's template, or a pick from the workspace's templates.
+async function createTestsFromDataFiles(uri) {
+    let templateFile = uri && uri.fsPath && /\.liquid$/i.test(uri.fsPath) ? uri.fsPath : null;
+    const active = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+    if (!templateFile && active && /\.liquid$/i.test(active.fileName)) templateFile = active.fileName;
+    if (!templateFile) {
+        const templates = await vscode.workspace.findFiles('**/*.liquid', '**/node_modules/**');
+        const picked = await vscode.window.showQuickPick(
+            templates.map(t => ({ label: path.basename(t.fsPath), description: relativePath(t.fsPath), value: t.fsPath })),
+            { placeHolder: 'Choose the template to create tests for' }
+        );
+        if (!picked) return null;
+        templateFile = picked.value;
+    }
+
+    const suiteFile = templateTests.defaultSuiteFile(templateFile);
+    const jsonFiles = (await vscode.workspace.findFiles('**/*.json', '**/node_modules/**'))
+        .map(u => u.fsPath)
+        .filter(f => !f.endsWith('.liquidtest.json') && !/(^|[\\/])(package|package-lock|tsconfig|jsconfig)\.json$/.test(f))
+        .sort();
+    if (jsonFiles.length === 0) {
+        vscode.window.showWarningMessage('No .json data files found in the workspace.');
+        return null;
+    }
+    const picked = await vscode.window.showQuickPick(
+        jsonFiles.map(f => ({ label: path.basename(f), description: relativePath(f), value: f })),
+        { canPickMany: true, placeHolder: `Choose the data files whose output from ${path.basename(templateFile)} you know is right — one test case each` }
+    );
+    if (!picked || picked.length === 0) return null;
+
+    const sources = picked.map(p => ({ name: path.basename(p.value, path.extname(p.value)), dataFile: p.value }));
+    return createTestsFromCases(templateFile, sources, { suiteFile });
+}
+
 function deactivate() { }
 
 module.exports = {
@@ -2075,11 +1955,14 @@ module.exports = {
 // test suite (see test/README.md), which drives the preview refreshes against a
 // stubbed vscode module and checks the HTML they produce.
 Object.assign(module.exports, {
+    acceptActualOutput,
     annotateLiquid,
     buildErrorPaneHtml,
     buildFullPreviewContent,
     buildPreviewHtml,
     cleanLiquidMessage,
+    createTestsFromCases,
+    createTestsFromDataFiles,
     clearPreviewDiagnostics,
     dedupeDiagnostics,
     formatHtml,
@@ -2093,8 +1976,13 @@ Object.assign(module.exports, {
     refreshHtmlPanel,
     registerCustomFilters,
     registerCustomTags,
+    renderForTest,
+    runTemplateTests,
+    saveHtmlPreviewAsTest,
+    showTestReport,
     snippetOf,
     stripLiquidFromHtmlTags,
     tokenLocation,
+    toTestMessages,
     wirePreviewMessages
 });

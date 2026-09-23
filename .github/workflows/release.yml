@@ -1,0 +1,63 @@
+name: Release
+
+# Merging a version bump into main releases it: the commit is tagged
+# v<version>, and a GitHub release is published with that version's
+# CHANGELOG.md notes and the committed .vsix attached. A push that doesn't
+# change the version finds its tag already there and does nothing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two quick merges must not race to create the same release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            echo "v$version is already released; nothing to do."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.version.outputs.exists != 'true'
+        with:
+          node-version: 22
+          cache: npm
+
+      # The same gates as every push: don't release a build that fails its
+      # tests or a .vsix that isn't built from this source.
+      - name: Check the build
+        if: steps.version.outputs.exists != 'true'
+        run: |
+          npm ci
+          npm test
+          npm run check:package
+
+      - name: Publish the release
+        if: steps.version.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node scripts/release-notes.js "$VERSION" > release-notes.md
+          gh release create "v$VERSION" "reporter-liquid-preview-$VERSION.vsix" \
+            --target "$GITHUB_SHA" \
+            --title "v$VERSION" \
+            --notes-file release-notes.md
