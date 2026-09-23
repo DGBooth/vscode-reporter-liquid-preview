@@ -178,7 +178,7 @@ See [`examples/template-tests`](examples/template-tests) for a working suite.
 Tests that only run when someone remembers to open the editor get skipped. `liquid-test` runs the same suites from the command line, through the same engine and the same checks as the editor, so a case passes in CI exactly when it passes in VS Code. The only difference: the editor includes unsaved edits, and `liquid-test` reads files as saved on disk.
 
 ```
-npx github:DGBooth/vscode-reporter-liquid-preview#<tag or commit> [options] [paths...]
+npx github:DGBooth/vscode-reporter-liquid-preview#v1.4.0 [options] [paths...]
 ```
 
 With no paths it searches the current folder recursively for `*.liquidtest.json`, skipping `node_modules` and hidden folders. It needs Node 20 or newer.
@@ -198,7 +198,7 @@ In a GitHub Actions workflow in your templates repository:
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#<commit-sha> --report liquid-test-report.html --junit liquid-tests.xml
+- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.4.0 --report liquid-test-report.html --junit liquid-tests.xml
 - uses: actions/upload-artifact@v4
   if: always()
   with:
@@ -206,7 +206,7 @@ In a GitHub Actions workflow in your templates repository:
     path: liquid-test-report.html
 ```
 
-Pin the reference to the version of the extension your team has installed: a commit SHA, or a tag once releases are tagged (e.g. `#v1.4.0`). The engine changes along with the extension, and an unpinned runner can disagree with the editor. `if: always()` keeps the report when the tests fail, which is when you need it.
+Pin the tag to the version of the extension you have installed (see [Releases](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases)). The engine changes along with the extension, and an unpinned runner can disagree with the editor. `if: always()` keeps the report when the tests fail, which is when you need it.
 
 ## Usage
 
@@ -251,6 +251,19 @@ point from whatever the checkout looks like.
 
 Both checks run on every push and pull request via GitHub Actions, the test
 suite (and the example template suite) across all three Node versions.
+
+## Releasing
+
+Every version is a tagged GitHub release with its notes and `.vsix` attached. [CHANGELOG.md](CHANGELOG.md) lists them all.
+
+1. Bump `version` in `package.json` and `package-lock.json`.
+2. Add a `## [<version>] - YYYY-MM-DD` section to the top of `CHANGELOG.md`. `npm test` fails until the current version has one.
+3. `npm run package` to rebuild the `.vsix`, and commit it with the rest.
+4. Merge into `main`. The Release workflow runs the tests and the package check, tags the commit `v<version>`, and publishes the release with that version's changelog section as its notes and the `.vsix` attached. A merge that doesn't change the version does nothing.
+
+To install a release, download its `.vsix` and run **Extensions: Install from VSIX…**.
+
+`node scripts/release-notes.js [version]` prints the notes a release will get.
 
 ## Credits
 
