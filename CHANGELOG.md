@@ -6,6 +6,10 @@ version's notes (see [Releasing](README.md#releasing)).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions before 1.2.0 were written up from the commit history after the fact.
+Their tags were added then too: each marks the commit that built the final
+`.vsix` published under that version number, and its notes describe that
+build. Early versions were sometimes rebuilt with new changes after the
+version bump, so a version can include work committed before its bump.
 
 ## [1.4.0] - 2026-09-23
 
@@ -142,15 +146,15 @@ Versions before 1.2.0 were written up from the commit history after the fact.
 ## [1.0.7] - 2026-06-09
 
 ### Fixed
-- The packaged extension includes liquidjs again. Without it, activation failed and every command reported "command not found".
+- Packaging no longer drops liquidjs from the extension. Without it, activation failed and every command reported "command not found". Earlier builds had to be rebuilt by hand to include it.
 
-### Changed
-- Unchecked optional blocks and unselected choices are shown again (reverts 1.0.5).
-
-## [1.0.6] - 2026-06-02
+## [1.0.6] - 2026-06-09
 
 ### Added
 - `sort` and `sort_natural` overrides with null-safe sorting and property-key support.
+
+### Changed
+- Unchecked optional blocks and unselected choices are shown again (reverts 1.0.5).
 
 ## [1.0.5] - 2026-04-30
 
@@ -172,21 +176,27 @@ Versions before 1.2.0 were written up from the commit history after the fact.
 ### Changed
 - `slice` on a missing variable is a warning, not a blocking error.
 
+### Fixed
+- The package includes liquidjs, which the extension needs to run.
+
 ## [1.0.1] - 2026-04-27
+
+### Changed
+- No changes from the final 1.0.0 build; the same code under a new version number.
+
+## [1.0.0] - 2026-04-23
 
 ### Added
 - Duplicate field name detection in the HTML preview.
-- Styling for editor, optional and choice output in the HTML preview.
+- Styling for editor, optional and choice output in the HTML preview, with each choice option boxed.
 
 ### Fixed
 - `money` adds comma separators to numbers of 1,000 or more.
 
-## [1.0.0] - 2026-03-24
+## [0.9.0] - 2026-03-24
 
 ### Added
-- Full HTML Preview: the template with its CSS and Liquid constructs shown as styled boxes, including the `optional`, `editor` and `choice` tags.
-
-## [0.9.0] - 2026-03-19
-
-### Added
-- First release as Reporter Liquid Preview: HTML preview in a webview, the `money` filter, and errors shown in a pane below the last successful render.
+- First release as Reporter Liquid Preview.
+- HTML preview in a webview. Errors are shown in a pane below the last successful render.
+- Full HTML Preview: the template with its CSS, and Liquid constructs shown as styled boxes, including the `optional`, `editor` and `choice` tags.
+- `money` filter.
