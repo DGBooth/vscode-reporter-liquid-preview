@@ -8,3 +8,4 @@ test/
 .gitignore
 .vscodeignore
 package-lock.json
+examples/

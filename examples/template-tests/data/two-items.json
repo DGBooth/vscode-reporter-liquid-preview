@@ -1,0 +1,9 @@
+{
+  "customer": { "name": "Ada Lovelace" },
+  "items": [
+    { "description": "Analytical engine service", "price": 1250.5 },
+    { "description": "Punched cards", "price": 42 }
+  ],
+  "notes": "Net 30",
+  "fields": { "includeNotes": "true" }
+}

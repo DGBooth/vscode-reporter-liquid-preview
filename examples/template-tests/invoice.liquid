@@ -1,0 +1,11 @@
+<h1>Invoice for {{ customer.name }}</h1>
+{% if items.size > 0 %}
+<table>
+  {% for item in items %}
+  <tr><td>{{ item.description }}</td><td>{{ item.price | money }}</td></tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No items.</p>
+{% endif %}
+{% optional "includeNotes" %}<p>Notes: {{ notes }}</p>{% endoptional %}

@@ -1,6 +1,7 @@
 const path = require('path');
 const vscode = require('vscode');
 const liquid = require('liquidjs');
+const templateTests = require('./template-tests');
 const liquidEngine = new liquid();
 
 // Accumulates warnings during a single render pass. Set to [] before rendering, null otherwise.
@@ -622,6 +623,8 @@ function activate(context) {
     dataStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
     dataStatusBarItem.show();
     context.subscriptions.push(dataStatusBarItem);
+
+    registerTemplateTests(context);
 }
 
 // Index just past the Liquid tag or expression starting at `i`, or the end of
@@ -1474,28 +1477,52 @@ async function refreshHtmlPanel(preview, panel) {
 
     let rendered;
     try {
-        const nameTracker = { seen: new Map(), dupes: [] };
-        const dataWithTracker = Object.assign({}, preview.data, { _rlpTracker: nameTracker });
-        _currentWarnings = [];
-        rendered = await liquidEngine.render(preview.template, dataWithTracker);
+        const result = await renderWithDiagnostics(preview.template, preview.data, preview.templateUri);
+        rendered = result.rendered;
         preview.lastRenderedHtml = rendered;
-        if (!templateIsStale) {
-            for (const name of nameTracker.dupes) {
-                diagnostics.push(duplicateNameDiagnostic(name, nameTracker.seen.get(name) || [], preview.templateUri));
-            }
-            for (const warning of _currentWarnings) {
-                diagnostics.push(diagnostic('warning', 'Warning', warning.message, preview.templateUri, warning.location));
-            }
-        }
+        if (!templateIsStale) diagnostics.push(...result.diagnostics);
     } catch (err) {
         if (!templateIsStale) diagnostics.push(liquidDiagnostic('Render error', err, preview.templateUri));
         rendered = preview.lastRenderedHtml || '';
-    } finally {
-        _currentWarnings = null;
     }
 
     publishDiagnostics(preview, diagnostics);
     updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles);
+}
+
+// Renders run one at a time across the whole extension. Warnings are gathered
+// in the module-level _currentWarnings, and a render awaits between templates,
+// so two in flight at once — a preview refreshing on a keystroke while a test
+// run is going, or two previews — would each collect the other's warnings.
+let _renderQueue = Promise.resolve();
+
+// Render a parsed template the way the HTML preview does, and hand back the
+// output with the problems it raised: repeated field names and filter
+// warnings, each located. A render error is thrown, not reported, so callers
+// can decide what to show instead. Shared by the preview and the template
+// tests, so a test sees exactly what the preview would.
+function renderWithDiagnostics(template, data, file) {
+    const run = async () => {
+        const nameTracker = { seen: new Map(), dupes: [] };
+        const dataWithTracker = Object.assign({}, data, { _rlpTracker: nameTracker });
+        _currentWarnings = [];
+        try {
+            const rendered = await liquidEngine.render(template, dataWithTracker);
+            const diagnostics = [];
+            for (const name of nameTracker.dupes) {
+                diagnostics.push(duplicateNameDiagnostic(name, nameTracker.seen.get(name) || [], file));
+            }
+            for (const warning of _currentWarnings) {
+                diagnostics.push(diagnostic('warning', 'Warning', warning.message, file, warning.location));
+            }
+            return { rendered, diagnostics };
+        } finally {
+            _currentWarnings = null;
+        }
+    };
+    const next = _renderQueue.then(run, run);
+    _renderQueue = next.catch(() => { });
+    return next;
 }
 
 // The HTML Preview's own UI: a toolbar with a source toggle and a hidden
@@ -2064,6 +2091,320 @@ async function updatePreviewDataFile(preview) {
     }
 }
 
+// ---- Template tests ---------------------------------------------------------
+//
+// *.liquidtest.json suites render templates against known data and check the
+// output (see template-tests.js, which does the work and builds the report).
+// This part connects them to the editor: commands to run them and open the
+// report, and — on VS Code 1.59 or newer, which added the Testing API — the
+// suites and their cases in the Test Explorer, with a diff view for a case
+// whose output changed. Older editors still get the commands and the report.
+
+// The most recent run, whichever way it was started, and the panel showing it.
+let _lastTestReport = null;
+let _testReportPanel = null;
+
+// Read a file the way the preview does: through VS Code, so unsaved edits to a
+// template, data file or expected output count.
+async function readWorkspaceText(file) {
+    const document = await vscode.workspace.openTextDocument(file);
+    return document.getText();
+}
+
+// Parse and render template text for a test case. Never throws: a template
+// that fails to parse or render comes back with no html and the located error
+// among its diagnostics.
+async function renderForTest(text, data, file) {
+    let template;
+    try {
+        template = liquidEngine.parse(text);
+    } catch (err) {
+        return { html: null, diagnostics: [liquidDiagnostic('Template error', err, file)] };
+    }
+    try {
+        const { rendered, diagnostics } = await renderWithDiagnostics(template, data, file);
+        return { html: rendered, diagnostics };
+    } catch (err) {
+        return { html: null, diagnostics: [liquidDiagnostic('Render error', err, file)] };
+    }
+}
+
+const templateTestDeps = { readText: readWorkspaceText, render: renderForTest, format: formatHtml };
+
+async function discoverSuiteFiles() {
+    const uris = await vscode.workspace.findFiles(templateTests.SUITE_GLOB, '**/node_modules/**');
+    return uris.map(uri => uri.fsPath).sort();
+}
+
+async function loadSuite(file) {
+    try {
+        return templateTests.parseSuite(await readWorkspaceText(file), file);
+    } catch (err) {
+        return { file, error: `Cannot read the suite: ${err.message}`, cases: [] };
+    }
+}
+
+// Run template tests and record the report. `selection` lists the suites to
+// run, each with the case names to limit it to (null for every case); without
+// one, every suite in the workspace runs. The selection is kept on the report
+// so Re-run repeats exactly the same run.
+async function runTemplateTests({ selection = null, isCancelled = () => false, onStart, onResult, onSuite } = {}) {
+    const startedAt = Date.now();
+    const chosen = selection || (await discoverSuiteFiles()).map(file => ({ file, only: null }));
+    const suites = [];
+    for (const { file, only } of chosen) {
+        if (isCancelled()) break;
+        const suite = await loadSuite(file);
+        if (onSuite) onSuite(suite);
+        suites.push(await templateTests.runSuite(suite, templateTestDeps, { only, isCancelled, onStart, onResult }));
+    }
+    const report = { startedAt, durationMs: Date.now() - startedAt, suites, selection: chosen };
+    _lastTestReport = report;
+    if (_testReportPanel) _testReportPanel.webview.html = buildTestReportDocument(report);
+    return report;
+}
+
+function relativePath(file) {
+    return vscode.workspace.asRelativePath ? vscode.workspace.asRelativePath(file) : file;
+}
+
+function buildTestReportDocument(report) {
+    return templateTests.buildReportHtml(report, { interactive: true, relative: relativePath });
+}
+
+// Open the report panel on `report`, or bring it forward if it is already open.
+function showTestReport(report) {
+    if (_testReportPanel) {
+        _testReportPanel.webview.html = buildTestReportDocument(report);
+        _testReportPanel.reveal(undefined, true);
+        return _testReportPanel;
+    }
+    const panel = vscode.window.createWebviewPanel(
+        'reporterLiquidTestReport',
+        'Liquid Test Report',
+        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+        { enableScripts: true, localResourceRoots: [] }
+    );
+    panel.webview.html = buildTestReportDocument(report);
+    panel.webview.onDidReceiveMessage(message => handleTestReportMessage(message));
+    panel.onDidDispose(() => { _testReportPanel = null; });
+    _testReportPanel = panel;
+    return panel;
+}
+
+async function handleTestReportMessage(message) {
+    if (!message) return;
+    if (message.type === 'reveal' && message.file) {
+        await revealInEditor(message.file, message.line, message.col);
+    } else if (message.type === 'rerun') {
+        await runTemplateTestsWithProgress(_lastTestReport && _lastTestReport.selection);
+    } else if (message.type === 'save' && _lastTestReport) {
+        await saveTestReport(_lastTestReport);
+    } else if (message.type === 'accept' && _lastTestReport) {
+        await acceptActualOutput(_lastTestReport);
+    }
+}
+
+async function runTemplateTestsWithProgress(selection) {
+    const report = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Running Liquid template tests', cancellable: true },
+        (progress, token) => runTemplateTests({
+            selection,
+            isCancelled: () => token.isCancellationRequested,
+            onStart: testCase => progress.report({ message: testCase.name })
+        })
+    );
+    showTestReport(report);
+    return report;
+}
+
+// Write the report as a standalone HTML file — for attaching to a ticket or
+// keeping alongside a release. Everything it needs is inline.
+async function saveTestReport(report) {
+    const folders = vscode.workspace.workspaceFolders || [];
+    const defaultUri = folders.length
+        ? vscode.Uri.file(path.join(folders[0].uri.fsPath, 'liquid-test-report.html'))
+        : undefined;
+    const target = await vscode.window.showSaveDialog({ defaultUri, filters: { HTML: ['html'] } });
+    if (!target) return null;
+    await require('fs').promises.writeFile(target.fsPath, templateTests.buildReportHtml(report, { relative: relativePath }), 'utf8');
+    vscode.window.showInformationMessage(`Test report saved to ${relativePath(target.fsPath)}`);
+    return target.fsPath;
+}
+
+// Snapshot workflow: write each case's actual output to its expected file,
+// where that file is missing or differs, then re-run. Overwrites files, so it
+// always asks first and names how many.
+async function acceptActualOutput(report, { confirm = true } = {}) {
+    const results = templateTests.acceptableResults(report);
+    if (results.length === 0) {
+        vscode.window.showInformationMessage('No expected output to update: every case with an expected file already matches.');
+        return [];
+    }
+    if (confirm) {
+        const names = results.slice(0, 5).map(r => relativePath(r.expectedFile)).join(', ') + (results.length > 5 ? ', …' : '');
+        const choice = await vscode.window.showWarningMessage(
+            `Overwrite ${pluralize(results.length, 'expected output file')} with the actual output from the last run? (${names})`,
+            { modal: true },
+            'Overwrite'
+        );
+        if (choice !== 'Overwrite') return [];
+    }
+    const fs = require('fs');
+    for (const r of results) {
+        await fs.promises.mkdir(path.dirname(r.expectedFile), { recursive: true });
+        await fs.promises.writeFile(r.expectedFile, r.actual, 'utf8');
+    }
+    await runTemplateTests({ selection: report.selection });
+    if (_testReportPanel) showTestReport(_lastTestReport);
+    return results.map(r => r.expectedFile);
+}
+
+function registerTemplateTests(context) {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.runTemplateTests', () => runTemplateTestsWithProgress(null)));
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.showTemplateTestReport', () => {
+        return _lastTestReport ? showTestReport(_lastTestReport) : runTemplateTestsWithProgress(null);
+    }));
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.acceptTemplateTestOutput', async () => {
+        if (!_lastTestReport) await runTemplateTests();
+        return acceptActualOutput(_lastTestReport);
+    }));
+    registerTestController(context);
+}
+
+// The Test Explorer side. Suites are top-level items keyed by file path; cases
+// are their children, keyed "<file>::<name>" and placed on the line of the
+// case's "name" so the editor shows run buttons beside each one.
+function registerTestController(context) {
+    if (!vscode.tests || typeof vscode.tests.createTestController !== 'function') return null;
+
+    const controller = vscode.tests.createTestController('reporterLiquidTemplateTests', 'Reporter Liquid templates');
+    context.subscriptions.push(controller);
+
+    const caseId = (file, name) => `${file}::${name}`;
+
+    const syncSuite = async file => {
+        const suite = await loadSuite(file);
+        const uri = vscode.Uri.file(file);
+        let item = controller.items.get(file);
+        if (!item) {
+            item = controller.createTestItem(file, relativePath(file), uri);
+            controller.items.add(item);
+        }
+        item.error = suite.error || undefined;
+        item.children.replace(suite.cases.map(c => {
+            const child = controller.createTestItem(caseId(file, c.name), c.name, uri);
+            child.range = new vscode.Range(c.line - 1, 0, c.line - 1, 0);
+            return child;
+        }));
+        return item;
+    };
+
+    const syncAll = async () => {
+        const files = await discoverSuiteFiles();
+        const keep = new Set(files);
+        const stale = [];
+        controller.items.forEach(item => { if (!keep.has(item.id)) stale.push(item.id); });
+        for (const id of stale) controller.items.delete(id);
+        for (const file of files) await syncSuite(file);
+    };
+
+    controller.resolveHandler = async item => { if (!item) await syncAll(); };
+    // Newer editors show a refresh button when this is set; older ones ignore it.
+    controller.refreshHandler = () => syncAll();
+
+    const watcher = vscode.workspace.createFileSystemWatcher(templateTests.SUITE_GLOB);
+    context.subscriptions.push(watcher);
+    watcher.onDidCreate(uri => syncSuite(uri.fsPath));
+    watcher.onDidChange(uri => syncSuite(uri.fsPath));
+    watcher.onDidDelete(uri => controller.items.delete(uri.fsPath));
+
+    controller.createRunProfile('Run', vscode.TestRunProfileKind.Run, async (request, token) => {
+        await syncAll();
+
+        // Turn the request into the file → case-names selection the runner
+        // takes, dropping anything the request excludes.
+        const excluded = new Set((request.exclude || []).map(item => item.id));
+        const wanted = new Map();
+        const addCase = (suiteItem, child) => {
+            if (excluded.has(child.id)) return;
+            if (!wanted.has(suiteItem.id)) wanted.set(suiteItem.id, new Set());
+            wanted.get(suiteItem.id).add(child.label);
+        };
+        const addSuite = suiteItem => {
+            if (excluded.has(suiteItem.id)) return;
+            if (!wanted.has(suiteItem.id)) wanted.set(suiteItem.id, new Set());
+            suiteItem.children.forEach(child => addCase(suiteItem, child));
+        };
+        if (request.include) {
+            for (const item of request.include) {
+                // Items are re-created on every sync, so look the current one up
+                // by id rather than trusting the object the request carries.
+                if (item.parent) {
+                    const suiteItem = controller.items.get(item.parent.id);
+                    const child = suiteItem && suiteItem.children.get(item.id);
+                    if (child) addCase(suiteItem, child);
+                } else {
+                    const suiteItem = controller.items.get(item.id);
+                    if (suiteItem) addSuite(suiteItem);
+                }
+            }
+        } else {
+            controller.items.forEach(addSuite);
+        }
+
+        const run = controller.createTestRun(request);
+        const itemFor = (file, name) => {
+            const suiteItem = controller.items.get(file);
+            return suiteItem && suiteItem.children.get(caseId(file, name));
+        };
+        for (const [file, names] of wanted) {
+            for (const name of names) {
+                const item = itemFor(file, name);
+                if (item) run.enqueued(item);
+            }
+        }
+
+        await runTemplateTests({
+            selection: Array.from(wanted, ([file, only]) => ({ file, only })),
+            isCancelled: () => token.isCancellationRequested,
+            onSuite: suite => {
+                const suiteItem = controller.items.get(suite.file);
+                if (suite.error && suiteItem) run.errored(suiteItem, new vscode.TestMessage(suite.error));
+            },
+            onStart: testCase => {
+                const item = itemFor(testCase.suiteFile, testCase.name);
+                if (item) run.started(item);
+            },
+            onResult: (testCase, result) => {
+                const item = itemFor(testCase.suiteFile, testCase.name);
+                if (!item) return;
+                if (result.status === 'passed') run.passed(item, result.durationMs);
+                else if (result.status === 'failed') run.failed(item, toTestMessages(result), result.durationMs);
+                else run.errored(item, toTestMessages(result), result.durationMs);
+            }
+        });
+        run.end();
+    }, true);
+
+    return controller;
+}
+
+// One Test Explorer message per failure. An output mismatch becomes a diff
+// message, which the editor opens in its own diff view; everything else points
+// at the file and line the failure names, or at the case itself.
+function toTestMessages(result) {
+    return result.failures.map(failure => {
+        const message = failure.kind === 'mismatch' && result.expected !== null
+            ? vscode.TestMessage.diff(failure.message, result.expected, result.actual)
+            : new vscode.TestMessage(failure.message);
+        const file = failure.kind === 'mismatch' ? result.suiteFile : (failure.file || result.suiteFile);
+        const line = failure.kind === 'mismatch' ? result.line : (failure.file ? (failure.line || 1) : result.line);
+        message.location = new vscode.Location(vscode.Uri.file(file), new vscode.Position(Math.max(0, line - 1), 0));
+        return message;
+    });
+}
+
 function deactivate() { }
 
 module.exports = {
@@ -2075,6 +2416,7 @@ module.exports = {
 // test suite (see test/README.md), which drives the preview refreshes against a
 // stubbed vscode module and checks the HTML they produce.
 Object.assign(module.exports, {
+    acceptActualOutput,
     annotateLiquid,
     buildErrorPaneHtml,
     buildFullPreviewContent,
@@ -2093,8 +2435,12 @@ Object.assign(module.exports, {
     refreshHtmlPanel,
     registerCustomFilters,
     registerCustomTags,
+    renderForTest,
+    runTemplateTests,
+    showTestReport,
     snippetOf,
     stripLiquidFromHtmlTags,
     tokenLocation,
+    toTestMessages,
     wirePreviewMessages
 });

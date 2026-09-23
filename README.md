@@ -112,12 +112,60 @@ The same problems are published to VS Code's **Problems** panel and underlined i
 
 While a template does not parse, the preview keeps showing the last version that did — but its warnings are suppressed, because their line numbers describe a file that is no longer on disk. Only the parse error, which is current, is reported.
 
+### Template Tests
+
+Check that templates still render what they should, against data you control. A test suite is a `*.liquidtest.json` file anywhere in the workspace; each case renders a template with some data and checks the output. Cases render through exactly the same engine as the preview, custom tags, filters and warnings included, so a test sees what the preview would.
+
+```json
+{
+  "template": "invoice.liquid",
+  "cases": [
+    {
+      "name": "two items",
+      "data": "data/two-items.json",
+      "expected": "expected/two-items.html"
+    },
+    {
+      "name": "no items shows the empty message",
+      "data": { "customer": { "name": "Ada" }, "items": [] },
+      "contains": "<p>No items.</p>",
+      "notContains": "<table>"
+    }
+  ]
+}
+```
+
+Paths are relative to the suite file. A case can use any mix of checks:
+
+| Key | Meaning |
+|-----|---------|
+| `template` | The template to render. Set it once at the top of the suite, or per case. |
+| `data` | A path to a `.json` file, or the data inline as an object. Put editor/choice/optional answers under `fields`, as for the preview. |
+| `expected` | A file with the exact expected output (a *golden file*). Line-ending style and a final newline are ignored, so a checkout on Windows still matches. |
+| `contains` / `notContains` | A string, or a list of strings, that the output must / must not contain. |
+| `whitespace` | `"exact"` (default) or `"collapse"`, which ignores whitespace between tags and treats any run of whitespace as one space. Can be set suite-wide. |
+| `allowWarnings` | Let the case pass while filters warn about missing data. Off by default: with known data, a warning usually means the data or the template is wrong. Can be set suite-wide. |
+
+Every case also fails on a render error or a **duplicate field name**, and on filter warnings unless they are allowed. The editor offers completion and validation for these keys in any `*.liquidtest.json` file.
+
+**Running them.**
+
+- **Reporter Liquid: Run Template Tests** runs every suite in the workspace and opens the report.
+- On VS Code 1.59 or newer, the suites also appear in the **Testing** view, with run buttons next to each case in the suite file. A case whose output changed opens in VS Code's diff view, expected against actual.
+
+**The report** lists every suite and case with its verdict and timing, and for each failure says why: a line diff of expected against actual output (long single-line HTML is pretty-printed first so the diff lands on the element that changed), the problem and the line it came from, or the text that was missing. File names and positions are clickable. **Show failures only** hides what passed. **Save report…** writes the same report as a standalone HTML file, for a ticket or a release record. A run from the Testing view refreshes the report if it is open; **Reporter Liquid: Show Template Test Report** opens it.
+
+**Creating and updating expected output.** Point `expected` at a file that doesn't exist yet and run the case: it fails, and the report shows the actual output. If that output is right, **Accept actual output** (in the report, or **Reporter Liquid: Accept Actual Output as Expected**) writes it to the expected file — for every case in the last run whose expected file is missing or different, after asking. Review the change in source control before committing: accepting output you haven't read turns the test into a record of whatever the template does today.
+
+See [`examples/template-tests`](examples/template-tests) for a working suite.
+
 ## Usage
 
 1. Open a `.liquid` file.
 2. Press `ctrl+k h` to open the HTML preview (or `ctrl+k v` for the plain-text preview, or `ctrl+k f` for the Full HTML Preview).
 3. Select a `.json` data file when prompted (not required for Full HTML Preview).
 4. Edit your template or data file — the preview updates automatically.
+5. To check templates against known data, add a `*.liquidtest.json` suite and run **Reporter Liquid: Run Template Tests** (see [Template Tests](#template-tests)).
 
 ## Development
 
@@ -156,7 +204,7 @@ This extension is based on [Shopify Liquid Preview for Visual Studio Code](https
 - [Handlebars Preview for Visual Studio Code](https://github.com/chaliy/vscode-handlebars-preview/)
 - [A HTML previewer for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=tht13.html-preview-vscode)
 
-New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, the located problems panel with editor navigation and Problems-panel integration, and status bar indicators.
+New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, the located problems panel with editor navigation and Problems-panel integration, template tests with a results report and Test Explorer integration, and status bar indicators.
 
 ## License
 

@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.1.20",
+    "version": "1.2.0",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -23,12 +23,17 @@
         "Reporter",
         "Liquid",
         "Template",
-        "Live Preview"
+        "Live Preview",
+        "Testing"
     ],
     "activationEvents": [
         "onCommand:reporterLiquidPreview.preview",
         "onCommand:reporterLiquidPreview.htmlPreview",
-        "onCommand:reporterLiquidPreview.fullHtmlPreview"
+        "onCommand:reporterLiquidPreview.fullHtmlPreview",
+        "onCommand:reporterLiquidPreview.runTemplateTests",
+        "onCommand:reporterLiquidPreview.showTemplateTestReport",
+        "onCommand:reporterLiquidPreview.acceptTemplateTestOutput",
+        "workspaceContains:**/*.liquidtest.json"
     ],
     "main": "./extension.js",
     "contributes": {
@@ -38,6 +43,12 @@
                 "extensions": [
                     ".liquid"
                 ]
+            }
+        ],
+        "jsonValidation": [
+            {
+                "fileMatch": "*.liquidtest.json",
+                "url": "./schemas/liquidtest.schema.json"
             }
         ],
         "commands": [
@@ -52,6 +63,18 @@
             {
                 "command": "reporterLiquidPreview.fullHtmlPreview",
                 "title": "Reporter Liquid: Open Full HTML Preview to the Side"
+            },
+            {
+                "command": "reporterLiquidPreview.runTemplateTests",
+                "title": "Reporter Liquid: Run Template Tests"
+            },
+            {
+                "command": "reporterLiquidPreview.showTemplateTestReport",
+                "title": "Reporter Liquid: Show Template Test Report"
+            },
+            {
+                "command": "reporterLiquidPreview.acceptTemplateTestOutput",
+                "title": "Reporter Liquid: Accept Actual Output as Expected"
             }
         ],
         "keybindings": [
