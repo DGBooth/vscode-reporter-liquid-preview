@@ -79,6 +79,10 @@ files are separate processes, so state never leaks across a file.
   against freezing bad output (render errors, duplicate names, warnings,
   unsaved edits), and both ways in: the command and the preview's
   "Save as test" button.
+- **`cli.test.js`** — the command-line runner: exit codes (including finding
+  no suites, which must not pass), verdicts that match the editor's, suite
+  discovery, `--junit`, `--report` and `--update`, and that it loads in a
+  plain Node process with no `vscode` module anywhere on its path.
 - **`preview-html.test.js`** — the preview document is assembled as a string, so
   escaping, unbalanced markup and a broken inline script would all fail
   silently. These check the document actually handed to the webview.

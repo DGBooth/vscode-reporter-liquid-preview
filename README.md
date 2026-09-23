@@ -173,6 +173,41 @@ Cases refer to your data files rather than copying them. If you keep editing a d
 
 See [`examples/template-tests`](examples/template-tests) for a working suite.
 
+#### Running template tests in CI
+
+Tests that only run when someone remembers to open the editor get skipped. `liquid-test` runs the same suites from the command line, through the same engine and the same checks as the editor, so a case passes in CI exactly when it passes in VS Code. The only difference: the editor includes unsaved edits, and `liquid-test` reads files as saved on disk.
+
+```
+npx github:DGBooth/vscode-reporter-liquid-preview#<tag or commit> [options] [paths...]
+```
+
+With no paths it searches the current folder recursively for `*.liquidtest.json`, skipping `node_modules` and hidden folders. It needs Node 20 or newer.
+
+| Option | |
+|--------|--|
+| `--report <file>` | Also write the HTML report (the same one **Save report…** produces). |
+| `--junit <file>` | Also write JUnit XML, which most CI systems can show as a test summary. |
+| `--update` | Write the actual output to every expected file that is missing or different, then re-run. For local use. Review the changes before committing them. |
+| `--no-color` | Plain output. Colour is also off when `NO_COLOR` is set or output isn't a terminal. |
+
+It exits with **0** when every case passes, **1** when any case fails or a suite is broken, and **2** on a usage error. Finding no suites at all also exits 2, so a job pointed at the wrong folder can't pass by running nothing.
+
+In a GitHub Actions workflow in your templates repository:
+
+```yaml
+- uses: actions/setup-node@v4
+  with:
+    node-version: 22
+- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#<commit-sha> --report liquid-test-report.html --junit liquid-tests.xml
+- uses: actions/upload-artifact@v4
+  if: always()
+  with:
+    name: liquid-test-report
+    path: liquid-test-report.html
+```
+
+Pin the reference to the version of the extension your team has installed: a commit SHA, or a tag once releases are tagged (e.g. `#v1.4.0`). The engine changes along with the extension, and an unpinned runner can disagree with the editor. `if: always()` keeps the report when the tests fail, which is when you need it.
+
 ## Usage
 
 1. Open a `.liquid` file.
@@ -189,6 +224,12 @@ npm test                # the test suite
 npm run package         # rebuild the committed .vsix
 npm run check:package   # is the committed .vsix built from this source?
 ```
+
+The rendering engine (LiquidJS with the custom tags and filters, and the
+problem locations) lives in `engine.js`, which never loads `vscode`. Both the
+extension and the command-line runner in `bin/liquid-test.js` use it, so the
+two cannot drift apart. `npm run test:templates` runs the runner on the
+example suite.
 
 The test suite runs on Node's built-in runner (Node 20 or newer) against a
 stubbed `vscode` module, so it needs no dependencies beyond the extension's own
@@ -209,7 +250,7 @@ rewrites relative links in the README, and would otherwise infer where they
 point from whatever the checkout looks like.
 
 Both checks run on every push and pull request via GitHub Actions, the test
-suite across all three Node versions.
+suite (and the example template suite) across all three Node versions.
 
 ## Credits
 

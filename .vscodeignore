@@ -3,6 +3,7 @@
 .vscode/
 out/
 scripts/
+bin/
 test/
 *.vsix
 .gitignore
