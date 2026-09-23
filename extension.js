@@ -540,7 +540,7 @@ function activate(context) {
             );
 
             htmlPreviews[preview.id] = { preview, panel };
-            wirePreviewMessages(panel);
+            wirePreviewMessages(panel, { createTest: () => saveHtmlPreviewAsTest(preview) });
 
             await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
 
@@ -1096,6 +1096,8 @@ const viewSourceStyles = `
   .lp-toolbar { position: sticky; top: 0; z-index: 9000; display: flex; flex-wrap: wrap; gap: 6px 18px; background: white; margin: -8px -8px 10px -8px; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
   .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
   .lp-toggle input { margin: 0; }
+  .lp-action { margin-left: auto; font: 12px sans-serif; color: #444; background: #f3f3f3; border: 1px solid #d0d0d0; border-radius: 3px; padding: 1px 8px; cursor: pointer; }
+  .lp-action:hover { background: #e8e8e8; }
   .lp-source { display: none; }
   .lp-source-hint { font-family: sans-serif; font-size: 12px; color: var(--vscode-descriptionForeground, #444); margin-bottom: 8px; }
   .lp-source pre { background: none; border: none; margin: 0; padding: 2px 4px; color: var(--vscode-editor-foreground, #333); font-family: var(--vscode-editor-font-family, "SF Mono", Monaco, Menlo, Consolas, monospace); font-size: var(--vscode-editor-font-size, 12px); line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
@@ -1530,7 +1532,8 @@ function renderWithDiagnostics(template, data, file) {
 // view, so it reflects the selected data and field values. Kept separate from
 // the rendered document itself (see buildPreviewHtml).
 function buildHtmlPreviewChrome(rendered) {
-    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label></div>`;
+    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`
+        + `<button type="button" class="lp-action" data-lp-action="createTest" title="Add this template and data file to a test suite, with the output shown here as the expected output">Save as test&hellip;</button></div>`;
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
 <pre>${highlightHtml(formatHtml(rendered))}</pre>
@@ -1766,10 +1769,14 @@ function toVsCodeDiagnostic(item) {
 }
 
 // Listen for the position a reader clicked in the problems pane and open it.
-function wirePreviewMessages(panel) {
+// `actions` maps a toolbar button's data-lp-action to what it does — the HTML
+// preview's "Save as test" is the only one so far.
+function wirePreviewMessages(panel, actions = {}) {
     panel.webview.onDidReceiveMessage(message => {
         if (message && message.type === 'reveal' && message.file) {
             revealInEditor(message.file, message.line, message.col);
+        } else if (message && message.type === 'action' && typeof actions[message.action] === 'function') {
+            actions[message.action]();
         }
     });
 }
@@ -1874,6 +1881,11 @@ ${rendered}
     // there is no extension to post to.
     const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
     document.addEventListener('click', event => {
+        const action = event.target && event.target.closest && event.target.closest('[data-lp-action]');
+        if (action && vscodeApi) {
+            vscodeApi.postMessage({ type: 'action', action: action.getAttribute('data-lp-action') });
+            return;
+        }
         const button = event.target && event.target.closest && event.target.closest('.diag-goto');
         if (!button || !vscodeApi) return;
         vscodeApi.postMessage({
@@ -2265,6 +2277,7 @@ function registerTemplateTests(context) {
     context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.showTemplateTestReport', () => {
         return _lastTestReport ? showTestReport(_lastTestReport) : runTemplateTestsWithProgress(null);
     }));
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.createTemplateTests', uri => createTestsFromDataFiles(uri)));
     context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.acceptTemplateTestOutput', async () => {
         if (!_lastTestReport) await runTemplateTests();
         return acceptActualOutput(_lastTestReport);
@@ -2405,6 +2418,180 @@ function toTestMessages(result) {
     });
 }
 
+// ---- Creating tests from known cases ------------------------------------------
+//
+// A known case is a template and a data file whose rendered output someone has
+// looked at and knows to be right. These turn such cases into test cases: the
+// output is rendered now, frozen as the expected file, and the case added to a
+// suite (beside the template unless one exists already) — then the suite is run,
+// so the reader sees the new cases pass straight away.
+
+// Save the template and data files if they have unsaved edits. A case records
+// paths, so an expected output rendered from an unsaved buffer would describe
+// files that aren't on disk, and the test would fail on its first real run.
+async function saveDirtyInputs(files) {
+    const open = vscode.workspace.textDocuments || [];
+    const dirty = open.filter(d => d.isDirty && files.includes(d.fileName));
+    if (dirty.length === 0) return true;
+    const choice = await vscode.window.showWarningMessage(
+        `${dirty.map(d => path.basename(d.fileName)).join(', ')} ${dirty.length === 1 ? 'has' : 'have'} unsaved changes. The test records the files as saved on disk.`,
+        { modal: true },
+        'Save and continue'
+    );
+    if (choice !== 'Save and continue') return false;
+    for (const document of dirty) await document.save();
+    return true;
+}
+
+// Add a case for each source to the suite beside `templateFile` (or
+// `suiteFile`). `sources` are { name, dataFile } or { name, data }. Returns
+// what was added and what was left out and why, or null if the reader
+// cancelled.
+async function createTestsFromCases(templateFile, sources, { suiteFile = null } = {}) {
+    const fs = require('fs');
+    suiteFile = suiteFile || templateTests.defaultSuiteFile(templateFile);
+
+    if (!await saveDirtyInputs([templateFile].concat(sources.map(s => s.dataFile).filter(Boolean)))) return null;
+
+    let templateText;
+    try {
+        templateText = await readWorkspaceText(templateFile);
+    } catch (err) {
+        vscode.window.showErrorMessage(`Cannot read ${path.basename(templateFile)}: ${err.message}`);
+        return null;
+    }
+
+    // Render every case first. One that fails to render, or that breaks a rule
+    // every case is held to (a duplicate field name), would be a test that
+    // fails the moment it is made, so it is left out and the reason reported.
+    const rendered = [];
+    const rejected = [];
+    for (const source of sources) {
+        let data = source.data || {};
+        if (source.dataFile) {
+            try {
+                data = JSON.parse(await readWorkspaceText(source.dataFile));
+            } catch (err) {
+                rejected.push({ name: source.name, reason: `the data file is not valid JSON (${err.message})` });
+                continue;
+            }
+        }
+        const { html, diagnostics } = await renderForTest(templateText, data, templateFile);
+        const error = diagnostics.find(d => d.severity !== 'warning');
+        if (html === null || error) {
+            rejected.push({ name: source.name, reason: error ? `${error.title}: ${error.message}` : 'the template did not render' });
+            continue;
+        }
+        rendered.push(Object.assign({}, source, { output: html, warnings: diagnostics.length }));
+    }
+
+    // Warnings mean a filter met missing data. Freezing that output as
+    // "expected" would bless the gap, so the reader decides, per run.
+    const warned = rendered.filter(r => r.warnings > 0);
+    let entries = rendered;
+    if (warned.length) {
+        const choice = await vscode.window.showWarningMessage(
+            `${pluralize(warned.length, 'case')} (${warned.map(r => r.name).join(', ')}) ${warned.length === 1 ? 'makes' : 'make'} filters warn about missing data. `
+            + 'Saving them as they are allows warnings in those cases, so a test will no longer catch that data going missing.',
+            { modal: true },
+            'Skip those cases',
+            'Allow warnings'
+        );
+        if (choice === undefined) return null;
+        if (choice === 'Skip those cases') {
+            for (const r of warned) rejected.push({ name: r.name, reason: 'filters warned about missing data' });
+            entries = rendered.filter(r => r.warnings === 0);
+        } else {
+            entries = rendered.map(r => Object.assign({}, r, { allowWarnings: r.warnings > 0 }));
+        }
+    }
+
+    let suiteText = null;
+    try {
+        suiteText = await readWorkspaceText(suiteFile);
+    } catch (err) {
+        // No suite yet: planNewCases starts one.
+    }
+    let plan;
+    try {
+        plan = templateTests.planNewCases({ suiteFile, suiteText, template: templateFile, entries, exists: fs.existsSync });
+    } catch (err) {
+        vscode.window.showErrorMessage(err.message);
+        return null;
+    }
+    const skipped = rejected.concat(plan.skipped);
+
+    if (plan.added.length === 0) {
+        vscode.window.showWarningMessage(`No test cases were created. ${skipped.map(s => `${s.name}: ${s.reason}`).join('; ')}`);
+        return { suiteFile, added: [], skipped };
+    }
+    if (!await saveDirtyInputs([suiteFile])) return null;
+
+    for (const write of plan.writes) {
+        await fs.promises.mkdir(path.dirname(write.file), { recursive: true });
+        await fs.promises.writeFile(write.file, write.text, 'utf8');
+    }
+    await fs.promises.writeFile(suiteFile, plan.suiteText, 'utf8');
+
+    const leftOut = skipped.length ? ` Left out: ${skipped.map(s => `${s.name} (${s.reason})`).join('; ')}.` : '';
+    vscode.window.showInformationMessage(`Added ${pluralize(plan.added.length, 'test case')} to ${relativePath(suiteFile)}. Review the expected output before committing it.${leftOut}`);
+
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(suiteFile), { preview: false, viewColumn: vscode.ViewColumn.One });
+    const report = await runTemplateTests({ selection: [{ file: suiteFile, only: new Set(plan.added) }] });
+    showTestReport(report);
+    return { suiteFile, added: plan.added, skipped, report };
+}
+
+// The HTML preview's "Save as test": this template, this data file, and the
+// output currently on screen — which the reader has just looked at.
+async function saveHtmlPreviewAsTest(preview) {
+    const suggested = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : 'no data';
+    const name = await vscode.window.showInputBox({
+        prompt: `Name the test case for ${path.basename(preview.templateUri)}`,
+        value: suggested,
+        validateInput: value => (value && value.trim() ? null : 'A test case needs a name.')
+    });
+    if (!name) return null;
+    const source = preview.dataUri ? { name: name.trim(), dataFile: preview.dataUri } : { name: name.trim(), data: {} };
+    return createTestsFromCases(preview.templateUri, [source]);
+}
+
+// "Create Tests from Data Files…": one template, any number of data files, a
+// case each. Starts from the file right-clicked in the Explorer, the active
+// editor's template, or a pick from the workspace's templates.
+async function createTestsFromDataFiles(uri) {
+    let templateFile = uri && uri.fsPath && /\.liquid$/i.test(uri.fsPath) ? uri.fsPath : null;
+    const active = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+    if (!templateFile && active && /\.liquid$/i.test(active.fileName)) templateFile = active.fileName;
+    if (!templateFile) {
+        const templates = await vscode.workspace.findFiles('**/*.liquid', '**/node_modules/**');
+        const picked = await vscode.window.showQuickPick(
+            templates.map(t => ({ label: path.basename(t.fsPath), description: relativePath(t.fsPath), value: t.fsPath })),
+            { placeHolder: 'Choose the template to create tests for' }
+        );
+        if (!picked) return null;
+        templateFile = picked.value;
+    }
+
+    const suiteFile = templateTests.defaultSuiteFile(templateFile);
+    const jsonFiles = (await vscode.workspace.findFiles('**/*.json', '**/node_modules/**'))
+        .map(u => u.fsPath)
+        .filter(f => !f.endsWith('.liquidtest.json') && !/(^|[\\/])(package|package-lock|tsconfig|jsconfig)\.json$/.test(f))
+        .sort();
+    if (jsonFiles.length === 0) {
+        vscode.window.showWarningMessage('No .json data files found in the workspace.');
+        return null;
+    }
+    const picked = await vscode.window.showQuickPick(
+        jsonFiles.map(f => ({ label: path.basename(f), description: relativePath(f), value: f })),
+        { canPickMany: true, placeHolder: `Choose the data files whose output from ${path.basename(templateFile)} you know is right — one test case each` }
+    );
+    if (!picked || picked.length === 0) return null;
+
+    const sources = picked.map(p => ({ name: path.basename(p.value, path.extname(p.value)), dataFile: p.value }));
+    return createTestsFromCases(templateFile, sources, { suiteFile });
+}
+
 function deactivate() { }
 
 module.exports = {
@@ -2422,6 +2609,8 @@ Object.assign(module.exports, {
     buildFullPreviewContent,
     buildPreviewHtml,
     cleanLiquidMessage,
+    createTestsFromCases,
+    createTestsFromDataFiles,
     clearPreviewDiagnostics,
     dedupeDiagnostics,
     formatHtml,
@@ -2437,6 +2626,7 @@ Object.assign(module.exports, {
     registerCustomTags,
     renderForTest,
     runTemplateTests,
+    saveHtmlPreviewAsTest,
     showTestReport,
     snippetOf,
     stripLiquidFromHtmlTags,

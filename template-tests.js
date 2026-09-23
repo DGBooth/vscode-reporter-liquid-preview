@@ -371,6 +371,102 @@ function toHunks(lines) {
     return hunks;
 }
 
+// ---- creating cases -----------------------------------------------------------
+
+// Where a template's suite lives unless one is chosen: beside the template,
+// named after it.
+function defaultSuiteFile(templateFile) {
+    return path.join(path.dirname(templateFile), path.basename(templateFile, path.extname(templateFile)) + '.liquidtest.json');
+}
+
+// A file-name-safe version of a case name.
+function slugify(name) {
+    const slug = String(name).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    return slug.slice(0, 60) || 'case';
+}
+
+// Suite paths are written relative to the suite with forward slashes, so a
+// suite made on Windows still works when checked out elsewhere.
+function relativeTo(suiteFile, file) {
+    let rel = path.relative(path.dirname(suiteFile), file).split(path.sep).join('/');
+    if (!rel.startsWith('.')) rel = rel || '.';
+    return rel;
+}
+
+// Work out what adding cases to a suite involves, without writing anything:
+// the suite's new text, and the expected-output files to create.
+//
+//   suiteFile, suiteText  the suite to add to; suiteText is null if it doesn't
+//                         exist yet
+//   template              the template the new cases render
+//   entries               [{ name, dataFile | data, output, allowWarnings }]
+//                         output is the rendered HTML to freeze as expected
+//   exists(file)          whether a file is already on disk, so no expected
+//                         file is overwritten
+//
+// An entry whose template and data file an existing case already covers is
+// skipped rather than duplicated. Names are made unique against the suite.
+function planNewCases({ suiteFile, suiteText, template, entries, exists = () => false }) {
+    let json;
+    if (suiteText === null || suiteText === undefined || !suiteText.trim()) {
+        json = { template: relativeTo(suiteFile, template), cases: [] };
+    } else {
+        try {
+            json = JSON.parse(suiteText);
+        } catch (err) {
+            throw new Error(`${path.basename(suiteFile)} is not valid JSON, so cases can't be added to it: ${err.message}`);
+        }
+        if (!json || typeof json !== 'object' || Array.isArray(json)) throw new Error(`${path.basename(suiteFile)} is not a test suite.`);
+        if (!Array.isArray(json.cases)) json.cases = [];
+    }
+
+    const dir = path.dirname(suiteFile);
+    const suiteTemplate = typeof json.template === 'string' ? path.resolve(dir, json.template) : null;
+    const templateOf = c => (typeof c.template === 'string' ? path.resolve(dir, c.template) : suiteTemplate);
+    const covered = new Set(json.cases
+        .filter(c => c && typeof c.data === 'string')
+        .map(c => `${templateOf(c)}\n${path.resolve(dir, c.data)}`));
+    const names = new Set(json.cases.map(c => c && c.name).filter(Boolean));
+    const claimed = new Set();
+
+    const added = [];
+    const skipped = [];
+    const writes = [];
+    const templateBase = path.basename(template, path.extname(template));
+
+    for (const entry of entries) {
+        if (entry.dataFile && covered.has(`${template}\n${entry.dataFile}`)) {
+            skipped.push({ name: entry.name, reason: 'a case in the suite already uses this data file' });
+            continue;
+        }
+
+        let name = entry.name;
+        for (let n = 2; names.has(name); n++) name = `${entry.name} (${n})`;
+        names.add(name);
+
+        let expected;
+        for (let n = 1; ; n++) {
+            const candidate = path.join(dir, 'expected', templateBase, `${slugify(name)}${n > 1 ? '-' + n : ''}.html`);
+            if (!claimed.has(candidate) && !exists(candidate)) { expected = candidate; break; }
+        }
+        claimed.add(expected);
+
+        const testCase = { name };
+        if (suiteTemplate !== template) testCase.template = relativeTo(suiteFile, template);
+        testCase.data = entry.dataFile ? relativeTo(suiteFile, entry.dataFile) : (entry.data || {});
+        testCase.expected = relativeTo(suiteFile, expected);
+        if (entry.allowWarnings) testCase.allowWarnings = true;
+
+        json.cases.push(testCase);
+        writes.push({ file: expected, text: entry.output });
+        if (entry.dataFile) covered.add(`${template}\n${entry.dataFile}`);
+        added.push(name);
+    }
+
+    return { suiteText: JSON.stringify(json, null, 2) + '\n', writes, added, skipped };
+}
+
 // ---- the report ---------------------------------------------------------------
 
 const STATUS_LABEL = { passed: 'Passed', failed: 'Failed', error: 'Error' };
@@ -642,5 +738,8 @@ module.exports = {
     diffOutputs,
     toHunks,
     buildReportHtml,
-    acceptableResults
+    acceptableResults,
+    defaultSuiteFile,
+    slugify,
+    planNewCases
 };

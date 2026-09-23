@@ -24,6 +24,12 @@ const shownMessages = [];
 const warningAnswers = [];
 // Every test controller the extension created, with what its runs reported.
 const testControllers = [];
+// Answers for the next showQuickPick / showInputBox calls, in order. A quick
+// pick answer may be a function of the items offered.
+const quickPickAnswers = [];
+const inputBoxAnswers = [];
+// Every webview panel the extension opened itself (the report panel).
+const createdPanels = [];
 
 // ---- API types ------------------------------------------------------------
 
@@ -196,12 +202,30 @@ const vscode = {
         visibleTextEditors: [],
         activeTextEditor: undefined,
         createStatusBarItem: () => ({ text: '', tooltip: '', show() { }, hide() { }, dispose() { } }),
-        createWebviewPanel: () => { throw new Error('createWebviewPanel: tests build panels themselves'); },
+        // Preview tests build their panels themselves (harness.makePanel); this
+        // serves the panels the extension opens on its own, like the report.
+        createWebviewPanel: (viewType, title) => {
+            const panel = {
+                viewType,
+                title,
+                disposed: false,
+                webview: { html: '', onDidReceiveMessage: () => new Disposable(), postMessage: () => Promise.resolve(true) },
+                reveal() { },
+                onDidDispose: listener => { panel._onDispose = listener; return new Disposable(); },
+                dispose() { panel.disposed = true; if (panel._onDispose) panel._onDispose(); }
+            };
+            createdPanels.push(panel);
+            return panel;
+        },
         showErrorMessage: message => { shownErrors.push(message); return Promise.resolve(undefined); },
         showInformationMessage: message => { shownMessages.push(message); return Promise.resolve(undefined); },
         showWarningMessage: message => { shownMessages.push(message); return Promise.resolve(warningAnswers.shift()); },
         withProgress: (options, task) => task({ report() { } }, { isCancellationRequested: false }),
-        showQuickPick: async () => undefined,
+        showQuickPick: async items => {
+            const answer = quickPickAnswers.shift();
+            return typeof answer === 'function' ? answer(await items) : answer;
+        },
+        showInputBox: async () => inputBoxAnswers.shift(),
         showTextDocument: async (document, options) => {
             const editor = {
                 document,
@@ -222,6 +246,9 @@ const vscode = {
 
     workspace: {
         workspaceFolders: [],
+        // Open documents; tests push { fileName, isDirty, save() } to model
+        // unsaved edits.
+        textDocuments: [],
         // workspaceFiles stands in for open editors and wins; anything else is
         // read from disk, as VS Code would, so files the extension writes with
         // fs can be read back.
@@ -293,6 +320,10 @@ function reset() {
     shownErrors.length = 0;
     shownMessages.length = 0;
     warningAnswers.length = 0;
+    quickPickAnswers.length = 0;
+    inputBoxAnswers.length = 0;
+    for (const panel of createdPanels.splice(0)) if (!panel.disposed) panel.dispose();
+    vscode.workspace.textDocuments = [];
     for (const controller of testControllers) controller.runs.length = 0;
     vscode.window.visibleTextEditors = [];
 }
@@ -307,5 +338,8 @@ module.exports = {
     shownErrors,
     shownMessages,
     warningAnswers,
+    quickPickAnswers,
+    inputBoxAnswers,
+    createdPanels,
     testControllers
 };

@@ -74,6 +74,11 @@ files are separate processes, so state never leaks across a file.
   escaping, accepting actual output, and the Test Explorer mapping. The stub
   models just enough of the Testing API (`vscode.tests`) to record what a run
   reports for each case.
+- **`create-tests.test.js`** — creating cases from known cases: the plan for
+  a new or existing suite (paths, unique names, what is skipped), the guards
+  against freezing bad output (render errors, duplicate names, warnings,
+  unsaved edits), and both ways in: the command and the preview's
+  "Save as test" button.
 - **`preview-html.test.js`** — the preview document is assembled as a string, so
   escaping, unbalanced markup and a broken inline script would all fail
   silently. These check the document actually handed to the webview.

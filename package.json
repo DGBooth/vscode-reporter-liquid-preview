@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -33,6 +33,7 @@
         "onCommand:reporterLiquidPreview.runTemplateTests",
         "onCommand:reporterLiquidPreview.showTemplateTestReport",
         "onCommand:reporterLiquidPreview.acceptTemplateTestOutput",
+        "onCommand:reporterLiquidPreview.createTemplateTests",
         "workspaceContains:**/*.liquidtest.json"
     ],
     "main": "./extension.js",
@@ -75,8 +76,28 @@
             {
                 "command": "reporterLiquidPreview.acceptTemplateTestOutput",
                 "title": "Reporter Liquid: Accept Actual Output as Expected"
+            },
+            {
+                "command": "reporterLiquidPreview.createTemplateTests",
+                "title": "Reporter Liquid: Create Tests from Data Files…"
             }
         ],
+        "menus": {
+            "explorer/context": [
+                {
+                    "command": "reporterLiquidPreview.createTemplateTests",
+                    "when": "resourceExtname == .liquid",
+                    "group": "reporterLiquid"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "reporterLiquidPreview.createTemplateTests",
+                    "when": "editorLangId == liquid",
+                    "group": "reporterLiquid"
+                }
+            ]
+        },
         "keybindings": [
             {
                 "command": "reporterLiquidPreview.preview",

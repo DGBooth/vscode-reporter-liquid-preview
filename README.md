@@ -148,6 +148,20 @@ Paths are relative to the suite file. A case can use any mix of checks:
 
 Every case also fails on a render error or a **duplicate field name**, and on filter warnings unless they are allowed. The editor offers completion and validation for these keys in any `*.liquidtest.json` file.
 
+**Creating them from known cases.** Most tests start as a case you have already checked by eye: a template and a data file whose output you know is right. Two ways to turn those into tests:
+
+- **Save as test…** in the HTML preview's toolbar adds the template and data file you're looking at as a case, with the output on screen as its expected output. You're asked for a name, defaulting to the data file's.
+- **Reporter Liquid: Create Tests from Data Files…** (also on the right-click menu of a `.liquid` file in the Explorer or editor) takes several data files at once and makes one case for each.
+
+Either way, cases go into the suite beside the template (`invoice.liquidtest.json` for `invoice.liquid`, created if needed), and expected output goes under `expected/<template>/`. The new cases are run straight away, so the report shows them passing. What gets frozen is checked first:
+
+- A data file an existing case already uses for that template is skipped rather than duplicated. Existing expected files are never overwritten.
+- A case that fails to render, or repeats a field name, is left out with the reason. It would fail the moment it was created.
+- If filters warn about missing data, you choose between skipping those cases and saving them with `allowWarnings`. Allowing warnings means the test can no longer catch that data going missing.
+- Unsaved edits to the template or data are saved first (after asking). A case records files on disk, so output rendered from an unsaved buffer would never match.
+
+Cases refer to your data files rather than copying them. If you keep editing a data file while working on a template, a case built from it fails when the data changes. Copy the data somewhere dedicated to tests first if you want it frozen.
+
 **Running them.**
 
 - **Reporter Liquid: Run Template Tests** runs every suite in the workspace and opens the report.
@@ -165,7 +179,7 @@ See [`examples/template-tests`](examples/template-tests) for a working suite.
 2. Press `ctrl+k h` to open the HTML preview (or `ctrl+k v` for the plain-text preview, or `ctrl+k f` for the Full HTML Preview).
 3. Select a `.json` data file when prompted (not required for Full HTML Preview).
 4. Edit your template or data file — the preview updates automatically.
-5. To check templates against known data, add a `*.liquidtest.json` suite and run **Reporter Liquid: Run Template Tests** (see [Template Tests](#template-tests)).
+5. To keep a render you've checked, press **Save as test…** in the HTML preview, then run **Reporter Liquid: Run Template Tests** whenever you change the template (see [Template Tests](#template-tests)).
 
 ## Development
 
