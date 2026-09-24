@@ -200,6 +200,20 @@ test('the report lists each case\'s checks and counts them', async () => {
     );
 });
 
+test('a failing case shows its passed checks too, and the report opens showing everything', async () => {
+    const result = await runSuiteText(SUITE_TEXT, { '/w/report.liquid': '<h1>Hello {{ name }}</h1><ul>{% for i in items %}<li>{{ i }}</li>{% endfor %}</ul>' });
+    const html = templateTests.buildReportHtml({ startedAt: Date.now(), durationMs: 1, suites: [result] });
+
+    // Both checks are listed, in their order, the passing one included.
+    const listed = [...html.matchAll(/<li class="check check-(\w+)">[\s\S]*?<span class="check-name">([^<]*)<\/span>/g)].map(m => [m[2], m[1]]);
+    assert.deepStrictEqual(listed, [['greets by name', 'passed'], ['a row per item', 'failed']]);
+
+    // Nothing hides a passed check, and the failures filter starts off.
+    const styles = html.slice(html.indexOf('<style>'), html.indexOf('</style>')).replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!/\.check-passed\s*\{[^}]*display:\s*none/.test(styles) && !/check-passed[^{]*\{\s*display:\s*none/.test(styles));
+    assert.match(html, /<input type="checkbox" id="only-failures">/);
+});
+
 // ---- the command line -----------------------------------------------------------
 
 test('the command line lists checks and writes each as its own JUnit test case', async () => {

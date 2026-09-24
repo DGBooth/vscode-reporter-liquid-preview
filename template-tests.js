@@ -567,7 +567,7 @@ function buildReportHtml(report, { interactive = false, relative = f => f } = {}
   <h1>${overall === 'passed' ? 'All template tests passed' : 'Template tests failed'}</h1>
   <div class="meta">${totals.total} ${totals.total === 1 ? 'case' : 'cases'}${totals.checks ? ` (${totals.checks} ${totals.checks === 1 ? 'check' : 'checks'}${totals.checksFailed ? `, ${totals.checksFailed} failing` : ''})` : ''} in ${report.suites.length} ${report.suites.length === 1 ? 'suite' : 'suites'} &middot; ${escapeHtml(formatDuration(report.durationMs))} &middot; ${escapeHtml(new Date(report.startedAt).toLocaleString())}</div>
   <div class="chips">${chips}</div>
-  <label class="filter"><input type="checkbox" id="only-failures"${overall === 'failed' ? ' checked' : ''}> Show failures only</label>
+  <label class="filter" title="Hide the cases and suites that passed. A failing case still shows all its checks, passed ones included."><input type="checkbox" id="only-failures"> Show failures only</label>
   ${toolbar}
 </header>
 <main>
@@ -762,7 +762,6 @@ body { margin: 0; padding: 0 16px 32px; background: var(--bg); color: var(--fg);
 .check-why { margin: 2px 0 2px 24px; padding-left: 16px; color: var(--fg); }
 .check-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .case-failed .check-count { color: var(--fail); }
-body:has(#only-failures:checked) .check-passed { display: none; }
 .allowed { color: var(--muted); margin: 8px 0; }
 .allowed ul { margin: 2px 0; padding-left: 20px; }
 button.goto { font: 12px var(--mono); color: var(--link); background: none; border: none; padding: 0; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
@@ -781,6 +780,8 @@ tr.diff-del, span.diff-del { background: var(--del-bg); }
 .output summary { cursor: pointer; color: var(--muted); }
 .output pre { font: 12px/1.45 var(--mono); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 8px; overflow: auto; max-height: 400px; white-space: pre-wrap; word-break: break-all; }
 .empty { color: var(--muted); margin-top: 24px; }
+/* The filter hides what passed as a whole: cases and suites. Never the passed
+   checks of a failing case — they are the context for judging its failure. */
 body:has(#only-failures:checked) .case-passed,
 body:has(#only-failures:checked) .suite-passed { display: none; }
 @media (max-width: 600px) { .case-body { padding-left: 12px; } .toolbar { margin-left: 0; } }
