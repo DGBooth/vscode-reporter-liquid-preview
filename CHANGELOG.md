@@ -11,6 +11,12 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.5.3] - 2026-09-24
+
+### Fixed
+- A failing case in the report now lists all its checks, passed ones included, in order. Before, **Show failures only** also hid the checks that passed inside a failing case, so you saw a failure without the checks around it that still held.
+- The report opens showing everything. **Show failures only** starts off and hides only cases and suites that passed. Failing cases are still expanded and marked, so they stand out.
+
 ## [1.5.2] - 2026-09-24
 
 ### Fixed
