@@ -307,7 +307,7 @@
     const root = () => document.getElementById('lp-rendered-root');
     const shadow = host.attachShadow({ mode: 'open' });
     const styles = document.getElementById('lp-builder-styles');
-    shadow.innerHTML = '<style>' + (styles ? styles.textContent : '') + '</style><div class="panel" role="dialog" aria-label="Create a test"></div>';
+    shadow.innerHTML = '<style>' + (styles ? styles.textContent : '') + '</style><div class="panel" role="dialog" aria-label="Create a test" hidden></div>';
     const panel = shadow.querySelector('.panel');
 
     const hoverBox = overlay('lp-builder-hover');
@@ -457,7 +457,11 @@
 
     function render() {
         syncGroup();
+        // Both the host and the panel are hidden while closed: the panel is
+        // fixed over the right of the page, so if either rule were ever lost it
+        // would cover the preview.
         host.hidden = !state.open;
+        panel.hidden = !state.open;
         if (!state.open) { panel.innerHTML = ''; return; }
         const p = state.proposals;
         const pickedPart = state.picked

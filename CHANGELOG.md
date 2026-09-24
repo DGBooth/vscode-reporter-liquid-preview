@@ -11,6 +11,12 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.5.1] - 2026-09-24
+
+### Fixed
+- The test builder's closed panel no longer covers the right of the HTML preview. In 1.5.0 it still took its 340px, showing as a black bar in dark themes over the page and the **Create test…** button.
+- The builder panel's text follows the theme's panel colours, so it can't end up dark on dark.
+
 ## [1.5.0] - 2026-09-24
 
 ### Added
