@@ -2,7 +2,7 @@ const path = require('path');
 const vscode = require('vscode');
 const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
-const { parseChecks, runChecks, asPreviewShowsIt } = require('./output-checks');
+const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
 // inlined into each preview document.
@@ -103,9 +103,6 @@ function activate(context) {
         }
     }));
 
-    // HTML preview panels, keyed by preview id
-    let htmlPreviews = {};
-
     // Full HTML preview panels (liquid-stripped), keyed by preview id
     let htmlFullPreviews = {};
 
@@ -114,28 +111,7 @@ function activate(context) {
         if (document) {
             let preview = createNewPreview(document);
             await updatePreviewDataFile(preview);
-
-            let workspaceFolders = (vscode.workspace.workspaceFolders || []).map(f => f.uri);
-            let panel = vscode.window.createWebviewPanel(
-                'shopifyLiquidHtmlPreview',
-                'HTML Preview: ' + path.basename(document.fileName),
-                vscode.ViewColumn.Beside,
-                // retainContextWhenHidden keeps the webview alive when its tab is
-                // hidden, preserving scroll position and toggle state on return.
-                // Scripts are needed only for the in-place update listener in
-                // buildPreviewHtml; the preview content itself uses none.
-                { enableScripts: true, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
-            );
-
-            htmlPreviews[preview.id] = { preview, panel };
-            wirePreviewMessages(panel, { saveBuiltTest: message => saveBuiltTest(preview, panel, message) });
-
-            await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
-
-            panel.onDidDispose(() => {
-                delete htmlPreviews[preview.id];
-                clearPreviewDiagnostics(preview);
-            });
+            await openHtmlPreview(preview);
         }
     }));
 
@@ -930,6 +906,40 @@ function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = 
     }
 }
 
+// HTML preview panels, keyed by preview id. Module-level so a preview can be
+// opened from elsewhere than its command — the test report's "Edit test".
+const htmlPreviews = {};
+
+// Show `preview` (see createNewPreview) in a new HTML preview panel beside the
+// active editor. `preview.builderEdit`, when set, opens the test builder on
+// that test as soon as the page loads.
+async function openHtmlPreview(preview) {
+    let workspaceFolders = (vscode.workspace.workspaceFolders || []).map(f => f.uri);
+    let panel = vscode.window.createWebviewPanel(
+        'shopifyLiquidHtmlPreview',
+        'HTML Preview: ' + path.basename(preview.templateUri),
+        vscode.ViewColumn.Beside,
+        // retainContextWhenHidden keeps the webview alive when its tab is
+        // hidden, preserving scroll position and toggle state on return.
+        // Scripts run the in-place update listener and the test builder.
+        { enableScripts: true, localResourceRoots: workspaceFolders, retainContextWhenHidden: true }
+    );
+
+    htmlPreviews[preview.id] = { preview, panel };
+    wirePreviewMessages(panel, {
+        saveBuiltTest: message => saveBuiltTest(preview, panel, message),
+        listBuiltTests: () => listBuiltTests(preview, panel)
+    });
+
+    await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
+
+    panel.onDidDispose(() => {
+        delete htmlPreviews[preview.id];
+        clearPreviewDiagnostics(preview);
+    });
+    return panel;
+}
+
 // Output as the preview displays it (see asPreviewShowsIt): the tree the
 // checks see, with every element closed and stray closing tags dropped, so no
 // stray </div> can close the preview's own container. Falls back to the output
@@ -1006,7 +1016,7 @@ async function refreshHtmlPanel(preview, panel) {
 
     publishDiagnostics(preview, diagnostics);
     const defaultName = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : '';
-    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName });
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName, edit: preview.builderEdit || null });
 }
 
 // The HTML Preview's own UI: a toolbar with a source toggle and a hidden
@@ -1236,7 +1246,7 @@ function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder 
     // applied inside its shadow root. The overlays that mark what is hovered
     // and picked are the only builder styles in the document itself.
     const builderHost = builder
-        ? `<aside id="lp-builder" hidden data-default-name="${escapeHtml(builder.defaultName || '')}"></aside>
+        ? `<aside id="lp-builder" hidden data-default-name="${escapeHtml(builder.defaultName || '')}"${builder.edit ? ` data-edit="${escapeHtml(JSON.stringify(builder.edit))}"` : ''}></aside>
 <script type="text/plain" id="lp-builder-styles">${BUILDER_STYLES}</script>`
         : '';
     const builderStyles = builder
@@ -1626,7 +1636,154 @@ async function handleTestReportMessage(message) {
         await saveTestReport(_lastTestReport);
     } else if (message.type === 'accept' && _lastTestReport) {
         await acceptActualOutput(_lastTestReport);
+    } else if (message.type === 'accept-check') {
+        await acceptCheckResult(message);
+    } else if (message.type === 'remove-check') {
+        await removeCheck(message);
+    } else if (message.type === 'edit-test') {
+        await editTestInBuilder(message);
     }
+}
+
+// ---- Changing a test from its result ----------------------------------------
+//
+// The report's per-check and per-test buttons. Each names the test by its
+// suite, position and name (see templateTests.editCase), changes the suite
+// file, then re-runs the same selection so the report shows the effect.
+
+// Update one check to expect what the page shows now, after asking — the
+// question says exactly what changes, since this is how a real regression
+// gets waved through if the reader isn't looking.
+async function acceptCheckResult({ suiteFile, caseIndex, caseName, checkIndex, checkName }, { confirm = true } = {}) {
+    try {
+        const suiteText = await readWorkspaceText(suiteFile);
+        const suite = templateTests.parseSuite(suiteText, suiteFile);
+        const testCase = suite.cases[caseIndex];
+        const rawCase = testCase && testCase.name === caseName ? JSON.parse(suiteText).cases[caseIndex] : null;
+        const rawCheck = rawCase && Array.isArray(rawCase.checks) ? rawCase.checks[checkIndex] : null;
+        const parsedCheck = testCase && testCase.checks[checkIndex];
+        if (!rawCheck || !parsedCheck || parsedCheck.name !== checkName) {
+            throw new Error(`${path.basename(suiteFile)} has changed since the tests ran. Run the tests again, then try once more.`);
+        }
+
+        // Accept against a fresh render, not the report's: the template or data
+        // may have moved on since.
+        const result = await templateTests.runCase(Object.assign({}, testCase, { checks: [] }), templateTestDeps);
+        if (result.actual === null || result.actual === undefined) throw new Error('The test\u2019s page doesn\u2019t render at the moment, so there is no result to accept.');
+        const accepted = acceptCheck(rawCheck, result.actual);
+        if (accepted.error) throw new Error(accepted.error);
+
+        if (confirm) {
+            const describe = v => Array.isArray(v) ? v.map(x => `\u201c${x}\u201d`).join(', ') : typeof v === 'string' ? `\u201c${v}\u201d` : String(v);
+            const what = accepted.changes.map(c => `${c.what === 'text' ? 'it expected' : `${c.what} was expected to be`} ${describe(c.from)}; the page now has ${describe(c.to)}`).join('. ');
+            const choice = await vscode.window.showWarningMessage(
+                `Accept the new result for \u201c${checkName}\u201d in \u201c${caseName}\u201d? ${what}. Only accept it if the new result is right.`,
+                { modal: true },
+                'Accept'
+            );
+            if (choice !== 'Accept') return null;
+        }
+
+        if (!await saveDirtyInputs([suiteFile])) return null;
+        const updated = templateTests.editCase(suiteText, suiteFile, caseIndex, caseName, raw => {
+            raw.checks[checkIndex] = templateTests.tidyCheck(accepted.check);
+        });
+        await require('fs').promises.writeFile(suiteFile, updated, 'utf8');
+        await rerunAfterEdit();
+        return accepted;
+    } catch (err) {
+        vscode.window.showErrorMessage(`The result wasn\u2019t accepted: ${err.message}`);
+        return null;
+    }
+}
+
+// Take one check out of a test, after asking.
+async function removeCheck({ suiteFile, caseIndex, caseName, checkIndex, checkName }, { confirm = true } = {}) {
+    try {
+        const suiteText = await readWorkspaceText(suiteFile);
+        const suite = templateTests.parseSuite(suiteText, suiteFile);
+        const parsedCheck = suite.cases[caseIndex] && suite.cases[caseIndex].checks[checkIndex];
+        if (!parsedCheck || parsedCheck.name !== checkName) {
+            throw new Error(`${path.basename(suiteFile)} has changed since the tests ran. Run the tests again, then try once more.`);
+        }
+        if (confirm) {
+            const choice = await vscode.window.showWarningMessage(
+                `Remove the check \u201c${checkName}\u201d from \u201c${caseName}\u201d? The test will no longer look at it.`,
+                { modal: true },
+                'Remove'
+            );
+            if (choice !== 'Remove') return false;
+        }
+        if (!await saveDirtyInputs([suiteFile])) return false;
+        const updated = templateTests.editCase(suiteText, suiteFile, caseIndex, caseName, raw => {
+            raw.checks.splice(checkIndex, 1);
+            if (raw.checks.length === 0) delete raw.checks;
+        });
+        await require('fs').promises.writeFile(suiteFile, updated, 'utf8');
+        await rerunAfterEdit();
+        return true;
+    } catch (err) {
+        vscode.window.showErrorMessage(`The check wasn\u2019t removed: ${err.message}`);
+        return false;
+    }
+}
+
+async function rerunAfterEdit() {
+    const report = await runTemplateTests({ selection: _lastTestReport ? _lastTestReport.selection : null });
+    if (_testReportPanel) showTestReport(report);
+    return report;
+}
+
+// "Edit test": open the test's template and data in the HTML preview with the
+// builder already on that test, where checks can be added by clicking,
+// removed and reordered.
+async function editTestInBuilder({ suiteFile, caseIndex, caseName }) {
+    const suite = templateTests.parseSuite(await readWorkspaceText(suiteFile), suiteFile);
+    const testCase = suite.cases[caseIndex];
+    if (!testCase || testCase.name !== caseName) {
+        vscode.window.showErrorMessage(`${path.basename(suiteFile)} has changed since the tests ran. Run the tests again, then try once more.`);
+        return null;
+    }
+    if (!testCase.dataFile) {
+        vscode.window.showWarningMessage(`\u201c${caseName}\u201d has its data written into the suite rather than in a data file, so it can\u2019t be opened in the preview. Edit it in ${path.basename(suiteFile)}.`);
+        return null;
+    }
+    const preview = createNewPreview({ fileName: testCase.template });
+    preview.dataUri = testCase.dataFile;
+    preview.dataDirty = true;
+    preview.builderEdit = (await builtTestsFor(testCase.template, testCase.dataFile)).find(t => t.suiteFile === suiteFile && t.index === caseIndex) || null;
+    return openHtmlPreview(preview);
+}
+
+// The tests on a template and data file, as the builder edits them: where
+// each is, its name, and its checks as written in the suite.
+async function builtTestsFor(templateFile, dataFile) {
+    const suiteFile = templateTests.defaultSuiteFile(templateFile);
+    let suiteText;
+    try {
+        suiteText = await readWorkspaceText(suiteFile);
+    } catch (err) {
+        return [];
+    }
+    const suite = templateTests.parseSuite(suiteText, suiteFile);
+    if (suite.error) return [];
+    const raw = JSON.parse(suiteText).cases;
+    return suite.cases
+        .filter(c => c.template === templateFile && c.dataFile === dataFile)
+        .map(c => ({
+            suiteFile,
+            index: c.index,
+            name: c.name,
+            checks: (Array.isArray(raw[c.index].checks) ? raw[c.index].checks : []).map(templateTests.tidyCheck),
+            snapshot: Boolean(raw[c.index].expected)
+        }));
+}
+
+// The builder asks, when it opens, which tests this preview's template and
+// data already have, so one can be picked to edit.
+async function listBuiltTests(preview, panel) {
+    const tests = preview.dataUri ? await builtTestsFor(preview.templateUri, preview.dataUri) : [];
+    return panel.webview.postMessage({ type: 'builderTests', tests });
 }
 
 async function runTemplateTestsWithProgress(selection) {
@@ -2014,6 +2171,7 @@ async function saveBuiltTest(preview, panel, message) {
     const checks = Array.isArray(message.checks) ? message.checks : [];
     const wholePage = message.wholePage === true;
     if (!name) return reply(false, 'Give the test a name first.');
+    if (message.editing) return updateBuiltTest(preview, reply, name, checks, message);
     if (checks.length === 0 && !wholePage) return reply(false, 'Add at least one check, or tick \u201cAlso check the whole page\u201d.');
 
     const source = Object.assign(
@@ -2031,6 +2189,56 @@ async function saveBuiltTest(preview, panel, message) {
         return reply(false, `The test wasn\u2019t saved: ${result.skipped.map(s => s.reason).join('; ')}`);
     }
     return reply(true, `Saved \u201c${result.added[0]}\u201d to ${relativePath(result.suiteFile)}. The test report shows it passing.`);
+}
+
+// Save an edited test: its checks replaced by the builder's list, in the
+// builder's order, and its name changed if the reader changed it. Checks added
+// in this session must pass against the current page, as a new test's must.
+// Ones already in the test needn't: a test is often opened for editing because
+// one of them fails, and moving it or removing another shouldn't be blocked.
+async function updateBuiltTest(preview, reply, name, checks, message) {
+    const { suiteFile, caseIndex, originalName } = message.editing;
+    const fresh = new Set(Array.isArray(message.newChecks) ? message.newChecks : []);
+    try {
+        const suiteText = await readWorkspaceText(suiteFile);
+        const suite = templateTests.parseSuite(suiteText, suiteFile);
+        const testCase = suite.cases[caseIndex];
+        if (!testCase || testCase.name !== originalName) {
+            throw new Error(`${path.basename(suiteFile)} has changed since this test was opened. Close the builder, open it again and pick the test.`);
+        }
+        const raw = JSON.parse(suiteText).cases[caseIndex];
+        if (checks.length === 0 && !raw.expected && !raw.contains && !raw.notContains) {
+            throw new Error('A test needs at least one check. To stop testing this page, remove the test from the suite file instead.');
+        }
+
+        const added = checks.filter((c, i) => fresh.has(i));
+        if (added.length) {
+            const result = await templateTests.runCase(Object.assign({}, testCase, { checks: [] }), templateTestDeps);
+            if (result.actual === null || result.actual === undefined) throw new Error('The page doesn\u2019t render at the moment, so new checks can\u2019t be tried against it.');
+            const parsed = parseChecks(added);
+            const failing = parsed.error ? [{ name: 'checks', failures: [parsed.error] }] : runChecks(parsed.checks, result.actual).filter(c => c.status !== 'passed');
+            if (failing.length) {
+                throw new Error(`${failing.length === 1 ? 'a new check doesn\u2019t' : 'some new checks don\u2019t'} pass against the current output: ${failing.map(c => `${c.name} (${c.failures[0]})`).join('; ')}`);
+            }
+        }
+
+        const others = new Set(suite.cases.filter((c, i) => i !== caseIndex).map(c => c.name));
+        if (name !== originalName && others.has(name)) throw new Error(`another test in ${path.basename(suiteFile)} is already called \u201c${name}\u201d.`);
+
+        if (!await saveDirtyInputs([suiteFile])) return reply(false, 'Cancelled. Nothing was saved.');
+        const updated = templateTests.editCase(suiteText, suiteFile, caseIndex, originalName, entry => {
+            entry.name = name;
+            if (checks.length) entry.checks = checks.map(templateTests.tidyCheck);
+            else delete entry.checks;
+        });
+        await require('fs').promises.writeFile(suiteFile, updated, 'utf8');
+        const report = await runTemplateTests({ selection: [{ file: suiteFile, only: new Set([name]) }] });
+        showTestReport(report);
+        const status = report.suites[0] && report.suites[0].results[0] && report.suites[0].results[0].status;
+        return reply(true, `Saved \u201c${name}\u201d. ${status === 'passed' ? 'The test report shows it passing.' : 'Some of its checks still fail: see the test report.'}`);
+    } catch (err) {
+        return reply(false, `The test wasn\u2019t saved: ${err.message}`);
+    }
 }
 
 // "Create Tests from Data Files…": one template, any number of data files, a
@@ -2104,6 +2312,11 @@ Object.assign(module.exports, {
     renderForTest,
     runTemplateTests,
     saveBuiltTest,
+    acceptCheckResult,
+    removeCheck,
+    editTestInBuilder,
+    builtTestsFor,
+    listBuiltTests,
     showTestReport,
     snippetOf,
     strayTagDiagnostics,

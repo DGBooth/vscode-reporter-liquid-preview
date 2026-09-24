@@ -11,6 +11,15 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.6.0] - 2026-09-24
+
+### Added
+- Edit an existing test: **Edit test** in the report, or the **Test** picker in the builder, opens a test with its checks. Add checks by clicking the page, remove them, or reorder them with ↑ / ↓, then **Save changes** to update the test in place. Only checks added while editing have to pass before saving, so a test with a failing check can still be reordered or trimmed.
+- **Accept new result** on a failed check in the report updates just that check to expect what the page shows now, after a confirmation saying exactly what changes. The check's name is updated where it quoted the old value. Checks that look for a phrase have no single new value, so they offer **Remove check** instead, which every failed check has.
+
+### Changed
+- The builder's notices use the panel's own colours with a coloured edge, so they're readable in any theme.
+
 ## [1.5.3] - 2026-09-24
 
 ### Fixed

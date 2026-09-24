@@ -95,6 +95,12 @@ files are separate processes, so state never leaks across a file.
   a whole page in jsdom as a browser would: the rest of the document stays in
   the preview's container and its section, first load matches an edit, the
   builder can pick after it, and the problems pane names it.
+- **`editing-tests.test.js`** — changing tests after they're made: accepting a
+  check's new result (what each kind becomes, its renamed name, and where
+  there's nothing to accept), removing a check, the report's buttons, and
+  editing a test in the builder — reorder, remove, add, rename — including the
+  panel itself in jsdom, and the guards that stop a suite edited since the run
+  having the wrong test changed.
 - **`cli.test.js`** — the command-line runner: exit codes (including finding
   no suites, which must not pass), verdicts that match the editor's, suite
   discovery, `--junit`, `--report` and `--update`, and that it loads in a

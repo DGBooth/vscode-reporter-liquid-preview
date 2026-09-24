@@ -364,8 +364,51 @@
         pageMode: 'not',
         pageText: '',
         busy: false,
-        notice: null
+        notice: null,
+        // The tests this template and data file already have (from the
+        // extension), and the one being edited, if any: { suiteFile, index,
+        // name }. Null means a new test.
+        tests: [],
+        editing: null
     };
+
+    // Load an existing test into the panel. Its checks are marked as not new:
+    // only checks added now have to pass before saving (see updateBuiltTest).
+    function edit(test) {
+        state.editing = { suiteFile: test.suiteFile, index: test.index, name: test.name };
+        state.name = test.name;
+        state.checks = test.checks.map(c => {
+            const check = Object.assign({}, c);
+            delete check.name;
+            return { name: c.name, check, isNew: false };
+        });
+        state.wholePage = false;
+        state.picked = null;
+        state.proposals = [];
+        pickBox.hidden = true;
+        state.notice = null;
+        render();
+    }
+
+    function startNew() {
+        state.editing = null;
+        state.name = host.getAttribute('data-default-name') || '';
+        state.checks = [];
+        state.notice = null;
+        render();
+    }
+
+    function move(index, by) {
+        const to = index + by;
+        if (to < 0 || to >= state.checks.length) return;
+        const [item] = state.checks.splice(index, 1);
+        state.checks.splice(to, 0, item);
+        render();
+        // Keep focus on the moved check's button, so it can be moved again
+        // from the keyboard.
+        const again = shadow.querySelector('[data-do="' + (by < 0 ? 'up' : 'down') + '"][data-index="' + to + '"]');
+        if (again && !again.disabled) again.focus();
+    }
 
     function esc(s) {
         return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -377,6 +420,8 @@
         const source = document.getElementById('lp-show-source');
         if (source && source.checked) source.click();
         render();
+        // Ask which tests this page already has, for the test picker.
+        if (vscodeApi) vscodeApi.postMessage({ type: 'action', action: 'listBuiltTests' });
     }
 
     function close() {
@@ -415,7 +460,7 @@
             state.notice = { ok: false, text: 'Type the text it should include.' };
             return render();
         }
-        state.checks.push(c);
+        state.checks.push(Object.assign(c, { isNew: true }));
         state.picked = null;
         state.proposals = [];
         pickBox.hidden = true;
@@ -429,7 +474,8 @@
         const must = state.pageMode === 'must';
         state.checks.push({
             name: must ? 'The page mentions “' + short(text, 40) + '”' : 'The page doesn’t mention “' + short(text, 40) + '”',
-            check: must ? { contains: text } : { notContains: text }
+            check: must ? { contains: text } : { notContains: text },
+            isNew: true
         });
         state.pageText = '';
         render();
@@ -438,7 +484,7 @@
     function save() {
         const name = state.name.trim();
         if (!name) { state.notice = { ok: false, text: 'Give the test a name first.' }; return render(); }
-        if (!state.checks.length && !state.wholePage) {
+        if (!state.checks.length && !state.wholePage && !state.editing) {
             state.notice = { ok: false, text: 'Add at least one check, or tick “Also check the whole page”.' };
             return render();
         }
@@ -450,8 +496,12 @@
             type: 'action',
             action: 'saveBuiltTest',
             name,
-            wholePage: state.wholePage,
-            checks: state.checks.map(c => Object.assign({ name: c.name }, c.check))
+            wholePage: !state.editing && state.wholePage,
+            checks: state.checks.map(c => Object.assign({ name: c.name }, c.check)),
+            newChecks: state.checks.map((c, i) => (c.isNew ? i : -1)).filter(i => i !== -1),
+            editing: state.editing
+                ? { suiteFile: state.editing.suiteFile, caseIndex: state.editing.index, originalName: state.editing.name }
+                : null
         });
     }
 
@@ -477,28 +527,49 @@
                 + '</section>'
             : '<p class="hint">Click any part of the page to check it.</p>';
 
+        // Each check can be moved up or down — the order they're listed and
+        // reported in — or removed. Checks added since the test was opened say so.
+        const last = state.checks.length - 1;
         const list = state.checks.length
-            ? '<ol class="checks">' + state.checks.map((c, i) => '<li><span>' + esc(c.name) + '</span><button type="button" class="link" data-do="remove" data-index="' + i + '" aria-label="Remove ' + esc(c.name) + '">Remove</button></li>').join('') + '</ol>'
+            ? '<ol class="checks">' + state.checks.map((c, i) => '<li><div class="check-row"><span class="check-text">' + esc(c.name)
+                + (state.editing && c.isNew ? ' <em class="new">new</em>' : '') + '</span>'
+                + '<span class="check-buttons">'
+                + '<button type="button" class="icon" data-do="up" data-index="' + i + '"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move ' + esc(c.name) + ' up" title="Move up">\u2191</button>'
+                + '<button type="button" class="icon" data-do="down" data-index="' + i + '"' + (i === last ? ' disabled' : '') + ' aria-label="Move ' + esc(c.name) + ' down" title="Move down">\u2193</button>'
+                + '<button type="button" class="link" data-do="remove" data-index="' + i + '" aria-label="Remove ' + esc(c.name) + '">Remove</button>'
+                + '</span></div></li>').join('') + '</ol>'
             : '<p class="hint">No checks yet.</p>';
+
+        // Which test the panel is working on: a new one, or one this page
+        // already has.
+        const picker = state.tests.length
+            ? '<label class="field">Test<select data-field="test">'
+                + '<option value="new"' + (state.editing ? '' : ' selected') + '>A new test</option>'
+                + state.tests.map((t, i) => '<option value="' + i + '"' + (state.editing && state.editing.suiteFile === t.suiteFile && state.editing.index === t.index ? ' selected' : '') + '>Edit \u201c' + esc(t.name) + '\u201d</option>').join('')
+                + '</select></label>'
+            : '';
 
         const notice = state.notice ? '<p class="notice ' + (state.notice.ok ? 'ok' : 'bad') + '">' + esc(state.notice.text) + '</p>' : '';
 
         panel.innerHTML =
-            '<header><h2>Create a test</h2><button type="button" class="link" data-do="close" aria-label="Close the test builder">Close</button></header>'
+            '<header><h2>' + (state.editing ? 'Edit a test' : 'Create a test') + '</h2><button type="button" class="link" data-do="close" aria-label="Close the test builder">Close</button></header>'
+            + picker
             + '<label class="field">Test name<input type="text" data-field="name" value="' + esc(state.name) + '" placeholder="e.g. Invoice with two items"></label>'
             + '<p class="hint small">Only add checks for things that are right in the preview now. The test will then catch them changing.</p>'
             + pickedPart
             + '<h3>Checks in this test</h3>' + list
             + '<div class="page-check"><select data-field="pageMode" aria-label="Whether the page should mention the text"><option value="not"' + (state.pageMode === 'not' ? ' selected' : '') + '>The page doesn’t mention</option><option value="must"' + (state.pageMode === 'must' ? ' selected' : '') + '>The page mentions</option></select>'
             + '<input type="text" data-field="pageText" value="' + esc(state.pageText) + '" placeholder="some text"><button type="button" class="secondary" data-do="add-page">Add</button></div>'
-            + '<label class="choice"><input type="checkbox" data-field="wholePage"' + (state.wholePage ? ' checked' : '') + '> <span>Also check the whole page stays exactly as it is now <em>(fails on any change at all)</em></span></label>'
+            + (state.editing
+                ? ''
+                : '<label class="choice"><input type="checkbox" data-field="wholePage"' + (state.wholePage ? ' checked' : '') + '> <span>Also check the whole page stays exactly as it is now <em>(fails on any change at all)</em></span></label>')
             + notice
-            + '<div class="row end"><button type="button" data-do="save"' + (state.busy ? ' disabled' : '') + '>Save test</button></div>';
+            + '<div class="row end"><button type="button" data-do="save"' + (state.busy ? ' disabled' : '') + '>' + (state.editing ? 'Save changes' : 'Save test') + '</button></div>';
     }
 
     shadow.addEventListener('input', event => {
         const field = event.target.getAttribute && event.target.getAttribute('data-field');
-        if (!field) return;
+        if (!field || field === 'test' || field === 'pageMode') return;
         if (field === 'wholePage') state.wholePage = event.target.checked;
         else state[field] = event.target.value;
         if (field === 'editable') {
@@ -519,6 +590,10 @@
             render();
         } else if (event.target.getAttribute('data-field') === 'pageMode') {
             state.pageMode = event.target.value;
+        } else if (event.target.getAttribute('data-field') === 'test') {
+            const value = event.target.value;
+            if (value === 'new') startNew();
+            else edit(state.tests[Number(value)]);
         }
     });
     shadow.addEventListener('click', event => {
@@ -531,11 +606,28 @@
         else if (what === 'save') save();
         else if (what === 'cancel-pick') { state.picked = null; state.proposals = []; pickBox.hidden = true; render(); }
         else if (what === 'remove') { state.checks.splice(Number(button.getAttribute('data-index')), 1); render(); }
+        else if (what === 'up') move(Number(button.getAttribute('data-index')), -1);
+        else if (what === 'down') move(Number(button.getAttribute('data-index')), 1);
         else if (what === 'wider' && state.picked) {
             const parent = state.picked.parentElement;
             if (parent && parent !== root() && root().contains(parent)) pick(parent);
         }
     });
+
+    // "Edit test" in the report opens the preview with the test to edit in the
+    // page itself; the panel opens on it straight away, and the extension's
+    // list of tests confirms it (see the builderTests message).
+    let pendingEdit = null;
+    try {
+        pendingEdit = host.getAttribute('data-edit') ? JSON.parse(host.getAttribute('data-edit')) : null;
+    } catch (err) {
+        pendingEdit = null;
+    }
+    if (pendingEdit) {
+        open();
+        edit(pendingEdit);
+        if (!vscodeApi) pendingEdit = null;
+    }
 
     // Opening: the toolbar button lives in the preview's chrome, which is
     // replaced on every edit, so the listener is delegated.
@@ -577,15 +669,32 @@
                     render();
                 }
             }, 0);
+        } else if (msg.type === 'builderTests') {
+            state.tests = Array.isArray(msg.tests) ? msg.tests : [];
+            // Opened by "Edit test" in the report: go straight to that test.
+            if (pendingEdit) {
+                const test = state.tests.find(t => t.suiteFile === pendingEdit.suiteFile && t.index === pendingEdit.index) || pendingEdit;
+                pendingEdit = null;
+                edit(test);
+            } else {
+                render();
+            }
         } else if (msg.type === 'builderResult') {
             state.busy = false;
             state.notice = { ok: Boolean(msg.ok), text: String(msg.message || '') };
             if (msg.ok) {
-                state.checks = [];
-                state.wholePage = false;
                 state.picked = null;
                 state.proposals = [];
                 pickBox.hidden = true;
+                if (state.editing) {
+                    // Still editing the same test, now as saved.
+                    state.editing.name = state.name.trim();
+                    for (const c of state.checks) c.isNew = false;
+                } else {
+                    state.checks = [];
+                    state.wholePage = false;
+                }
+                if (vscodeApi) vscodeApi.postMessage({ type: 'action', action: 'listBuiltTests' });
             }
             render();
         }
