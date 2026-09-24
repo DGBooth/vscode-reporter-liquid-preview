@@ -103,6 +103,7 @@ Every entry says **where** the problem is, not just what it is:
 - **The offending source**, quoted underneath, so you can recognise the construct without leaving the preview.
 - Warnings raised inside a filter are traced back to the `{{ ... }}` or `{% ... %}` that ran it — including filters called from inside a loop or a nested tag, which have no way to name their own position otherwise.
 - **Duplicate field names** point at the repeat and name the line it collides with, rather than just listing the names.
+- **Unbalanced HTML** — a closing tag like a stray `</div>` that closes nothing the output opened — is flagged with the text that follows it, so you can find it. Put into a whole page, such a tag can close an element around the document and push everything after it out of its section. The preview displays the output without it, as the template tests read it, so what you see, what you click in the test builder and what the checks test are always the same structure.
 - **Data errors** are located in the `.json` file, not the template, using the position `JSON.parse` reports.
 - The **Full HTML Preview** locates a missing end tag by line, alongside the "Not closed" markers in the annotated document that show where it starts.
 

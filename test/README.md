@@ -91,6 +91,10 @@ files are separate processes, so state never leaks across a file.
   pass. Also: selectors prefer names over positions, a table cell's count is its
   column, proposals read in plain words, and the builder reads text exactly as
   the runner does.
+- **`unbalanced-html.test.js`** — output with a stray closing tag, loaded as
+  a whole page in jsdom as a browser would: the rest of the document stays in
+  the preview's container and its section, first load matches an edit, the
+  builder can pick after it, and the problems pane names it.
 - **`cli.test.js`** — the command-line runner: exit codes (including finding
   no suites, which must not pass), verdicts that match the editor's, suite
   discovery, `--junit`, `--report` and `--update`, and that it loads in a

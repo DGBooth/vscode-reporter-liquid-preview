@@ -550,6 +550,43 @@ function formatHtml(html) {
     return out.join('\n');
 }
 
+// Closing tags in rendered output that close nothing the output opened — a
+// stray </div>. A browser parsing the whole page would let one close whatever
+// is open around the output instead: the preview's own container, or Reporter's
+// page, cutting the rest of the document loose. Each is reported with the text
+// that follows it, which is how a reader finds the spot. Only the template's
+// own elements count as open; void elements never are.
+function strayClosingTags(html) {
+    const open = [];
+    const strays = [];
+    let pending = [];
+    const tokens = tokenizeHtml(html);
+    tokens.forEach((tok, index) => {
+        if (tok.type !== 'tag') return;
+        if (tok.kind === 'open' && !HTML_VOID_TAGS.has(tok.name)) open.push(tok.name);
+        else if (tok.kind === 'close') {
+            const at = open.lastIndexOf(tok.name);
+            if (at !== -1) open.length = at;
+            else strays.push({ tag: tok.text, name: tok.name, index });
+        }
+    });
+    for (const stray of strays) {
+        const after = [];
+        for (let i = stray.index + 1; i < tokens.length && after.join('').length < 60; i++) {
+            const tok = tokens[i];
+            if (tok.type === 'text') after.push(tok.text);
+            else if (tok.type === 'tag' && (tok.kind === 'open' || tok.kind === 'close')) after.push(' ');
+        }
+        pending.push({ tag: stray.tag, name: stray.name, followedBy: snippetOf(decodeBasicEntities(after.join(''))).slice(0, 60) });
+    }
+    return pending;
+}
+
+function decodeBasicEntities(text) {
+    return text.replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
+
+
 // Renders run one at a time across the whole extension. Warnings are gathered
 // in the module-level _currentWarnings, and a render awaits between templates,
 // so two in flight at once — a preview refreshing on a keystroke while a test
@@ -691,6 +728,7 @@ module.exports = {
     HTML_RAW_TAGS,
     tokenizeHtml,
     formatHtml,
+    strayClosingTags,
     renderWithDiagnostics,
     diagnostic,
     liquidDiagnostic,
