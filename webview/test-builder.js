@@ -70,9 +70,49 @@
         return el.tagName.toLowerCase();
     }
 
+    // Which elements of the output a selector matches — as the test runner
+    // will see it. The runner parses the output on its own, with nothing
+    // around it; here it sits inside the preview's container, a <div>, inside
+    // the page. Matched in place, "div > table" would also match a table at
+    // the top of the output, whose parent is that container, and the builder
+    // would count or pick things the runner never will. So selectors are run
+    // against a detached copy of the output, shaped as the runner parses it,
+    // and the matches mapped back to the elements on the page.
+    const scopes = new WeakMap();
+
+    function scopeOf(root) {
+        let scope = scopes.get(root);
+        if (scope && scope.observer && scope.observer.takeRecords().length) scope = null;
+        if (scope) return scope;
+        // The copy goes in the body of a separate, inert document (nothing in
+        // it runs). Its top-level elements have <body> as their parent, which
+        // no selector here ever names, so they match as the runner's parentless
+        // top-level elements do. A bare DocumentFragment would be closer still,
+        // but selector engines disagree about child combinators under one.
+        const doc = root.ownerDocument.implementation.createHTMLDocument('');
+        const copy = doc.body;
+        for (const child of Array.from(root.childNodes)) copy.appendChild(doc.importNode(child, true));
+        const toPage = new Map();
+        const pair = (original, clone) => {
+            for (let i = 0; i < clone.children.length; i++) {
+                toPage.set(clone.children[i], original.children[i]);
+                pair(original.children[i], clone.children[i]);
+            }
+        };
+        pair(root, copy);
+        const previous = scopes.get(root);
+        const observer = previous && previous.observer
+            || (typeof MutationObserver === 'function' ? new MutationObserver(() => { }) : null);
+        if (observer && !(previous && previous.observer)) observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+        scope = { copy, toPage, observer };
+        scopes.set(root, scope);
+        return scope;
+    }
+
     function matches(root, selector) {
         try {
-            return Array.from(root.querySelectorAll(selector));
+            const scope = scopeOf(root);
+            return Array.from(scope.copy.querySelectorAll(selector)).map(el => scope.toPage.get(el));
         } catch (err) {
             return null;
         }
@@ -151,13 +191,49 @@
         return shorten(steps, root, sel => selectsOnly(root, sel, el));
     }
 
-    // A selector for `el` and the others like it, and how many there are.
-    // "Like it" is decided by the nearest repeating step of its path: a repeated
-    // ancestor first — a price cell's likes are the prices in the other rows,
-    // its column, not the other cells of its own row — and failing that its own
-    // siblings: the rows of a table, the items of a list. Null when it has no
-    // like. `inColumn` says the likes came from a repeated ancestor.
+    // A selector for `el` and the others like it, and how many there are —
+    // what "There are 3 of these" counts. The others like it are its family,
+    // found by name before position, since a loop in a template usually gives
+    // what it repeats a class:
+    //
+    //   1. its own class, e.g. table.recommendation — the narrowest of its
+    //      classes that still repeats;
+    //   2. a repeated container with a class around it, e.g. the table in
+    //      each section.recommendation;
+    //   3. failing a name, its position: the nearest repeating step of its
+    //      path, a repeated ancestor first (a price cell's likes are the prices
+    //      in the other rows, not the other cells of its own row), then its
+    //      own siblings.
+    //
+    // Counting by position alone would count every table at that level —
+    // a plans table above the recommendations included — so the count could
+    // stay right while a recommendation went missing. Null when it has no like.
+    // `likeThis` says the family is narrower than every element of its kind.
     function groupSelectorFor(el, root) {
+        const repeats = sel => {
+            const m = matches(root, sel);
+            return m && m.length >= 2 && m.indexOf(el) !== -1 ? m.length : 0;
+        };
+        const narrowest = candidates => candidates
+            .map(selector => ({ selector, count: repeats(selector) }))
+            .filter(c => c.count)
+            .sort((x, y) => x.count - y.count)[0];
+
+        const tag = tagOf(el);
+        const own = narrowest(Array.from(el.classList || []).map(cls => tag + '.' + cssEscape(cls)));
+        if (own) return { selector: own.selector, count: own.count, likeThis: true };
+
+        const inner = [];
+        for (let node = el; node && node.parentElement && node !== root; node = node.parentElement) {
+            inner.unshift(step(node));
+            const container = node.parentElement;
+            if (container === root || !root.contains(container)) break;
+            const within = inner.join(' > ');
+            const byContainer = narrowest(Array.from(container.classList || [])
+                .map(cls => tagOf(container) + '.' + cssEscape(cls) + ' > ' + within));
+            if (byContainer) return { selector: byContainer.selector, count: byContainer.count, likeThis: true };
+        }
+
         const steps = pathTo(el, root);
         if (!steps.length) return null;
         const order = [];
@@ -174,7 +250,7 @@
                 const m = matches(root, sel);
                 return Boolean(m) && m.length === count && m.indexOf(el) !== -1;
             });
-            return { selector, count, inColumn: i < steps.length - 1 };
+            return { selector, count, likeThis: i < steps.length - 1 };
         }
         return null;
     }
@@ -273,7 +349,7 @@
             out.push({
                 kind: 'count',
                 label: 'There are ' + group.count + ' of these (highlighted)',
-                name: 'There are ' + group.count + ' ' + plural(noun) + (group.inColumn ? ' like this' : ''),
+                name: 'There are ' + group.count + ' ' + plural(noun) + (group.likeThis ? ' like this' : ''),
                 check: { selector: group.selector, count: group.count }
             });
         }

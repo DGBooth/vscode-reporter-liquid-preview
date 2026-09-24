@@ -103,7 +103,9 @@ test('a repeated element offers a count of it and its likes', async () => {
     const { root, builder } = await renderedPage();
     const row = root.querySelectorAll('tr.item')[1];
     const count = builder.proposalsFor(row, root).find(p => p.kind === 'count');
-    assert.deepStrictEqual(count.check.count, 4, 'the header row is a row too');
+    assert.strictEqual(count.check.count, 3, 'the rows the loop made, not the header row too');
+    assert.strictEqual(count.check.selector, 'tr.item');
+    assert.strictEqual(count.name, 'There are 3 table rows like this');
     const li = root.querySelector('li');
     const liCount = builder.proposalsFor(li, root).find(p => p.kind === 'count');
     assert.strictEqual(liCount.check.count, 2);
@@ -200,3 +202,60 @@ test('in the real preview, the builder is hidden until opened and hidden again w
     assert.strictEqual(builderPanel().hidden, true);
     assert.strictEqual(document.body.classList.contains('lp-building'), false, 'the page gets its width back');
 });
+
+// ---- counting what a loop made ------------------------------------------------------
+//
+// "There are 3 of these" is how a reader checks a loop ran once per item —
+// three recommendations, three recommendation tables. It has to count the
+// loop's output and nothing else, or a missing recommendation can hide behind
+// another table on the page.
+
+const RECOMMENDATIONS = { plans: ['A', 'B'], recommendations: [{ name: 'Critical Illness Plus' }, { name: 'Life Cover' }, { name: 'Income Protection' }] };
+
+const LOOP_LAYOUTS = {
+    'tables with a class, beside a plans table': `
+<h1>Plans included</h1>
+<table class="plans"><tr><td>Plans</td></tr>{% for p in plans %}<tr><td>{{ p }}</td></tr>{% endfor %}</table>
+<h1>My recommendation</h1>
+{% for r in recommendations %}<h2>{{ r.name }}</h2><table class="summary recommendation"><tr><td>Plan name</td><td>{{ r.name }}</td></tr></table>{% endfor %}`,
+    'tables inside a repeated section': `
+<section><h1>Plans</h1><table><tr><td>Plan list</td></tr></table></section>
+{% for r in recommendations %}<section class="rec"><h2>{{ r.name }}</h2><table><tr><td>{{ r.name }}</td></tr></table></section>{% endfor %}`,
+    'no classes at all': `
+<div><table><tr><td>Plans</td></tr></table></div>
+<div>{% for r in recommendations %}<div><table><tr><td>{{ r.name }}</td></tr></table></div>{% endfor %}</div>`,
+    // The plans table sits at the top level of the output, whose parent in the
+    // preview is its own container <div>. Matched in place, "div > table"
+    // counted it too; the runner, reading the output on its own, never does.
+    'no classes, each loop table in its own div, plans table at the top level': `
+<h1>Plans included</h1><table><tr><td>Plans</td></tr></table>
+{% for r in recommendations %}<div><h2>{{ r.name }}</h2><table><tr><td>{{ r.name }}</td></tr></table></div>{% endfor %}`,
+    'no classes, the loop inside one wrapper div, plans table at the top level': `
+<table><tr><td>Plans</td></tr></table>
+<div>{% for r in recommendations %}<h2>{{ r.name }}</h2><table><tr><td>{{ r.name }}</td></tr></table>{% endfor %}</div>`
+};
+
+for (const [layout, template] of Object.entries(LOOP_LAYOUTS)) {
+    test(`a loop's tables are counted, and only those: ${layout}`, async () => {
+        const { html } = await engine.renderForTest(template, RECOMMENDATIONS, '/w/r.liquid');
+        const dom = new JSDOM('<div id="r"></div>', { runScripts: 'outside-only' });
+        const root = dom.window.document.getElementById('r');
+        root.innerHTML = html;
+        dom.window.eval(BUILDER);
+        const tables = [...root.querySelectorAll('table')];
+        const count = dom.window.RLPTestBuilder.proposalsFor(tables[tables.length - 2], root).find(p => p.kind === 'count');
+
+        assert.strictEqual(count.check.count, 3);
+        assert.match(count.name, /^There are 3 tables/);
+        // Read what the check counts the runner's way: the output on its own.
+        const alone = new JSDOM(`<body>${html}</body>`).window.document.body;
+        const counted = [...alone.querySelectorAll(count.check.selector)].map(t => t.textContent);
+        assert.ok(counted.every(text => /Critical Illness Plus|Life Cover|Income Protection/.test(text)), `only recommendation tables: ${JSON.stringify(counted)}`);
+        assert.strictEqual(passes(count.check, html).status, 'passed');
+
+        // And it notices a recommendation going missing, which counting every
+        // table on the page would not.
+        const fewer = (await engine.renderForTest(template, Object.assign({}, RECOMMENDATIONS, { recommendations: RECOMMENDATIONS.recommendations.slice(1) }), '/w/r.liquid')).html;
+        assert.strictEqual(passes(count.check, fewer).status, 'failed');
+    });
+}

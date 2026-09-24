@@ -11,6 +11,12 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.7.1] - 2026-09-24
+
+### Fixed
+- **There are N of these** in the test builder counts the clicked element's own family, so it can check that a loop ran once per item (three recommendations, three recommendation tables). It used to count by position alone, which on a typical report counted every table at that level, a plans table included. That check could stay green while a recommendation went missing. It now groups by the element's class, then by a repeated container with a class around it, and only then by position. Checks built before this keep their saved selectors; rebuild any count check whose name doesn't say *like this*.
+- The builder tries selectors on the output as the test runner reads it, on its own. Tried in place, inside the preview's container (a `<div>`), a selector like `div > table` also matched tables at the top of the output, so counts and picks could include elements the runner never sees.
+
 ## [1.7.0] - 2026-09-24
 
 ### Added
