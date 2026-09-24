@@ -265,6 +265,18 @@ In a GitHub Actions workflow in your templates repository:
 
 Pin the tag to the version of the extension you have installed (see [Releases](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases)). The engine changes along with the extension, and an unpinned runner can disagree with the editor. `if: always()` keeps the report when the tests fail, which is when you need it.
 
+### Installing and updates
+
+The extension is shared through its [GitHub releases](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases) rather than a marketplace. To install it, download the `.vsix` from the latest release and run **Extensions: Install from VSIX…** in VS Code.
+
+From then on it keeps itself up to date. Once a day, a few seconds after it starts, it checks GitHub for a newer release and offers it: **Install**, **What's new** (the release notes) or **Skip this version**. **Install** downloads the release's `.vsix`, checks it's exactly the file GitHub published (its SHA-256 fingerprint), installs it, and offers to reload the window.
+
+- **Reporter Liquid: Check for Updates** checks straight away, and also offers a version you skipped.
+- The daily check can be turned off with the **Reporter Liquid Preview › Check For Updates** setting (`reporterLiquidPreview.checkForUpdates`).
+- The check needs to reach `api.github.com` and GitHub's download host. It goes through VS Code's proxy settings. When it can't get through, the daily check stays quiet, and **Check for Updates** says why.
+- It runs when the extension starts, which is when you first open a preview or run a template test in a window, not on every VS Code launch.
+- Versions before 1.7.0 can't update themselves, so anyone on those needs to install 1.7.0 by hand once.
+
 ## Usage
 
 1. Open a `.liquid` file.

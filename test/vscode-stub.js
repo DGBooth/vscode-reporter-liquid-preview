@@ -22,6 +22,14 @@ const shownErrors = [];
 const shownMessages = [];
 // Answers for the next showWarningMessage calls (a modal's chosen button).
 const warningAnswers = [];
+// Answers for the next showInformationMessage / showErrorMessage calls.
+const infoAnswers = [];
+const errorAnswers = [];
+// Every commands.executeCommand call, and every env.openExternal link.
+const executedCommands = [];
+const openedLinks = [];
+// Settings, by full key ("section.name").
+const settings = new Map();
 // Every test controller the extension created, with what its runs reported.
 const testControllers = [];
 // Answers for the next showQuickPick / showInputBox calls, in order. A quick
@@ -217,8 +225,8 @@ const vscode = {
             createdPanels.push(panel);
             return panel;
         },
-        showErrorMessage: message => { shownErrors.push(message); return Promise.resolve(undefined); },
-        showInformationMessage: message => { shownMessages.push(message); return Promise.resolve(undefined); },
+        showErrorMessage: message => { shownErrors.push(message); return Promise.resolve(errorAnswers.shift()); },
+        showInformationMessage: message => { shownMessages.push(message); return Promise.resolve(infoAnswers.shift()); },
         showWarningMessage: message => { shownMessages.push(message); return Promise.resolve(warningAnswers.shift()); },
         withProgress: (options, task) => task({ report() { } }, { isCancellationRequested: false }),
         showQuickPick: async items => {
@@ -249,6 +257,9 @@ const vscode = {
         // Open documents; tests push { fileName, isDirty, save() } to model
         // unsaved edits.
         textDocuments: [],
+        getConfiguration: section => ({
+            get: (name, fallback) => (settings.has(`${section}.${name}`) ? settings.get(`${section}.${name}`) : fallback)
+        }),
         // workspaceFiles stands in for open editors and wins; anything else is
         // read from disk, as VS Code would, so files the extension writes with
         // fs can be read back.
@@ -288,8 +299,15 @@ const vscode = {
     },
 
     commands: {
-        registerCommand: () => new Disposable()
+        registerCommand: () => new Disposable(),
+        executeCommand: async (command, ...args) => { executedCommands.push({ command, args }); }
     },
+
+    env: {
+        openExternal: async uri => { openedLinks.push(String(uri)); return true; }
+    },
+
+    ExtensionMode: { Production: 1, Development: 2, Test: 3 },
 
     tests: {
         createTestController
@@ -321,6 +339,11 @@ function reset() {
     shownMessages.length = 0;
     warningAnswers.length = 0;
     quickPickAnswers.length = 0;
+    infoAnswers.length = 0;
+    errorAnswers.length = 0;
+    executedCommands.length = 0;
+    openedLinks.length = 0;
+    settings.clear();
     inputBoxAnswers.length = 0;
     for (const panel of createdPanels.splice(0)) if (!panel.disposed) panel.dispose();
     vscode.workspace.textDocuments = [];
@@ -339,6 +362,11 @@ module.exports = {
     shownMessages,
     warningAnswers,
     quickPickAnswers,
+    infoAnswers,
+    errorAnswers,
+    executedCommands,
+    openedLinks,
+    settings,
     inputBoxAnswers,
     createdPanels,
     testControllers

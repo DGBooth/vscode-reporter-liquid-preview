@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -34,6 +34,7 @@
         "onCommand:reporterLiquidPreview.showTemplateTestReport",
         "onCommand:reporterLiquidPreview.acceptTemplateTestOutput",
         "onCommand:reporterLiquidPreview.createTemplateTests",
+        "onCommand:reporterLiquidPreview.checkForUpdates",
         "workspaceContains:**/*.liquidtest.json"
     ],
     "main": "./extension.js",
@@ -83,8 +84,22 @@
             {
                 "command": "reporterLiquidPreview.createTemplateTests",
                 "title": "Reporter Liquid: Create Tests from Data Files…"
+            },
+            {
+                "command": "reporterLiquidPreview.checkForUpdates",
+                "title": "Reporter Liquid: Check for Updates"
             }
         ],
+        "configuration": {
+            "title": "Reporter Liquid Preview",
+            "properties": {
+                "reporterLiquidPreview.checkForUpdates": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Once a day, when the extension starts, check GitHub for a newer release and offer to install it. \"Reporter Liquid: Check for Updates\" checks on demand either way."
+                }
+            }
+        },
         "menus": {
             "explorer/context": [
                 {

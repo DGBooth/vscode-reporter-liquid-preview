@@ -2,6 +2,7 @@ const path = require('path');
 const vscode = require('vscode');
 const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
+const updates = require('./updates');
 const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
@@ -189,6 +190,7 @@ function activate(context) {
     context.subscriptions.push(dataStatusBarItem);
 
     registerTemplateTests(context);
+    registerUpdates(context);
 }
 
 // Index just past the Liquid tag or expression starting at `i`, or the end of
@@ -2277,6 +2279,143 @@ async function createTestsFromDataFiles(uri) {
     return createTestsFromCases(templateFile, sources, { suiteFile });
 }
 
+// ---- Updates from GitHub Releases ---------------------------------------------
+//
+// The extension is shared as a .vsix rather than through a marketplace, so it
+// keeps itself current: once a day, when it starts, it asks GitHub for the
+// latest release and offers to install it if it's newer. The download is
+// checked against the SHA-256 fingerprint GitHub publishes for the file before
+// VS Code installs it. The decisions live in updates.js; this is the network
+// and the prompts.
+
+const UPDATE_KEYS = { lastChecked: 'reporterLiquidPreview.updates.lastChecked', skipped: 'reporterLiquidPreview.updates.skipped' };
+const EXTENSION_MANIFEST = require('./package.json');
+
+// GET over HTTPS, following GitHub's redirects to its download host. The
+// extension host routes Node's https through VS Code's proxy settings, so a
+// corporate proxy is honoured.
+function httpsGet(url, { accept = '*/*', redirects = 5, timeoutMs = 20000 } = {}) {
+    const https = require('https');
+    return new Promise((resolve, reject) => {
+        if (!/^https:\/\//.test(url)) return reject(new Error(`refusing a non-HTTPS address (${url})`));
+        const request = https.get(url, { headers: { 'User-Agent': `${EXTENSION_MANIFEST.name}/${EXTENSION_MANIFEST.version}`, Accept: accept } }, response => {
+            const { statusCode, headers } = response;
+            if ([301, 302, 303, 307, 308].includes(statusCode) && headers.location && redirects > 0) {
+                response.resume();
+                return resolve(httpsGet(new URL(headers.location, url).toString(), { accept, redirects: redirects - 1, timeoutMs }));
+            }
+            if (statusCode !== 200) {
+                response.resume();
+                const why = statusCode === 403 || statusCode === 429 ? 'GitHub is limiting requests from this network for now; try again later' : `GitHub answered ${statusCode}`;
+                return reject(new Error(why));
+            }
+            const chunks = [];
+            response.on('data', chunk => chunks.push(chunk));
+            response.on('end', () => resolve(Buffer.concat(chunks)));
+            response.on('error', reject);
+        });
+        request.setTimeout(timeoutMs, () => request.destroy(new Error('GitHub didn’t answer in time')));
+        request.on('error', reject);
+    });
+}
+
+const updateTransport = {
+    getJson: async url => JSON.parse((await httpsGet(url, { accept: 'application/vnd.github+json' })).toString('utf8')),
+    download: url => httpsGet(url, { accept: 'application/octet-stream' })
+};
+
+function updatesEnabled() {
+    const config = vscode.workspace.getConfiguration && vscode.workspace.getConfiguration('reporterLiquidPreview');
+    return !config || config.get('checkForUpdates', true) !== false;
+}
+
+// Look for a newer release and offer it. Automatic checks (on start-up) are
+// once a day at most, respect the setting and a skipped version, and say
+// nothing when there's nothing to say — no network, GitHub busy, up to date.
+// "Check for Updates" always checks, always offers, and always answers.
+async function checkForUpdates(context, { manual = false, transport = updateTransport, now = Date.now() } = {}) {
+    const state = context && context.globalState;
+    if (!manual && (!state || !updatesEnabled())) return { outcome: 'off' };
+    if (!updates.checkIsDue({ lastChecked: state && state.get(UPDATE_KEYS.lastChecked), now, manual })) return { outcome: 'not-due' };
+    if (state) await state.update(UPDATE_KEYS.lastChecked, now);
+
+    const current = EXTENSION_MANIFEST.version;
+    const apiUrl = updates.latestReleaseUrl(EXTENSION_MANIFEST.repository && EXTENSION_MANIFEST.repository.url);
+    let release;
+    try {
+        if (!apiUrl) throw new Error('the extension doesn’t know which GitHub repository it comes from');
+        release = updates.describeRelease(await transport.getJson(apiUrl), EXTENSION_MANIFEST.name);
+    } catch (err) {
+        if (manual) vscode.window.showErrorMessage(`Couldn’t check for updates: ${err.message}.`);
+        return { outcome: 'error', error: err };
+    }
+
+    const skipped = state && state.get(UPDATE_KEYS.skipped);
+    if (!updates.shouldOffer({ release, current, skipped, manual })) {
+        if (manual) vscode.window.showInformationMessage(`Reporter Liquid Preview is up to date (${current}).`);
+        return { outcome: 'up-to-date' };
+    }
+
+    const choice = await vscode.window.showInformationMessage(
+        `Reporter Liquid Preview ${release.version} is available (you have ${current}).`,
+        'Install', 'What’s new', 'Skip this version'
+    );
+    if (choice === 'Install') return installUpdate(release, transport);
+    if (choice === 'What’s new') {
+        if (release.pageUrl && vscode.env && vscode.env.openExternal) await vscode.env.openExternal(vscode.Uri.parse(release.pageUrl));
+        return { outcome: 'shown-notes', release };
+    }
+    if (choice === 'Skip this version' && state) {
+        await state.update(UPDATE_KEYS.skipped, release.version);
+        return { outcome: 'skipped', release };
+    }
+    return { outcome: 'dismissed', release };
+}
+
+// Download the release's .vsix, check it is byte for byte the file GitHub
+// published, and have VS Code install it. If anything goes wrong, say what,
+// and point at the release page, where it can be installed by hand.
+async function installUpdate(release, transport = updateTransport) {
+    const fs = require('fs');
+    const os = require('os');
+    const offerPage = async message => {
+        const open = await vscode.window.showErrorMessage(`${message} You can install it by hand from the release page with “Install from VSIX…”.`, 'Open release page');
+        if (open && release.pageUrl && vscode.env && vscode.env.openExternal) await vscode.env.openExternal(vscode.Uri.parse(release.pageUrl));
+    };
+    try {
+        const buffer = await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: `Downloading Reporter Liquid Preview ${release.version}…` },
+            () => transport.download(release.downloadUrl)
+        );
+        const verdict = updates.verifyDownload(buffer, release.sha256);
+        if (!verdict.ok) {
+            await offerPage(verdict.reason);
+            return { outcome: 'not-verified', release };
+        }
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'reporter-liquid-preview-'));
+        const file = path.join(dir, release.fileName);
+        fs.writeFileSync(file, buffer);
+        await vscode.commands.executeCommand('workbench.extensions.installExtension', vscode.Uri.file(file));
+        const reload = await vscode.window.showInformationMessage(`Reporter Liquid Preview ${release.version} is installed. Reload the window to start using it.`, 'Reload now');
+        if (reload === 'Reload now') await vscode.commands.executeCommand('workbench.action.reloadWindow');
+        return { outcome: 'installed', release, file };
+    } catch (err) {
+        await offerPage(`Reporter Liquid Preview ${release.version} couldn’t be installed automatically (${err.message}).`);
+        return { outcome: 'failed', release, error: err };
+    }
+}
+
+function registerUpdates(context) {
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.checkForUpdates', () => checkForUpdates(context, { manual: true })));
+    // Not while developing the extension itself, and not without somewhere to
+    // remember when the last check was (a test harness, say).
+    const developing = vscode.ExtensionMode && context.extensionMode === vscode.ExtensionMode.Development;
+    if (!context.globalState || developing) return;
+    // A few seconds after start-up, so it never competes with opening a preview.
+    const timer = setTimeout(() => { checkForUpdates(context).catch(() => { }); }, 5000);
+    context.subscriptions.push({ dispose: () => clearTimeout(timer) });
+}
+
 function deactivate() { }
 
 module.exports = {
@@ -2313,6 +2452,9 @@ Object.assign(module.exports, {
     runTemplateTests,
     saveBuiltTest,
     acceptCheckResult,
+    checkForUpdates,
+    installUpdate,
+    registerUpdates,
     removeCheck,
     editTestInBuilder,
     builtTestsFor,
