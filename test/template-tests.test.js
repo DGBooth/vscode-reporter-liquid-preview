@@ -245,7 +245,7 @@ test('Run Template Tests finds every suite in the workspace and records the repo
 
     const report = await extension.runTemplateTests();
     assert.deepStrictEqual(report.suites.map(s => s.file), ['/w/other.liquidtest.json', SUITE]);
-    assert.deepStrictEqual(templateTests.summarize(report.suites), { passed: 1, failed: 1, error: 0, total: 2, suiteErrors: 0 });
+    assert.deepStrictEqual(templateTests.summarize(report.suites), { passed: 1, failed: 1, error: 0, total: 2, suiteErrors: 0, checks: 0, checksFailed: 0, checksSkipped: 0 });
 });
 
 test('accepting the actual output writes the expected files, then the case passes', async () => {

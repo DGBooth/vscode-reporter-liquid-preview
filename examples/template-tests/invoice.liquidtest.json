@@ -4,17 +4,60 @@
     {
       "name": "two items",
       "data": "data/two-items.json",
-      "expected": "expected/two-items.html"
+      "expected": "expected/two-items.html",
+      "checks": [
+        {
+          "name": "heading names the customer",
+          "selector": "h1",
+          "text": "Invoice for Ada Lovelace"
+        },
+        {
+          "name": "one row per item",
+          "selector": "table tr",
+          "count": 2
+        },
+        {
+          "name": "prices are formatted as money",
+          "selector": "td:nth-child(2)",
+          "text": [
+            "1,250.50",
+            "42.00"
+          ]
+        },
+        {
+          "name": "notes are ticked and shown",
+          "selector": "#includeNotes",
+          "attributes": {
+            "checked": true
+          }
+        },
+        {
+          "name": "notes carry the payment terms",
+          "selector": ".optional-content",
+          "contains": "Net 30"
+        }
+      ]
     },
     {
       "name": "no items shows the empty message",
-      "data": { "customer": { "name": "Charles Babbage" }, "items": [] },
+      "data": {
+        "customer": {
+          "name": "Charles Babbage"
+        },
+        "items": []
+      },
       "contains": "<p>No items.</p>",
       "notContains": "<table>"
     },
     {
       "name": "notes are unchecked by default",
-      "data": { "customer": { "name": "Grace" }, "items": [], "notes": "" },
+      "data": {
+        "customer": {
+          "name": "Grace"
+        },
+        "items": [],
+        "notes": ""
+      },
       "notContains": "checked=\"\"",
       "whitespace": "collapse"
     }

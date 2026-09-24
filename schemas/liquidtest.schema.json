@@ -3,10 +3,15 @@
     "title": "Reporter Liquid template test suite",
     "description": "Cases that render a Liquid template against known data and check the output. Paths are relative to this file.",
     "type": "object",
-    "required": ["cases"],
+    "required": [
+        "cases"
+    ],
     "definitions": {
         "whitespace": {
-            "enum": ["exact", "collapse"],
+            "enum": [
+                "exact",
+                "collapse"
+            ],
             "description": "\"exact\" (default) compares the output as-is, ignoring only line-ending style and a final newline. \"collapse\" ignores whitespace between tags and treats any run of whitespace as one space."
         },
         "allowWarnings": {
@@ -15,9 +20,95 @@
         },
         "stringOrList": {
             "oneOf": [
-                { "type": "string" },
-                { "type": "array", "items": { "type": "string" } }
+                {
+                    "type": "string"
+                },
+                {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
             ]
+        },
+        "check": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "additionalProperties": false,
+            "description": "One small, named assertion about part of the output. Reported on its own, so a failure names what broke.",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Says what the check proves, e.g. \"the total includes tax\". Shown in the report and the Testing view."
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "A CSS selector for the elements to check, e.g. \"h1\", \"table tr\", \"#includeNotes\", \"td:nth-child(2)\". The output is parsed the way a browser parses it. On its own, it checks that something matches."
+                },
+                "exists": {
+                    "type": "boolean",
+                    "description": "true: the selector matches something. false: it matches nothing."
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "How many elements the selector matches."
+                },
+                "text": {
+                    "description": "The text of the matched element as a reader sees it (whitespace collapsed, entities decoded). A single value needs the selector to match exactly one element; a list checks each match in order.",
+                    "oneOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                },
+                "contains": {
+                    "description": "With a selector: text the matched elements' text must contain. Without one: text the page must mention, read as a reader sees it (not the HTML).",
+                    "oneOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                },
+                "notContains": {
+                    "description": "With a selector: text the matched elements' text must not contain. Without one: text the page must not mention, read as a reader sees it (not the HTML).",
+                    "oneOf": [
+                        {
+                            "type": "string"
+                        },
+                        {
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                },
+                "attributes": {
+                    "type": "object",
+                    "description": "Attributes of the one matched element: a value it must equal, true (must be present) or false (must be absent). E.g. { \"checked\": true }.",
+                    "additionalProperties": {
+                        "type": [
+                            "string",
+                            "boolean"
+                        ]
+                    }
+                }
+            }
         }
     },
     "properties": {
@@ -25,30 +116,66 @@
             "type": "string",
             "description": "The .liquid template every case renders, unless a case names its own."
         },
-        "whitespace": { "$ref": "#/definitions/whitespace" },
-        "allowWarnings": { "$ref": "#/definitions/allowWarnings" },
+        "whitespace": {
+            "$ref": "#/definitions/whitespace"
+        },
+        "allowWarnings": {
+            "$ref": "#/definitions/allowWarnings"
+        },
         "cases": {
             "type": "array",
             "minItems": 1,
             "items": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                    "name"
+                ],
                 "additionalProperties": false,
                 "properties": {
-                    "name": { "type": "string", "description": "Shown in the Test Explorer and the report. Keep it unique within the suite." },
-                    "template": { "type": "string", "description": "Overrides the suite's template for this case." },
+                    "name": {
+                        "type": "string",
+                        "description": "Shown in the Test Explorer and the report. Keep it unique within the suite."
+                    },
+                    "template": {
+                        "type": "string",
+                        "description": "Overrides the suite's template for this case."
+                    },
                     "data": {
                         "description": "A path to a .json data file, or the data inline as an object. Omit to render with no data.",
-                        "oneOf": [{ "type": "string" }, { "type": "object" }]
+                        "oneOf": [
+                            {
+                                "type": "string"
+                            },
+                            {
+                                "type": "object"
+                            }
+                        ]
                     },
                     "expected": {
                         "type": "string",
                         "description": "A file holding the exact expected output. If it does not exist yet, run the case and accept its actual output to create it."
                     },
-                    "contains": { "$ref": "#/definitions/stringOrList", "description": "Text the output must contain." },
-                    "notContains": { "$ref": "#/definitions/stringOrList", "description": "Text the output must not contain." },
-                    "whitespace": { "$ref": "#/definitions/whitespace" },
-                    "allowWarnings": { "$ref": "#/definitions/allowWarnings" }
+                    "contains": {
+                        "$ref": "#/definitions/stringOrList",
+                        "description": "Text the output must contain."
+                    },
+                    "notContains": {
+                        "$ref": "#/definitions/stringOrList",
+                        "description": "Text the output must not contain."
+                    },
+                    "whitespace": {
+                        "$ref": "#/definitions/whitespace"
+                    },
+                    "allowWarnings": {
+                        "$ref": "#/definitions/allowWarnings"
+                    },
+                    "checks": {
+                        "type": "array",
+                        "description": "Small named checks on parts of this case's output, each reported on its own.",
+                        "items": {
+                            "$ref": "#/definitions/check"
+                        }
+                    }
                 }
             }
         }

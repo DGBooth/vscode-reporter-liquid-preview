@@ -10,3 +10,19 @@ test/
 .vscodeignore
 package-lock.json
 examples/
+# Dependencies are loaded through their CommonJS entry points only (require),
+# so their ES-module builds, type definitions, source maps and docs never run.
+# LICENSE files stay.
+node_modules/**/*.d.ts
+node_modules/**/*.d.ts.map
+node_modules/**/*.map
+node_modules/**/*.md
+node_modules/**/lib/esm/**
+node_modules/css-what/lib/es/**
+node_modules/parse5/dist/*.js
+node_modules/parse5/dist/common/**
+node_modules/parse5/dist/parser/**
+node_modules/parse5/dist/serializer/**
+node_modules/parse5/dist/tokenizer/**
+node_modules/parse5/dist/tree-adapters/**
+node_modules/parse5-htmlparser2-tree-adapter/dist/*.js
