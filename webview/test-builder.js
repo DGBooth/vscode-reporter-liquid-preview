@@ -151,13 +151,49 @@
         return shorten(steps, root, sel => selectsOnly(root, sel, el));
     }
 
-    // A selector for `el` and the others like it, and how many there are.
-    // "Like it" is decided by the nearest repeating step of its path: a repeated
-    // ancestor first — a price cell's likes are the prices in the other rows,
-    // its column, not the other cells of its own row — and failing that its own
-    // siblings: the rows of a table, the items of a list. Null when it has no
-    // like. `inColumn` says the likes came from a repeated ancestor.
+    // A selector for `el` and the others like it, and how many there are —
+    // what "There are 3 of these" counts. The others like it are its family,
+    // found by name before position, since a loop in a template usually gives
+    // what it repeats a class:
+    //
+    //   1. its own class, e.g. table.recommendation — the narrowest of its
+    //      classes that still repeats;
+    //   2. a repeated container with a class around it, e.g. the table in
+    //      each section.recommendation;
+    //   3. failing a name, its position: the nearest repeating step of its
+    //      path, a repeated ancestor first (a price cell's likes are the prices
+    //      in the other rows, not the other cells of its own row), then its
+    //      own siblings.
+    //
+    // Counting by position alone would count every table at that level —
+    // a plans table above the recommendations included — so the count could
+    // stay right while a recommendation went missing. Null when it has no like.
+    // `likeThis` says the family is narrower than every element of its kind.
     function groupSelectorFor(el, root) {
+        const repeats = sel => {
+            const m = matches(root, sel);
+            return m && m.length >= 2 && m.indexOf(el) !== -1 ? m.length : 0;
+        };
+        const narrowest = candidates => candidates
+            .map(selector => ({ selector, count: repeats(selector) }))
+            .filter(c => c.count)
+            .sort((x, y) => x.count - y.count)[0];
+
+        const tag = tagOf(el);
+        const own = narrowest(Array.from(el.classList || []).map(cls => tag + '.' + cssEscape(cls)));
+        if (own) return { selector: own.selector, count: own.count, likeThis: true };
+
+        const inner = [];
+        for (let node = el; node && node.parentElement && node !== root; node = node.parentElement) {
+            inner.unshift(step(node));
+            const container = node.parentElement;
+            if (container === root || !root.contains(container)) break;
+            const within = inner.join(' > ');
+            const byContainer = narrowest(Array.from(container.classList || [])
+                .map(cls => tagOf(container) + '.' + cssEscape(cls) + ' > ' + within));
+            if (byContainer) return { selector: byContainer.selector, count: byContainer.count, likeThis: true };
+        }
+
         const steps = pathTo(el, root);
         if (!steps.length) return null;
         const order = [];
@@ -174,7 +210,7 @@
                 const m = matches(root, sel);
                 return Boolean(m) && m.length === count && m.indexOf(el) !== -1;
             });
-            return { selector, count, inColumn: i < steps.length - 1 };
+            return { selector, count, likeThis: i < steps.length - 1 };
         }
         return null;
     }
@@ -273,7 +309,7 @@
             out.push({
                 kind: 'count',
                 label: 'There are ' + group.count + ' of these (highlighted)',
-                name: 'There are ' + group.count + ' ' + plural(noun) + (group.inColumn ? ' like this' : ''),
+                name: 'There are ' + group.count + ' ' + plural(noun) + (group.likeThis ? ' like this' : ''),
                 check: { selector: group.selector, count: group.count }
             });
         }
