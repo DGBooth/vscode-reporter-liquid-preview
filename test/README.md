@@ -101,6 +101,10 @@ files are separate processes, so state never leaks across a file.
   editing a test in the builder — reorder, remove, add, rename — including the
   panel itself in jsdom, and the guards that stop a suite edited since the run
   having the wrong test changed.
+- **`updates.test.js`** — updating from GitHub releases, against a fake
+  GitHub: which releases are offered, the once-a-day check (which stays quiet
+  when it fails), skipping a version, the setting, and that a download is
+  installed only if its SHA-256 matches the one GitHub published.
 - **`cli.test.js`** — the command-line runner: exit codes (including finding
   no suites, which must not pass), verdicts that match the editor's, suite
   discovery, `--junit`, `--report` and `--update`, and that it loads in a

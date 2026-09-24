@@ -11,6 +11,11 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.7.0] - 2026-09-24
+
+### Added
+- The extension keeps itself up to date from GitHub releases. Once a day it checks for a newer release and offers **Install**, **What's new** or **Skip this version**. **Install** downloads the release's `.vsix`, checks its SHA-256 fingerprint against the one GitHub publishes, installs it and offers to reload. **Reporter Liquid: Check for Updates** checks on demand, and the `reporterLiquidPreview.checkForUpdates` setting turns the daily check off. Earlier versions can't update themselves, so install 1.7.0 by hand once.
+
 ## [1.6.0] - 2026-09-24
 
 ### Added
