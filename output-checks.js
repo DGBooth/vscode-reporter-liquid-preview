@@ -245,4 +245,19 @@ function snip(text) {
     return text.length > 80 ? text.slice(0, 79) + '…' : text;
 }
 
-module.exports = { parseChecks, runChecks };
+// Output as the preview should display it: parsed exactly as the checks parse
+// it — a fragment inside a <div> — and written back out, so every element it
+// opens is closed and every stray closing tag is gone. Put straight into a page,
+// raw output with a stray </div> would close the preview's own container and
+// cut the rest of the document loose: laid out outside the template's sections,
+// and out of reach of the test builder, which only looks inside the container.
+// It would also disagree with the checks, which never see that tree. The
+// displayed document and the checked one are the same tree this way.
+function asPreviewShowsIt(html) {
+    const { parse5, adapter } = domLibraries();
+    const context = parse5.parseFragment('<div></div>', { treeAdapter: adapter }).children[0];
+    const fragment = parse5.parseFragment(context, String(html), { treeAdapter: adapter });
+    return parse5.serialize(fragment, { treeAdapter: adapter });
+}
+
+module.exports = { parseChecks, runChecks, asPreviewShowsIt };

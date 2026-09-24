@@ -11,6 +11,14 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.5.2] - 2026-09-24
+
+### Fixed
+- A stray closing tag in the output (such as an extra `</div>`) no longer breaks the HTML preview. On first load it closed the preview's own container, so everything after it fell out of its section and out of the test builder's reach. After an edit the same template looked different again. The preview now displays the output parsed as the template tests parse it, so first load, edits, the builder and the checks all see the same structure.
+
+### Added
+- The problems pane warns about **Unbalanced HTML**: each closing tag that closes nothing the output opened, with the text that follows it. Reporter may render such a tag differently from the preview, so it's worth removing from the template.
+
 ## [1.5.1] - 2026-09-24
 
 ### Fixed

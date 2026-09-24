@@ -2,7 +2,7 @@ const path = require('path');
 const vscode = require('vscode');
 const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
-const { parseChecks, runChecks } = require('./output-checks');
+const { parseChecks, runChecks, asPreviewShowsIt } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
 // inlined into each preview document.
@@ -22,6 +22,7 @@ const {
     HTML_RAW_TAGS,
     tokenizeHtml,
     formatHtml,
+    strayClosingTags,
     renderWithDiagnostics,
     diagnostic,
     liquidDiagnostic,
@@ -919,6 +920,7 @@ function queueRefresh(preview, run) {
 // document, later calls patch it in place via a message (see buildPreviewHtml)
 // so the view isn't reloaded on every edit.
 function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = null) {
+    rendered = balanced(rendered);
     if (panel._rlpInitialized) {
         panel.webview.postMessage({ type: 'update', chrome, rendered });
     } else {
@@ -926,6 +928,35 @@ function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = 
         panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles, builder);
         panel._rlpInitialized = true;
     }
+}
+
+// Output as the preview displays it (see asPreviewShowsIt): the tree the
+// checks see, with every element closed and stray closing tags dropped, so no
+// stray </div> can close the preview's own container. Falls back to the output
+// as it is if it can't be parsed, rather than showing nothing.
+function balanced(html) {
+    try {
+        return asPreviewShowsIt(html);
+    } catch (err) {
+        return html;
+    }
+}
+
+// A warning for each closing tag in the output that closes nothing it opened.
+// The preview drops them, but a browser showing the whole page — Reporter's —
+// may let one close an element around the document, and everything after it
+// falls out of its section. There is no template line to point at (the tag may
+// come from anywhere, loops included), so the text after it says where.
+function strayTagDiagnostics(rendered, file) {
+    return strayClosingTags(rendered).map(stray => diagnostic(
+        'warning',
+        'Unbalanced HTML',
+        `The output has a ${stray.tag} that closes nothing it opened${stray.followedBy ? `, just before \u201c${stray.followedBy}\u201d` : ', at the end'}. `
+            + `The preview ignores it, but a browser showing the whole page may close the wrong element there and push the rest of the document out of its section. `
+            + `Remove the extra ${stray.tag} from the template (Show HTML source shows the output around it).`,
+        file,
+        null
+    ));
 }
 
 async function refreshHtmlPanel(preview, panel) {
@@ -967,7 +998,7 @@ async function refreshHtmlPanel(preview, panel) {
         const result = await renderWithDiagnostics(preview.template, preview.data, preview.templateUri);
         rendered = result.rendered;
         preview.lastRenderedHtml = rendered;
-        if (!templateIsStale) diagnostics.push(...result.diagnostics);
+        if (!templateIsStale) diagnostics.push(...result.diagnostics, ...strayTagDiagnostics(rendered, preview.templateUri));
     } catch (err) {
         if (!templateIsStale) diagnostics.push(liquidDiagnostic('Render error', err, preview.templateUri));
         rendered = preview.lastRenderedHtml || '';
@@ -2075,6 +2106,7 @@ Object.assign(module.exports, {
     saveBuiltTest,
     showTestReport,
     snippetOf,
+    strayTagDiagnostics,
     stripLiquidFromHtmlTags,
     tokenLocation,
     toTestMessages,
