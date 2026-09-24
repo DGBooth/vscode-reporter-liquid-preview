@@ -183,7 +183,7 @@ A case can use checks, `expected`, or both. If the case fails to render, its che
 2. Click any part of the page: a heading, a price, a tick box, a row. The builder offers what could be true about it, in plain words:
    - *It reads exactly "Invoice for Ada Lovelace"*
    - *It includes:* a phrase you can trim to the part that matters
-   - *There are 3 of these*, with the counted parts highlighted. This is how to check a loop ran once per item: click one of the three recommendation tables, and the check says there are three. It counts that element's family, found by its class (`table.recommendation`) or a repeated container with a class around it, so other tables on the page aren't counted. Only with no class to go on does it fall back to the element's position.
+   - *There are 3 of these*, with the counted parts highlighted. This is how to check a loop ran once per item: click one of the three recommendation tables, and the check says there are three. It counts that element's family, found by its class (`table.recommendation`) or a repeated container with a class around it, so other tables on the page aren't counted. Only with no class to go on does it fall back to the element's position, which works when the loop's output sits in a container of its own, such as each recommendation in its own `<div>`. It can't work when the loop's tables sit directly beside other tables with nothing to tell them apart. Give the loop's element a class then (`<table class="recommendation">`). The counted tables are highlighted before you add the check, so you'll see if it's counting too many.
    - *It is ticked*, or *It shows "PO-77"* for a text box
    - *It is shown*
 

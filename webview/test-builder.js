@@ -70,9 +70,49 @@
         return el.tagName.toLowerCase();
     }
 
+    // Which elements of the output a selector matches — as the test runner
+    // will see it. The runner parses the output on its own, with nothing
+    // around it; here it sits inside the preview's container, a <div>, inside
+    // the page. Matched in place, "div > table" would also match a table at
+    // the top of the output, whose parent is that container, and the builder
+    // would count or pick things the runner never will. So selectors are run
+    // against a detached copy of the output, shaped as the runner parses it,
+    // and the matches mapped back to the elements on the page.
+    const scopes = new WeakMap();
+
+    function scopeOf(root) {
+        let scope = scopes.get(root);
+        if (scope && scope.observer && scope.observer.takeRecords().length) scope = null;
+        if (scope) return scope;
+        // The copy goes in the body of a separate, inert document (nothing in
+        // it runs). Its top-level elements have <body> as their parent, which
+        // no selector here ever names, so they match as the runner's parentless
+        // top-level elements do. A bare DocumentFragment would be closer still,
+        // but selector engines disagree about child combinators under one.
+        const doc = root.ownerDocument.implementation.createHTMLDocument('');
+        const copy = doc.body;
+        for (const child of Array.from(root.childNodes)) copy.appendChild(doc.importNode(child, true));
+        const toPage = new Map();
+        const pair = (original, clone) => {
+            for (let i = 0; i < clone.children.length; i++) {
+                toPage.set(clone.children[i], original.children[i]);
+                pair(original.children[i], clone.children[i]);
+            }
+        };
+        pair(root, copy);
+        const previous = scopes.get(root);
+        const observer = previous && previous.observer
+            || (typeof MutationObserver === 'function' ? new MutationObserver(() => { }) : null);
+        if (observer && !(previous && previous.observer)) observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+        scope = { copy, toPage, observer };
+        scopes.set(root, scope);
+        return scope;
+    }
+
     function matches(root, selector) {
         try {
-            return Array.from(root.querySelectorAll(selector));
+            const scope = scopeOf(root);
+            return Array.from(scope.copy.querySelectorAll(selector)).map(el => scope.toPage.get(el));
         } catch (err) {
             return null;
         }
