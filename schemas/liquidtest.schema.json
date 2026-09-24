@@ -71,7 +71,7 @@
                     ]
                 },
                 "contains": {
-                    "description": "With a selector: text the matched elements' text must contain. Without: text the whole HTML output must contain.",
+                    "description": "With a selector: text the matched elements' text must contain. Without one: text the page must mention, read as a reader sees it (not the HTML).",
                     "oneOf": [
                         {
                             "type": "string"
@@ -85,7 +85,7 @@
                     ]
                 },
                 "notContains": {
-                    "description": "With a selector: text the matched elements' text must not contain. Without: text the whole HTML output must not contain.",
+                    "description": "With a selector: text the matched elements' text must not contain. Without one: text the page must not mention, read as a reader sees it (not the HTML).",
                     "oneOf": [
                         {
                             "type": "string"

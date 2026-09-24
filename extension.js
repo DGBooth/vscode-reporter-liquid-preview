@@ -2,6 +2,12 @@ const path = require('path');
 const vscode = require('vscode');
 const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
+const { parseChecks, runChecks } = require('./output-checks');
+
+// The HTML preview's test builder (see webview/test-builder.js), read once and
+// inlined into each preview document.
+const BUILDER_SCRIPT = require('fs').readFileSync(path.join(__dirname, 'webview', 'test-builder.js'), 'utf8');
+const BUILDER_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview', 'test-builder.css'), 'utf8');
 const {
     liquidEngine,
     parseTagArgs,
@@ -121,7 +127,7 @@ function activate(context) {
             );
 
             htmlPreviews[preview.id] = { preview, panel };
-            wirePreviewMessages(panel, { createTest: () => saveHtmlPreviewAsTest(preview) });
+            wirePreviewMessages(panel, { saveBuiltTest: message => saveBuiltTest(preview, panel, message) });
 
             await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
 
@@ -912,12 +918,12 @@ function queueRefresh(preview, run) {
 // Push new content into a preview panel: the first call sets the full webview
 // document, later calls patch it in place via a message (see buildPreviewHtml)
 // so the view isn't reloaded on every edit.
-function updatePreviewPanel(panel, preview, chrome, rendered, styles) {
+function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = null) {
     if (panel._rlpInitialized) {
         panel.webview.postMessage({ type: 'update', chrome, rendered });
     } else {
         let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles);
+        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles, builder);
         panel._rlpInitialized = true;
     }
 }
@@ -968,7 +974,8 @@ async function refreshHtmlPanel(preview, panel) {
     }
 
     publishDiagnostics(preview, diagnostics);
-    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles);
+    const defaultName = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : '';
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName });
 }
 
 // The HTML Preview's own UI: a toolbar with a source toggle and a hidden
@@ -977,7 +984,7 @@ async function refreshHtmlPanel(preview, panel) {
 // the rendered document itself (see buildPreviewHtml).
 function buildHtmlPreviewChrome(rendered) {
     const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`
-        + `<button type="button" class="lp-action" data-lp-action="createTest" title="Add this template and data file to a test suite, with the output shown here as the expected output">Save as test&hellip;</button></div>`;
+        + `<button type="button" class="lp-action" data-lp-local="build-test" title="Build a test by clicking the parts of this page that should stay the way they are">Create test&hellip;</button></div>`;
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
 <pre>${highlightHtml(formatHtml(rendered))}</pre>
@@ -1147,14 +1154,14 @@ function toVsCodeDiagnostic(item) {
 }
 
 // Listen for the position a reader clicked in the problems pane and open it.
-// `actions` maps a toolbar button's data-lp-action to what it does — the HTML
-// preview's "Save as test" is the only one so far.
+// `actions` maps an action the webview posts to what it does, and is handed
+// the whole message — the HTML preview's test builder posts the test it built.
 function wirePreviewMessages(panel, actions = {}) {
     panel.webview.onDidReceiveMessage(message => {
         if (message && message.type === 'reveal' && message.file) {
             revealInEditor(message.file, message.line, message.col);
         } else if (message && message.type === 'action' && typeof actions[message.action] === 'function') {
-            actions[message.action]();
+            actions[message.action](message);
         }
     });
 }
@@ -1192,7 +1199,25 @@ async function revealInEditor(file, line, col) {
 // edit doesn't reload the document — scroll position and toggle checkboxes
 // survive it. Patching each container separately via innerHTML also uses
 // fragment parsing, which cannot leak content outside its container.
-function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '') {
+function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder = null) {
+    // The test builder's panel is a sibling placed before the chrome, so no
+    // template markup can swallow it; its styles travel as inert text and are
+    // applied inside its shadow root. The overlays that mark what is hovered
+    // and picked are the only builder styles in the document itself.
+    const builderHost = builder
+        ? `<aside id="lp-builder" hidden data-default-name="${escapeHtml(builder.defaultName || '')}"></aside>
+<script type="text/plain" id="lp-builder-styles">${BUILDER_STYLES}</script>`
+        : '';
+    const builderStyles = builder
+        ? `
+  body.lp-building { margin-right: 340px; }
+  body.lp-building #lp-rendered-root { cursor: crosshair; }
+  #lp-builder-hover, #lp-builder-pick { position: absolute; pointer-events: none; z-index: 9998; border-radius: 3px; }
+  #lp-builder-hover { outline: 2px dashed #0078d4; background: rgba(0, 120, 212, 0.06); }
+  #lp-builder-pick { outline: 2px solid #0078d4; background: rgba(0, 120, 212, 0.12); }
+  .lp-builder-group { position: absolute; pointer-events: none; z-index: 9997; border-radius: 3px; outline: 2px solid #d18616; background: rgba(209, 134, 22, 0.12); }
+  @media (max-width: 700px) { body.lp-building { margin-right: 0; padding-bottom: 56vh; } }`
+        : '';
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -1219,11 +1244,12 @@ function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '') {
   button.diag-goto { cursor: pointer; }
   button.diag-goto:hover, button.diag-goto:focus { background: #2d2718; color: #cfe9ff; outline: none; }
   #error-pane pre.diag-message { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }
-  .diag-snippet { margin-top: 3px; padding-left: 6px; border-left: 2px solid #4a4130; font-family: monospace; font-size: 11px; color: #b9ad8e; white-space: pre-wrap; word-break: break-word; }${extraStyles}
+  .diag-snippet { margin-top: 3px; padding-left: 6px; border-left: 2px solid #4a4130; font-family: monospace; font-size: 11px; color: #b9ad8e; white-space: pre-wrap; word-break: break-word; }${extraStyles}${builderStyles}
 </style>
 ${cssLinks}
 </head>
 <body>
+${builderHost}
 <div id="lp-chrome">
 ${chrome}
 </div>
@@ -1258,6 +1284,8 @@ ${rendered}
     // it survives the content patch above, and no-ops outside VS Code, where
     // there is no extension to post to.
     const vscodeApi = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+    // Shared with the test builder: a webview may acquire the API only once.
+    window.__rlpVsCodeApi = vscodeApi;
     document.addEventListener('click', event => {
         const action = event.target && event.target.closest && event.target.closest('[data-lp-action]');
         if (action && vscodeApi) {
@@ -1408,6 +1436,7 @@ ${rendered}
         }
     });
 </script>
+${builder ? `<script>${BUILDER_SCRIPT}</script>` : ''}
 </body>
 </html>`;
 }
@@ -1831,9 +1860,10 @@ async function saveDirtyInputs(files) {
 }
 
 // Add a case for each source to the suite beside `templateFile` (or
-// `suiteFile`). `sources` are { name, dataFile } or { name, data }. Returns
-// what was added and what was left out and why, or null if the reader
-// cancelled.
+// `suiteFile`). `sources` are { name, dataFile } or { name, data }, with
+// optional `checks` and `snapshot` (false: no expected file, the checks are the
+// test). Returns what was added and what was left out and why, or null if the
+// reader cancelled.
 async function createTestsFromCases(templateFile, sources, { suiteFile = null } = {}) {
     const fs = require('fs');
     suiteFile = suiteFile || templateTests.defaultSuiteFile(templateFile);
@@ -1868,6 +1898,20 @@ async function createTestsFromCases(templateFile, sources, { suiteFile = null } 
         if (html === null || error) {
             rejected.push({ name: source.name, reason: error ? `${error.title}: ${error.message}` : 'the template did not render' });
             continue;
+        }
+        // Every check must pass against the output it was built from. One that
+        // doesn't would fail on its first run — and for a check made in the
+        // builder, it means the builder got something wrong, which the reader
+        // should hear now rather than discover later.
+        if (source.checks && source.checks.length) {
+            const parsed = parseChecks(source.checks);
+            const failing = parsed.error
+                ? [{ name: 'checks', failures: [parsed.error] }]
+                : runChecks(parsed.checks, html).filter(c => c.status !== 'passed');
+            if (failing.length) {
+                rejected.push({ name: source.name, reason: `${failing.length === 1 ? 'a check doesn\u2019t' : 'some checks don\u2019t'} pass against the current output: ${failing.map(c => `${c.name} (${c.failures[0]})`).join('; ')}` });
+                continue;
+            }
         }
         rendered.push(Object.assign({}, source, { output: html, warnings: diagnostics.length }));
     }
@@ -1929,18 +1973,33 @@ async function createTestsFromCases(templateFile, sources, { suiteFile = null } 
     return { suiteFile, added: plan.added, skipped, report };
 }
 
-// The HTML preview's "Save as test": this template, this data file, and the
-// output currently on screen — which the reader has just looked at.
-async function saveHtmlPreviewAsTest(preview) {
-    const suggested = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : 'no data';
-    const name = await vscode.window.showInputBox({
-        prompt: `Name the test case for ${path.basename(preview.templateUri)}`,
-        value: suggested,
-        validateInput: value => (value && value.trim() ? null : 'A test case needs a name.')
-    });
-    if (!name) return null;
-    const source = preview.dataUri ? { name: name.trim(), dataFile: preview.dataUri } : { name: name.trim(), data: {} };
-    return createTestsFromCases(preview.templateUri, [source]);
+// The HTML preview's test builder posts the test it built: a name, its checks
+// and whether to also freeze the whole page. The case uses the preview's
+// template and data file. The outcome goes back to the builder panel, in
+// words, whether it was saved or why not.
+async function saveBuiltTest(preview, panel, message) {
+    const reply = (ok, text) => panel.webview.postMessage({ type: 'builderResult', ok, message: text });
+    const name = typeof message.name === 'string' ? message.name.trim() : '';
+    const checks = Array.isArray(message.checks) ? message.checks : [];
+    const wholePage = message.wholePage === true;
+    if (!name) return reply(false, 'Give the test a name first.');
+    if (checks.length === 0 && !wholePage) return reply(false, 'Add at least one check, or tick \u201cAlso check the whole page\u201d.');
+
+    const source = Object.assign(
+        { name, checks, snapshot: wholePage },
+        preview.dataUri ? { dataFile: preview.dataUri } : { data: {} }
+    );
+    let result;
+    try {
+        result = await createTestsFromCases(preview.templateUri, [source]);
+    } catch (err) {
+        return reply(false, `The test wasn\u2019t saved: ${err.message}`);
+    }
+    if (!result) return reply(false, 'Cancelled. Nothing was saved.');
+    if (result.added.length === 0) {
+        return reply(false, `The test wasn\u2019t saved: ${result.skipped.map(s => s.reason).join('; ')}`);
+    }
+    return reply(true, `Saved \u201c${result.added[0]}\u201d to ${relativePath(result.suiteFile)}. The test report shows it passing.`);
 }
 
 // "Create Tests from Data Files…": one template, any number of data files, a
@@ -2013,7 +2072,7 @@ Object.assign(module.exports, {
     registerCustomTags,
     renderForTest,
     runTemplateTests,
-    saveHtmlPreviewAsTest,
+    saveBuiltTest,
     showTestReport,
     snippetOf,
     stripLiquidFromHtmlTags,

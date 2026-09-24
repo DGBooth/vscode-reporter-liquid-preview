@@ -15,7 +15,12 @@ version bump, so a version can include work committed before its bump.
 
 ### Added
 - Checks: small, named tests within a case. Each targets part of the output with a CSS selector and checks its text, how many elements match, whether any exist, what their text contains, or their attributes. Each passes or fails on its own, with a message saying what was found. Checks appear in the report, as children of their case in the Testing view, and as separate JUnit test cases from `liquid-test`.
-- The output is parsed with parse5, which follows the same HTML rules as browsers, so selectors see the structure the preview shows. The parser only loads when a check uses a selector.
+- The output is parsed with parse5, following the same HTML rules as browsers and in the same place the preview puts it (inside a `<div>`), so selectors see the structure the preview shows. The parser only loads when a case has checks.
+- **Create test…** in the HTML preview opens a test builder: click part of the page and choose what should be true about it in plain words ("It reads exactly…", "There are 3 of these", "It is ticked"). The builder writes the checks, preferring stable names such as Reporter's field ids over positions. Before saving it re-renders the page and runs every check, and refuses to save any that don't pass. A whole-page snapshot is an option rather than the default.
+
+### Changed
+- **Create test…** replaces **Save as test…**, which could only save a whole-page snapshot. The builder offers the same snapshot as an option.
+- Several tests can now be built from the same data file.
 
 ## [1.4.0] - 2026-09-23
 

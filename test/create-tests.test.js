@@ -198,30 +198,98 @@ test('Create Tests from Data Files offers data files only, and makes a case per 
     assert.strictEqual(read('expected/invoice/b.html'), '2');
 });
 
-test('the HTML preview has a Save as test button that asks the extension to create one', async () => {
+test('the HTML preview carries the test builder, and hands its messages over whole', async () => {
     const { panel } = await renderPreview({ template: 'x', data: '{}' });
-    assert.ok(panel.webview.html.includes('data-lp-action="createTest"'));
+    const page = panel.webview.html;
+    assert.ok(page.includes('data-lp-local="build-test"'), 'the Create test button');
+    assert.ok(page.includes('<aside id="lp-builder" hidden data-default-name="data">'), 'named after the data file by default');
+    assert.ok(page.includes('window.RLPTestBuilder'), 'the builder script');
+    assert.ok(page.includes('window.__rlpVsCodeApi = vscodeApi'), 'which shares the one VS Code handle');
 
-    let asked = 0;
+    let received = null;
     const wired = makePanel();
-    extension.wirePreviewMessages(wired, { createTest: () => { asked++; } });
-    wired.send({ type: 'action', action: 'createTest' });
-    wired.send({ type: 'action', action: 'somethingElse' });
-    assert.strictEqual(asked, 1);
+    extension.wirePreviewMessages(wired, { saveBuiltTest: message => { received = message; } });
+    wired.send({ type: 'action', action: 'saveBuiltTest', name: 'n', checks: [] });
+    assert.deepStrictEqual(received, { type: 'action', action: 'saveBuiltTest', name: 'n', checks: [] });
 });
 
-test('Save as test uses the preview\'s template, data file and the name given', async () => {
-    workspace({ 'letter.liquid': 'Dear {{ name }}', 'people/ada.json': '{"name":"Ada"}' });
-    const preview = { templateUri: at('letter.liquid'), dataUri: at('people/ada.json') };
+test('the Full HTML Preview has no builder: it has no data to test against', () => {
+    const page = extension.buildPreviewHtml('', '', '<p>x</p>');
+    assert.ok(!page.includes('lp-builder'));
+});
 
-    stub.inputBoxAnswers.push('  Letter to Ada ');
-    const result = await extension.saveHtmlPreviewAsTest(preview);
-    assert.deepStrictEqual(result.added, ['Letter to Ada']);
-    assert.deepStrictEqual(suiteJson('letter.liquidtest.json').cases[0], {
-        name: 'Letter to Ada', data: 'people/ada.json', expected: 'expected/letter/letter-to-ada.html'
+// A panel that records what the extension says back to the builder.
+function builderPanel() {
+    const replies = [];
+    return { replies, webview: { postMessage: message => { replies.push(message); return Promise.resolve(true); } } };
+}
+
+const BUILT = [
+    { name: 'The heading reads “Dear Ada”', selector: 'h1', text: 'Dear Ada' },
+    { name: 'The page doesn’t mention “overdue”', notContains: 'overdue' }
+];
+
+test('a built test is saved as a case with its checks, and no expected file', async () => {
+    workspace({ 'letter.liquid': '<h1>Dear {{ name }}</h1>', 'people/ada.json': '{"name":"Ada"}' });
+    const panel = builderPanel();
+    await extension.saveBuiltTest({ templateUri: at('letter.liquid'), dataUri: at('people/ada.json') }, panel,
+        { name: 'Letter to Ada', checks: BUILT, wholePage: false });
+
+    assert.deepStrictEqual(suiteJson('letter.liquidtest.json').cases, [{
+        name: 'Letter to Ada',
+        data: 'people/ada.json',
+        checks: [
+            { name: 'The heading reads “Dear Ada”', selector: 'h1', text: 'Dear Ada' },
+            { name: 'The page doesn’t mention “overdue”', notContains: 'overdue' }
+        ]
+    }]);
+    assert.ok(!fs.existsSync(at('expected')), 'no snapshot unless asked for');
+    assert.deepStrictEqual(panel.replies, [{ type: 'builderResult', ok: true, message: `Saved “Letter to Ada” to ${at('letter.liquidtest.json')}. The test report shows it passing.` }]);
+});
+
+test('"Also check the whole page" adds the expected file too', async () => {
+    workspace({ 'letter.liquid': '<h1>Dear {{ name }}</h1>', 'ada.json': '{"name":"Ada"}' });
+    await extension.saveBuiltTest({ templateUri: at('letter.liquid'), dataUri: at('ada.json') }, builderPanel(),
+        { name: 'Ada', checks: [BUILT[0]], wholePage: true });
+    const [c] = suiteJson('letter.liquidtest.json').cases;
+    assert.strictEqual(c.expected, 'expected/letter/ada.html');
+    assert.strictEqual(read('expected/letter/ada.html'), '<h1>Dear Ada</h1>');
+    assert.strictEqual(c.checks.length, 1);
+});
+
+test('several built tests can use the same data file', async () => {
+    workspace({ 'letter.liquid': '<h1>Dear {{ name }}</h1>', 'ada.json': '{"name":"Ada"}' });
+    const preview = { templateUri: at('letter.liquid'), dataUri: at('ada.json') };
+    await extension.saveBuiltTest(preview, builderPanel(), { name: 'Greeting', checks: [BUILT[0]], wholePage: false });
+    await extension.saveBuiltTest(preview, builderPanel(), { name: 'Tone', checks: [BUILT[1]], wholePage: false });
+    assert.deepStrictEqual(suiteJson('letter.liquidtest.json').cases.map(c => c.name), ['Greeting', 'Tone']);
+});
+
+test('a built check that does not pass is refused, and the builder is told which and why', async () => {
+    workspace({ 'letter.liquid': '<h1>Dear {{ name }}</h1>', 'ada.json': '{"name":"Ada"}' });
+    const panel = builderPanel();
+    await extension.saveBuiltTest({ templateUri: at('letter.liquid'), dataUri: at('ada.json') }, panel,
+        { name: 'Wrong', checks: [{ name: 'Says Bob', selector: 'h1', text: 'Dear Bob' }], wholePage: false });
+    assert.ok(!fs.existsSync(at('letter.liquidtest.json')), 'nothing written');
+    assert.strictEqual(panel.replies[0].ok, false);
+    assert.match(panel.replies[0].message, /a check doesn’t pass against the current output: Says Bob \(It reads “Dear Ada”; expected “Dear Bob”\.\)/);
+});
+
+test('the builder is told what is missing before anything is attempted', async () => {
+    const preview = { templateUri: at('x.liquid'), dataUri: null };
+    const noName = builderPanel();
+    await extension.saveBuiltTest(preview, noName, { name: '  ', checks: BUILT, wholePage: false });
+    assert.deepStrictEqual(noName.replies[0], { type: 'builderResult', ok: false, message: 'Give the test a name first.' });
+    const nothing = builderPanel();
+    await extension.saveBuiltTest(preview, nothing, { name: 'x', checks: [], wholePage: false });
+    assert.match(nothing.replies[0].message, /Add at least one check/);
+});
+
+test('a check written by the builder keeps only the keys a check understands', () => {
+    const plan = templateTests.planNewCases({
+        suiteFile: '/w/x.liquidtest.json', suiteText: null, template: '/w/x.liquid',
+        entries: [{ name: 'n', data: {}, output: '', snapshot: false, checks: [{ name: 'c', selector: 'h1', text: 'a', noun: 'Heading', kind: 'reads' }] }]
     });
-    assert.strictEqual(read('expected/letter/letter-to-ada.html'), 'Dear Ada');
-
-    stub.inputBoxAnswers.push(undefined);
-    assert.strictEqual(await extension.saveHtmlPreviewAsTest(preview), null, 'dismissing the name box cancels');
+    assert.deepStrictEqual(JSON.parse(plan.suiteText).cases[0].checks, [{ name: 'c', selector: 'h1', text: 'a' }]);
+    assert.deepStrictEqual(plan.writes, []);
 });

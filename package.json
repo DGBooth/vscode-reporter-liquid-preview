@@ -126,7 +126,8 @@
         "test:templates": "node bin/liquid-test.js examples"
     },
     "devDependencies": {
-        "@types/vscode": "^1.32.0"
+        "@types/vscode": "^1.32.0",
+        "jsdom": "^26.1.0"
     },
     "dependencies": {
         "css-select": "^5.2.2",

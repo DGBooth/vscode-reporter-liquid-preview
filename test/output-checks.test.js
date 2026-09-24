@@ -69,9 +69,11 @@ test('contains and notContains with a selector search the matched elements\' tex
     assert.deepStrictEqual(check(INVOICE, { selector: '.nothing', notContains: 'x' }), [], 'nothing matched, so nothing contains it');
 });
 
-test('contains and notContains without a selector search the whole output, as a case\'s do', () => {
-    assert.deepStrictEqual(check(INVOICE, { contains: 'class="price"' }), [], 'the HTML, not just the text');
-    assert.deepStrictEqual(check(INVOICE, { notContains: 'No items.' }), ['The output should not contain “No items.”.']);
+test('contains and notContains without a selector search the page\'s text, not its HTML', () => {
+    assert.deepStrictEqual(check(INVOICE, { notContains: 'No items.' }), ['The page should not mention “No items.”.']);
+    assert.deepStrictEqual(check(INVOICE, { contains: 'Invoice for Ada & Co' }), [], 'entities are decoded, so "&" is found');
+    assert.deepStrictEqual(check(INVOICE, { notContains: 'class="price"' }), [], 'markup is not text');
+    assert.deepStrictEqual(check(INVOICE, { contains: 'Engine 1,250.50' }), [], 'cells read as separate words');
 });
 
 test('attributes check presence, absence and exact values', () => {
@@ -127,10 +129,10 @@ test('repeated check names are made unique', () => {
     assert.deepStrictEqual(checks.map(c => c.name), ['x', 'x (2)', 'check 3']);
 });
 
-test('the HTML parser is only loaded when a check uses a selector', () => {
+test('the HTML parser is only loaded when a case has checks', () => {
     const script = `
         const { parseChecks, runChecks } = require('./output-checks');
-        runChecks(parseChecks([{ name: 'a', contains: 'x' }]).checks, '<p>x</p>');
+        runChecks([], '<p>x</p>');
         if (Object.keys(require.cache).some(f => f.includes('parse5'))) process.exit(1);
         runChecks(parseChecks([{ name: 'b', selector: 'p' }]).checks, '<p>x</p>');
         if (!Object.keys(require.cache).some(f => f.includes('parse5'))) process.exit(2);`;

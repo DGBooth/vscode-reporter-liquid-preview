@@ -9,7 +9,7 @@
 // parsed with parse5, the HTML parser that follows the spec browsers do, so a
 // selector matches the tree the preview actually shows: markup a browser would
 // move or close (text inside a <table>, a <div> inside a <p>) is moved or
-// closed here too. The parser is only loaded when a check uses a selector.
+// closed here too. The parser is only loaded when a case has checks.
 
 // ---- parsing ------------------------------------------------------------------
 
@@ -75,15 +75,24 @@ function validate(raw, check) {
 
 // ---- running ------------------------------------------------------------------
 
-// The rendered output, parsed on first use and queried by selector.
+// The rendered output, parsed on first use: queried by selector, or read
+// whole as the page's text.
 function queryable(html) {
     let fragment = null;
-    return {
-        select(selector) {
-            const { parse5, adapter, CSSselect } = domLibraries();
-            if (!fragment) fragment = parse5.parseFragment(html, { treeAdapter: adapter });
-            return CSSselect.selectAll(selector, fragment);
+    // Parsed as the content of a <div>, which is where the preview puts it:
+    // the context decides what survives (a stray <tr> is dropped in a div,
+    // kept in a <template>, parse5's default).
+    const parsed = () => {
+        if (!fragment) {
+            const { parse5, adapter } = domLibraries();
+            const context = parse5.parseFragment('<div></div>', { treeAdapter: adapter }).children[0];
+            fragment = parse5.parseFragment(context, html, { treeAdapter: adapter });
         }
+        return fragment;
+    };
+    return {
+        select: selector => domLibraries().CSSselect.selectAll(selector, parsed()),
+        text: () => textOf(parsed())
     };
 }
 
@@ -113,6 +122,7 @@ function textOf(node) {
     const parts = [];
     const walk = n => {
         if (n.type === 'text') { parts.push(n.data); return; }
+        if (n.type === 'comment' || n.type === 'directive') return;
         if (!n.children || SILENT.has(n.name)) return;
         const breaks = BREAKS.has(n.name);
         if (breaks) parts.push(' ');
@@ -154,9 +164,12 @@ function judge(check, html, output, fail) {
     const quote = s => `“${s}”`;
 
     if (!check.selector) {
-        // No selector: the same whole-output search as a case's "contains".
-        for (const needle of toList(check.contains)) if (!html.includes(needle)) fail(`The output should contain ${quote(needle)}.`);
-        for (const needle of toList(check.notContains)) if (html.includes(needle)) fail(`The output should not contain ${quote(needle)}.`);
+        // No selector: the page's text, as a reader sees it. Not the HTML — a
+        // check that "the page doesn't mention Smith & Co" must not pass just
+        // because the HTML spells it "Smith &amp; Co".
+        const page = output.text();
+        for (const needle of toList(check.contains)) if (!page.includes(tidy(needle))) fail(`The page should mention ${quote(needle)}.`);
+        for (const needle of toList(check.notContains)) if (page.includes(tidy(needle))) fail(`The page should not mention ${quote(needle)}.`);
         return;
     }
 

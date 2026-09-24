@@ -429,13 +429,18 @@ function relativeTo(suiteFile, file) {
 //   suiteFile, suiteText  the suite to add to; suiteText is null if it doesn't
 //                         exist yet
 //   template              the template the new cases render
-//   entries               [{ name, dataFile | data, output, allowWarnings }]
-//                         output is the rendered HTML to freeze as expected
+//   entries               [{ name, dataFile | data, output, allowWarnings,
+//                            checks, snapshot }]
+//                         output is the rendered HTML to freeze as expected;
+//                         snapshot: false leaves the expected file out, so
+//                         the checks are the whole test
 //   exists(file)          whether a file is already on disk, so no expected
 //                         file is overwritten
 //
-// An entry whose template and data file an existing case already covers is
-// skipped rather than duplicated. Names are made unique against the suite.
+// A snapshot-only entry whose template and data file an existing case already
+// covers is skipped rather than duplicated; an entry with checks is not, since
+// several tests with different checks on one data file is the point of them.
+// Names are made unique against the suite.
 function planNewCases({ suiteFile, suiteText, template, entries, exists = () => false }) {
     let json;
     if (suiteText === null || suiteText === undefined || !suiteText.trim()) {
@@ -465,7 +470,9 @@ function planNewCases({ suiteFile, suiteText, template, entries, exists = () => 
     const templateBase = path.basename(template, path.extname(template));
 
     for (const entry of entries) {
-        if (entry.dataFile && covered.has(`${template}\n${entry.dataFile}`)) {
+        const hasChecks = Array.isArray(entry.checks) && entry.checks.length > 0;
+        const snapshot = entry.snapshot !== false;
+        if (!hasChecks && entry.dataFile && covered.has(`${template}\n${entry.dataFile}`)) {
             skipped.push({ name: entry.name, reason: 'a case in the suite already uses this data file' });
             continue;
         }
@@ -474,26 +481,39 @@ function planNewCases({ suiteFile, suiteText, template, entries, exists = () => 
         for (let n = 2; names.has(name); n++) name = `${entry.name} (${n})`;
         names.add(name);
 
-        let expected;
-        for (let n = 1; ; n++) {
-            const candidate = path.join(dir, 'expected', templateBase, `${slugify(name)}${n > 1 ? '-' + n : ''}.html`);
-            if (!claimed.has(candidate) && !exists(candidate)) { expected = candidate; break; }
+        let expected = null;
+        if (snapshot) {
+            for (let n = 1; ; n++) {
+                const candidate = path.join(dir, 'expected', templateBase, `${slugify(name)}${n > 1 ? '-' + n : ''}.html`);
+                if (!claimed.has(candidate) && !exists(candidate)) { expected = candidate; break; }
+            }
+            claimed.add(expected);
         }
-        claimed.add(expected);
 
         const testCase = { name };
         if (suiteTemplate !== template) testCase.template = relativeTo(suiteFile, template);
         testCase.data = entry.dataFile ? relativeTo(suiteFile, entry.dataFile) : (entry.data || {});
-        testCase.expected = relativeTo(suiteFile, expected);
+        if (expected) testCase.expected = relativeTo(suiteFile, expected);
         if (entry.allowWarnings) testCase.allowWarnings = true;
+        if (hasChecks) testCase.checks = entry.checks.map(tidyCheck);
 
         json.cases.push(testCase);
-        writes.push({ file: expected, text: entry.output });
+        if (expected) writes.push({ file: expected, text: entry.output });
         if (entry.dataFile) covered.add(`${template}\n${entry.dataFile}`);
         added.push(name);
     }
 
     return { suiteText: JSON.stringify(json, null, 2) + '\n', writes, added, skipped };
+}
+
+// A check as written to a suite: its name and the keys a check understands, in
+// a fixed order, and nothing else — whatever built it.
+function tidyCheck(check) {
+    const out = {};
+    for (const key of ['name', 'selector', 'exists', 'count', 'text', 'contains', 'notContains', 'attributes']) {
+        if (check[key] !== undefined) out[key] = check[key];
+    }
+    return out;
 }
 
 // ---- the report ---------------------------------------------------------------

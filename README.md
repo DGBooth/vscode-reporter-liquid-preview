@@ -164,26 +164,42 @@ Every case also fails on a render error or a **duplicate field name**, and on fi
 }
 ```
 
-`selector` is a CSS selector that picks the elements to check. The output is parsed the way a browser parses it, so a selector sees the same structure as the preview, including where a browser would rearrange broken markup. Then any of:
+You don't have to write these by hand: the [test builder](#template-tests) in the HTML preview writes them for you. `selector` is a CSS selector that picks the elements to check. The output is parsed the way a browser parses it, so a selector sees the same structure as the preview, including where a browser would rearrange broken markup. Then any of:
 
 | Key | Checks |
 |-----|--------|
 | `exists` | `true`: the selector matches something. `false`: it matches nothing. A selector with nothing else to check means `exists: true`. |
 | `count` | How many elements match. |
 | `text` | The element's text as a reader sees it, with entities decoded and whitespace collapsed. Table cells and blocks read as separate words, and script and style are left out. A single value needs exactly one match: if several match, the check fails rather than guess which one you meant. Give a list to check each match in order. |
-| `contains` / `notContains` | With a selector: text the matched elements' text must or must not contain. Without one: text the whole HTML output must or must not contain, as a case's own `contains` does. |
+| `contains` / `notContains` | With a selector: text the matched elements' text must or must not contain. Without one: text the page must or must not mention, read as a reader sees it. (A case's own `contains` searches the HTML instead, for matching markup.) |
 | `attributes` | Attributes of the one matched element: a value it must equal, `true` (present) or `false` (absent). |
 
 A case can use checks, `expected`, or both. If the case fails to render, its checks are reported as not run. Checks appear in the report under their case, in the Testing view as children of the case (each with its own run button in the suite file), and as separate test cases in the command line's JUnit output.
 
-**Creating them from known cases.** Most tests start as a case you have already checked by eye: a template and a data file whose output you know is right. Two ways to turn those into tests:
+**Building a test by clicking: no JSON needed.** Press **Create test…** in the HTML preview's toolbar. A panel opens beside the preview:
 
-- **Save as test…** in the HTML preview's toolbar adds the template and data file you're looking at as a case, with the output on screen as its expected output. You're asked for a name, defaulting to the data file's.
-- **Reporter Liquid: Create Tests from Data Files…** (also on the right-click menu of a `.liquid` file in the Explorer or editor) takes several data files at once and makes one case for each.
+1. Give the test a name. It defaults to the data file's name.
+2. Click any part of the page: a heading, a price, a tick box, a row. The builder offers what could be true about it, in plain words:
+   - *It reads exactly "Invoice for Ada Lovelace"*
+   - *It includes:* a phrase you can trim to the part that matters
+   - *There are 3 of these*, with the counted parts highlighted
+   - *It is ticked*, or *It shows "PO-77"* for a text box
+   - *It is shown*
+
+   Pick one, adjust the check's name if you like, and **Add check**. If you picked something too small, **Select the area around it** widens the selection.
+3. Add *The page doesn't mention…* or *The page mentions…* checks for text anywhere on the page.
+4. Tick **Also check the whole page stays exactly as it is now** only if you want a whole-page snapshot too. It fails on any change at all.
+5. **Save test**.
+
+While the builder is open, clicking the page selects rather than acts, so a tick box doesn't tick and a link doesn't open. The builder writes the checks for you, preferring names that survive layout changes (Reporter's field ids, element ids) over positions on the page. Before anything is saved, the page is rendered again and every check is run against it. If one doesn't pass, nothing is saved and the panel says which check and why, so a test built this way passes the moment it's created. Several tests can use the same data file.
+
+Only add checks for things that are right in the preview now. The builder records what the page shows; it can't know whether that's what it *should* show.
+
+**Creating tests in bulk from known cases.** **Reporter Liquid: Create Tests from Data Files…** (also on the right-click menu of a `.liquid` file in the Explorer or editor) takes several data files whose output you've checked and makes one case for each, with its whole output as the expected file.
 
 Either way, cases go into the suite beside the template (`invoice.liquidtest.json` for `invoice.liquid`, created if needed), and expected output goes under `expected/<template>/`. The new cases are run straight away, so the report shows them passing. What gets frozen is checked first:
 
-- A data file an existing case already uses for that template is skipped rather than duplicated. Existing expected files are never overwritten.
+- In bulk, a data file an existing case already uses for that template is skipped rather than duplicated. Existing expected files are never overwritten.
 - A case that fails to render, or repeats a field name, is left out with the reason. It would fail the moment it was created.
 - If filters warn about missing data, you choose between skipping those cases and saving them with `allowWarnings`. Allowing warnings means the test can no longer catch that data going missing.
 - Unsaved edits to the template or data are saved first (after asking). A case records files on disk, so output rendered from an unsaved buffer would never match.
@@ -242,7 +258,7 @@ Pin the tag to the version of the extension you have installed (see [Releases](h
 2. Press `ctrl+k h` to open the HTML preview (or `ctrl+k v` for the plain-text preview, or `ctrl+k f` for the Full HTML Preview).
 3. Select a `.json` data file when prompted (not required for Full HTML Preview).
 4. Edit your template or data file — the preview updates automatically.
-5. To keep a render you've checked, press **Save as test…** in the HTML preview, then run **Reporter Liquid: Run Template Tests** whenever you change the template (see [Template Tests](#template-tests)).
+5. To keep a render you've checked, press **Create test…** in the HTML preview and click the parts that matter, then run **Reporter Liquid: Run Template Tests** whenever you change the template (see [Template Tests](#template-tests)).
 
 ## Development
 

@@ -84,6 +84,13 @@ files are separate processes, so state never leaks across a file.
   fails with, that the output is parsed as a browser would, that the parser
   only loads when a selector is used, and how checks appear in a case's result,
   the report, the command line's JUnit and the Test Explorer.
+- **`test-builder.test.js`** — the HTML preview's point-and-click test
+  builder, loaded into jsdom (whose parser is parse5, as the runner's is). The
+  main test renders a realistic Reporter document and, for every element,
+  runs every check the builder would offer through the real runner: all must
+  pass. Also: selectors prefer names over positions, a table cell's count is its
+  column, proposals read in plain words, and the builder reads text exactly as
+  the runner does.
 - **`cli.test.js`** — the command-line runner: exit codes (including finding
   no suites, which must not pass), verdicts that match the editor's, suite
   discovery, `--junit`, `--report` and `--update`, and that it loads in a
