@@ -1638,8 +1638,11 @@ function registerTemplateTests(context) {
 }
 
 // The Test Explorer side. Suites are top-level items keyed by file path; cases
-// are their children, keyed "<file>::<name>" and placed on the line of the
-// case's "name" so the editor shows run buttons beside each one.
+// are their children, keyed "<file>::<name>"; a case's checks are its
+// children in turn, keyed "<case id>::<check name>". Each sits on the line of
+// its "name" so the editor shows run buttons beside it. Running a check runs
+// its case — the output has to be rendered either way — and reports every
+// check in it.
 function registerTestController(context) {
     if (!vscode.tests || typeof vscode.tests.createTestController !== 'function') return null;
 
@@ -1647,6 +1650,8 @@ function registerTestController(context) {
     context.subscriptions.push(controller);
 
     const caseId = (file, name) => `${file}::${name}`;
+    const checkId = (file, caseName, name) => `${caseId(file, caseName)}::${name}`;
+    const at = line => new vscode.Range(line - 1, 0, line - 1, 0);
 
     const syncSuite = async file => {
         const suite = await loadSuite(file);
@@ -1659,7 +1664,12 @@ function registerTestController(context) {
         item.error = suite.error || undefined;
         item.children.replace(suite.cases.map(c => {
             const child = controller.createTestItem(caseId(file, c.name), c.name, uri);
-            child.range = new vscode.Range(c.line - 1, 0, c.line - 1, 0);
+            child.range = at(c.line);
+            child.children.replace((c.checks || []).map(check => {
+                const checkItem = controller.createTestItem(checkId(file, c.name, check.name), check.name, uri);
+                if (check.line) checkItem.range = at(check.line);
+                return checkItem;
+            }));
             return child;
         }));
         return item;
@@ -1704,10 +1714,12 @@ function registerTestController(context) {
         if (request.include) {
             for (const item of request.include) {
                 // Items are re-created on every sync, so look the current one up
-                // by id rather than trusting the object the request carries.
-                if (item.parent) {
-                    const suiteItem = controller.items.get(item.parent.id);
-                    const child = suiteItem && suiteItem.children.get(item.id);
+                // by id rather than trusting the object the request carries. A
+                // check runs as part of its case.
+                const caseItem = item.parent && item.parent.parent ? item.parent : item.parent ? item : null;
+                if (caseItem) {
+                    const suiteItem = controller.items.get(caseItem.parent.id);
+                    const child = suiteItem && suiteItem.children.get(caseItem.id);
                     if (child) addCase(suiteItem, child);
                 } else {
                     const suiteItem = controller.items.get(item.id);
@@ -1726,7 +1738,10 @@ function registerTestController(context) {
         for (const [file, names] of wanted) {
             for (const name of names) {
                 const item = itemFor(file, name);
-                if (item) run.enqueued(item);
+                if (item) {
+                    run.enqueued(item);
+                    item.children.forEach(checkItem => run.enqueued(checkItem));
+                }
             }
         }
 
@@ -1747,6 +1762,14 @@ function registerTestController(context) {
                 if (result.status === 'passed') run.passed(item, result.durationMs);
                 else if (result.status === 'failed') run.failed(item, toTestMessages(result), result.durationMs);
                 else run.errored(item, toTestMessages(result), result.durationMs);
+
+                for (const check of result.checks || []) {
+                    const checkItem = item.children.get(checkId(testCase.suiteFile, testCase.name, check.name));
+                    if (!checkItem) continue;
+                    if (check.status === 'passed') run.passed(checkItem);
+                    else if (check.status === 'skipped') run.skipped(checkItem);
+                    else run.failed(checkItem, check.failures.map(why => located(new vscode.TestMessage(why), result.suiteFile, check.line || result.line)));
+                }
             }
         });
         run.end();
@@ -1759,15 +1782,27 @@ function registerTestController(context) {
 // message, which the editor opens in its own diff view; everything else points
 // at the file and line the failure names, or at the case itself.
 function toTestMessages(result) {
-    return result.failures.map(failure => {
+    const messages = result.failures.map(failure => {
         const message = failure.kind === 'mismatch' && result.expected !== null
             ? vscode.TestMessage.diff(failure.message, result.expected, result.actual)
             : new vscode.TestMessage(failure.message);
         const file = failure.kind === 'mismatch' ? result.suiteFile : (failure.file || result.suiteFile);
         const line = failure.kind === 'mismatch' ? result.line : (failure.file ? (failure.line || 1) : result.line);
-        message.location = new vscode.Location(vscode.Uri.file(file), new vscode.Position(Math.max(0, line - 1), 0));
-        return message;
+        return located(message, file, line);
     });
+    // The checks report their own failures; the case says which of them failed.
+    const failedChecks = (result.checks || []).filter(c => c.status === 'failed');
+    if (failedChecks.length) {
+        messages.push(located(new vscode.TestMessage(
+            `${pluralize(failedChecks.length, 'check')} failed: ${failedChecks.map(c => c.name).join(', ')}`
+        ), result.suiteFile, result.line));
+    }
+    return messages;
+}
+
+function located(message, file, line) {
+    message.location = new vscode.Location(vscode.Uri.file(file), new vscode.Position(Math.max(0, (line || 1) - 1), 0));
+    return message;
 }
 
 // ---- Creating tests from known cases ------------------------------------------

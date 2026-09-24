@@ -146,6 +146,11 @@ function formatConsole(report, relative, c) {
                 lines.push(`      ${f.kind === 'error' ? c.yellow(f.message) : c.red(f.message)}${where}`);
                 if (f.diff) lines.push(...formatDiff(f.diff, c).map(l => '        ' + l));
             }
+            for (const check of r.checks || []) {
+                const icon = check.status === 'passed' ? c.green('✓') : check.status === 'skipped' ? c.dim('-') : c.red('✗');
+                lines.push(`      ${icon} ${check.status === 'passed' ? c.dim(check.name) : check.name}`);
+                for (const why of check.failures) lines.push(`          ${check.status === 'skipped' ? c.dim(why) : c.red(why)}`);
+            }
         }
     }
 
@@ -154,7 +159,8 @@ function formatConsole(report, relative, c) {
     if (t.failed) parts.push(c.red(`${t.failed} failed`));
     if (t.error) parts.push(c.yellow(`${t.error} errored`));
     if (t.suiteErrors) parts.push(c.yellow(`${t.suiteErrors} broken ${t.suiteErrors === 1 ? 'suite' : 'suites'}`));
-    lines.push('', `${parts.join(', ')} — ${t.total} ${t.total === 1 ? 'case' : 'cases'} in ${report.suites.length} ${report.suites.length === 1 ? 'suite' : 'suites'}, ${report.durationMs} ms`);
+    const checks = t.checks ? ` (${t.checks} ${t.checks === 1 ? 'check' : 'checks'}${t.checksFailed ? `, ${t.checksFailed} failing` : ''})` : '';
+    lines.push('', `${parts.join(', ')} — ${t.total} ${t.total === 1 ? 'case' : 'cases'}${checks} in ${report.suites.length} ${report.suites.length === 1 ? 'suite' : 'suites'}, ${report.durationMs} ms`);
     return lines.join('\n');
 }
 
@@ -176,36 +182,61 @@ function formatDiff(diff, c) {
 // ---- JUnit ---------------------------------------------------------------------------------
 
 // The de-facto JUnit schema most CI systems read: one <testsuite> per suite
-// file, one <testcase> per case, <failure> for a failed check and <error> for
-// a case (or suite) that could not run.
+// file. Each case is a <testcase> for its own assertions (expected output,
+// contains, problems), and each of its checks is another, named
+// "case › check", so a CI summary lists the small tests individually. A failed
+// assertion is a <failure>; a case that could not run is an <error>, and its
+// checks are <skipped>. Every count is taken from the rows written, so the
+// totals can't disagree with them.
 function buildJUnit(report, relative) {
     const seconds = ms => (ms / 1000).toFixed(3);
-    const t = templateTests.summarize(report.suites);
-    const body = report.suites.map(suite => {
+    const suites = report.suites.map(suite => {
         const name = relative(suite.file);
+        const rows = [];
         if (suite.error) {
-            return `  <testsuite name="${xml(name)}" file="${xml(name)}" tests="1" failures="0" errors="1" time="0">
-    <testcase name="(suite)" classname="${xml(name)}" time="0"><error message="${xml(suite.error)}">${xml(suite.error)}</error></testcase>
-  </testsuite>`;
+            rows.push({ name: '(suite)', time: 0, outcome: 'error', message: suite.error, detail: suite.error });
         }
-        const counts = templateTests.summarize([suite]);
-        const time = suite.results.reduce((sum, r) => sum + r.durationMs, 0);
-        const cases = suite.results.map(r => {
+        for (const r of suite.results) {
             const detail = r.failures.map(f => {
                 const where = f.file && f.line ? ` (${relative(f.file)}:${f.line})` : '';
                 const diff = f.diff ? '\n' + formatDiff(f.diff, painter(false)).join('\n') : '';
                 return `${f.message}${where}${diff}`;
             }).join('\n\n');
-            const tag = r.status === 'error' ? 'error' : 'failure';
-            const inner = r.status === 'passed' ? '' : `<${tag} message="${xml(r.failures[0] ? r.failures[0].message : r.status)}">${xml(detail)}</${tag}>`;
-            return `    <testcase name="${xml(r.name)}" classname="${xml(name)}" time="${seconds(r.durationMs)}">${inner}</testcase>`;
-        }).join('\n');
-        return `  <testsuite name="${xml(name)}" file="${xml(name)}" tests="${counts.total}" failures="${counts.failed}" errors="${counts.error}" time="${seconds(time)}">
-${cases}
-  </testsuite>`;
-    }).join('\n');
+            rows.push({
+                name: r.name,
+                time: r.durationMs,
+                outcome: r.status === 'error' ? 'error' : r.failures.length ? 'failure' : 'passed',
+                message: r.failures[0] ? r.failures[0].message : '',
+                detail
+            });
+            for (const check of r.checks || []) {
+                rows.push({
+                    name: `${r.name} › ${check.name}`,
+                    time: 0,
+                    outcome: check.status === 'passed' ? 'passed' : check.status === 'skipped' ? 'skipped' : 'failure',
+                    message: check.failures[0] || '',
+                    detail: check.failures.join('\n')
+                });
+            }
+        }
+        return { name, rows };
+    });
+
+    const count = (rows, outcome) => rows.filter(r => r.outcome === outcome).length;
+    const testcase = (row, classname) => {
+        const body = row.outcome === 'passed' ? ''
+            : row.outcome === 'skipped' ? `<skipped message="${xml(row.message)}"/>`
+            : `<${row.outcome} message="${xml(row.message)}">${xml(row.detail)}</${row.outcome}>`;
+        return `    <testcase name="${xml(row.name)}" classname="${xml(classname)}" time="${seconds(row.time)}">${body}</testcase>`;
+    };
+    const attrs = rows => `tests="${rows.length}" failures="${count(rows, 'failure')}" errors="${count(rows, 'error')}" skipped="${count(rows, 'skipped')}"`;
+
+    const all = [].concat(...suites.map(s => s.rows));
+    const body = suites.map(s => `  <testsuite name="${xml(s.name)}" file="${xml(s.name)}" ${attrs(s.rows)} time="${seconds(s.rows.reduce((t, r) => t + r.time, 0))}">
+${s.rows.map(row => testcase(row, s.name)).join('\n')}
+  </testsuite>`).join('\n');
     return `<?xml version="1.0" encoding="UTF-8"?>
-<testsuites name="Liquid template tests" tests="${t.total + t.suiteErrors}" failures="${t.failed}" errors="${t.error + t.suiteErrors}" time="${seconds(report.durationMs)}">
+<testsuites name="Liquid template tests" ${attrs(all)} time="${seconds(report.durationMs)}">
 ${body}
 </testsuites>
 `;

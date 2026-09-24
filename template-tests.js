@@ -8,6 +8,7 @@
 // and the test suite can drive it directly.
 
 const path = require('path');
+const { parseChecks, runChecks } = require('./output-checks');
 
 const SUITE_GLOB = '**/*.liquidtest.json';
 const WHITESPACE_MODES = ['exact', 'collapse'];
@@ -55,11 +56,13 @@ function parseSuite(text, suiteFile) {
         const whitespace = c.whitespace !== undefined ? c.whitespace : (defaults.whitespace !== undefined ? defaults.whitespace : 'exact');
         const allowWarnings = c.allowWarnings !== undefined ? c.allowWarnings : Boolean(defaults.allowWarnings);
 
+        const line = lineOfCase(text, c.name, index);
+        const parsedChecks = parseChecks(c.checks, checkName => lineOfName(text, checkName, line));
         const testCase = {
             name,
             index,
             suiteFile,
-            line: lineOfCase(text, c.name, index),
+            line,
             template: template ? resolve(template) : null,
             dataFile: typeof c.data === 'string' ? resolve(c.data) : null,
             data: c.data && typeof c.data === 'object' ? c.data : null,
@@ -68,10 +71,12 @@ function parseSuite(text, suiteFile) {
             notContains: toStringList(c.notContains),
             whitespace,
             allowWarnings: Boolean(allowWarnings),
-            error: null
+            checks: parsedChecks.checks,
+            error: parsedChecks.error
         };
 
-        if (!template) testCase.error = 'No template: set "template" on the case or at the top of the suite.';
+        if (testCase.error) { /* already set: the checks list is malformed */ }
+        else if (!template) testCase.error = 'No template: set "template" on the case or at the top of the suite.';
         else if (!WHITESPACE_MODES.includes(whitespace)) testCase.error = `"whitespace" must be one of ${WHITESPACE_MODES.map(m => `"${m}"`).join(', ')}.`;
         else if (c.data !== undefined && c.data !== null && typeof c.data !== 'string' && typeof c.data !== 'object') testCase.error = '"data" must be a path to a .json file or an inline object.';
 
@@ -97,6 +102,17 @@ function lineOfCase(text, name, index) {
         if (match) return text.slice(0, match.index).split('\n').length;
     }
     return 1;
+}
+
+// The 1-based line of the first `"name": <name>` at or after line `from` —
+// where a check sits inside its case — or null if it can't be found.
+function lineOfName(text, name, from) {
+    if (typeof name !== 'string') return null;
+    const offset = text.split('\n').slice(0, Math.max(0, from - 1)).join('\n').length;
+    const pattern = new RegExp(`"name"\\s*:\\s*${escapeRegExp(JSON.stringify(name))}`, 'g');
+    pattern.lastIndex = offset;
+    const match = pattern.exec(text);
+    return match ? text.slice(0, match.index).split('\n').length : null;
 }
 
 function escapeRegExp(text) {
@@ -129,6 +145,7 @@ async function runCase(testCase, deps) {
         diagnostics: [],
         actual: null,
         expected: null,
+        checks: [],
         durationMs: 0
     };
     const finish = status => {
@@ -138,6 +155,10 @@ async function runCase(testCase, deps) {
     };
     const error = (message, extra) => {
         result.failures.push(Object.assign({ kind: 'error', message }, extra));
+        // Checks need output to look at; say so rather than dropping them.
+        result.checks = (testCase.checks || []).map(check => ({
+            name: check.name, line: check.line, status: 'skipped', failures: ['Not run: the case did not render.']
+        }));
         return finish('error');
     };
 
@@ -224,7 +245,10 @@ async function runCase(testCase, deps) {
         if (haystack.includes(n)) result.failures.push({ kind: 'not-contains', message: `The output should not contain: ${needle}` });
     }
 
-    return finish(result.failures.length ? 'failed' : 'passed');
+    result.checks = runChecks(testCase.checks, html);
+
+    const failed = result.failures.length || result.checks.some(c => c.status === 'failed');
+    return finish(failed ? 'failed' : 'passed');
 }
 
 // Run a whole suite, or only the cases named in `only`. `isCancelled` is polled
@@ -246,12 +270,17 @@ async function runSuite(suite, deps, { only = null, isCancelled = () => false, o
 
 // Totals for the report header.
 function summarize(suites) {
-    const totals = { passed: 0, failed: 0, error: 0, total: 0, suiteErrors: 0 };
+    const totals = { passed: 0, failed: 0, error: 0, total: 0, suiteErrors: 0, checks: 0, checksFailed: 0, checksSkipped: 0 };
     for (const suite of suites) {
         if (suite.error) totals.suiteErrors++;
         for (const r of suite.results) {
             totals[r.status]++;
             totals.total++;
+            for (const c of r.checks || []) {
+                totals.checks++;
+                if (c.status === 'failed') totals.checksFailed++;
+                if (c.status === 'skipped') totals.checksSkipped++;
+            }
         }
     }
     return totals;
@@ -516,7 +545,7 @@ function buildReportHtml(report, { interactive = false, relative = f => f } = {}
 <body>
 <header class="head head-${overall}">
   <h1>${overall === 'passed' ? 'All template tests passed' : 'Template tests failed'}</h1>
-  <div class="meta">${totals.total} ${totals.total === 1 ? 'case' : 'cases'} in ${report.suites.length} ${report.suites.length === 1 ? 'suite' : 'suites'} &middot; ${escapeHtml(formatDuration(report.durationMs))} &middot; ${escapeHtml(new Date(report.startedAt).toLocaleString())}</div>
+  <div class="meta">${totals.total} ${totals.total === 1 ? 'case' : 'cases'}${totals.checks ? ` (${totals.checks} ${totals.checks === 1 ? 'check' : 'checks'}${totals.checksFailed ? `, ${totals.checksFailed} failing` : ''})` : ''} in ${report.suites.length} ${report.suites.length === 1 ? 'suite' : 'suites'} &middot; ${escapeHtml(formatDuration(report.durationMs))} &middot; ${escapeHtml(new Date(report.startedAt).toLocaleString())}</div>
   <div class="chips">${chips}</div>
   <label class="filter"><input type="checkbox" id="only-failures"${overall === 'failed' ? ' checked' : ''}> Show failures only</label>
   ${toolbar}
@@ -543,6 +572,9 @@ ${suite.results.map(r => buildCaseHtml(r, relative)).join('\n')}
 
 function buildCaseHtml(r, relative) {
     const failures = r.failures.map(f => buildFailureHtml(f, relative)).join('\n');
+    const checkCount = r.checks && r.checks.length
+        ? `<span class="check-count">${r.checks.filter(c => c.status === 'passed').length}/${r.checks.length} checks</span>`
+        : '';
     const warnings = r.diagnostics.filter(d => d.severity === 'warning' && !r.failures.some(f => f.kind === 'problem' && f.message === `${d.title}: ${d.message}`));
     const allowed = warnings.length
         ? `<div class="allowed">Allowed ${warnings.length === 1 ? 'warning' : 'warnings'}:<ul>${warnings.map(d => `<li>${escapeHtml(d.message)} ${d.line ? gotoButton(d.file, d.line, `line ${d.line}`) : ''}</li>`).join('')}</ul></div>`
@@ -552,18 +584,33 @@ function buildCaseHtml(r, relative) {
         ['Data', r.dataFile ? gotoButton(r.dataFile, 1, relative(r.dataFile)) : 'inline'],
         ['Expected', r.expectedFile ? gotoButton(r.expectedFile, 1, relative(r.expectedFile)) : '&mdash;']
     ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    const checks = r.checks && r.checks.length ? buildChecksHtml(r, relative) : '';
     const output = r.actual !== null && r.actual !== undefined
         ? `<details class="output"><summary>Actual output</summary><pre>${escapeHtml(r.actual)}</pre></details>`
         : '';
     return `<details class="case case-${r.status}"${r.status === 'passed' ? '' : ' open'}>
-  <summary><span class="icon icon-${r.status}" title="${STATUS_LABEL[r.status]}">${STATUS_ICON[r.status]}</span><span class="case-name">${escapeHtml(r.name)}</span><span class="duration">${escapeHtml(formatDuration(r.durationMs))}</span>${gotoButton(r.suiteFile, r.line, 'definition')}</summary>
+  <summary><span class="icon icon-${r.status}" title="${STATUS_LABEL[r.status]}">${STATUS_ICON[r.status]}</span><span class="case-name">${escapeHtml(r.name)}</span>${checkCount}<span class="duration">${escapeHtml(formatDuration(r.durationMs))}</span>${gotoButton(r.suiteFile, r.line, 'definition')}</summary>
   <div class="case-body">
     <dl class="facts">${facts}</dl>
     ${failures}
+    ${checks}
     ${allowed}
     ${output}
   </div>
 </details>`;
+}
+
+// A case's checks, one row each: passed ones compact, failed ones with why.
+function buildChecksHtml(r, relative) {
+    const rows = r.checks.map(c => {
+        const icon = c.status === 'passed' ? STATUS_ICON.passed : c.status === 'skipped' ? '&ndash;' : STATUS_ICON.failed;
+        const where = c.line ? gotoButton(r.suiteFile, c.line, 'definition') : '';
+        const why = c.failures.length
+            ? `<ul class="check-why">${c.failures.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
+            : '';
+        return `<li class="check check-${c.status}"><div class="check-line"><span class="icon icon-${c.status === 'passed' ? 'passed' : c.status === 'skipped' ? 'error' : 'failed'}">${icon}</span><span class="check-name">${escapeHtml(c.name)}</span>${where}</div>${why}</li>`;
+    }).join('');
+    return `<div class="checks"><div class="checks-head">Checks</div><ul>${rows}</ul></div>`;
 }
 
 function buildFailureHtml(f, relative) {
@@ -683,6 +730,19 @@ body { margin: 0; padding: 0 16px 32px; background: var(--bg); color: var(--fg);
 .failure-message { font-weight: 600; }
 .failure-failed .failure-message { color: var(--fail); }
 .failure-error .failure-message, .suite > .failure-error { color: var(--err); }
+.checks { margin: 10px 0; }
+.checks-head { font-weight: 600; margin-bottom: 4px; }
+.checks > ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border); border-radius: 4px; }
+.check { padding: 4px 8px; border-top: 1px solid var(--border); }
+.check:first-child { border-top: none; }
+.check-line { display: flex; align-items: baseline; gap: 8px; }
+.check-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.check-failed .check-name { color: var(--fail); font-weight: 600; }
+.check-skipped .check-name { color: var(--muted); }
+.check-why { margin: 2px 0 2px 24px; padding-left: 16px; color: var(--fg); }
+.check-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.case-failed .check-count { color: var(--fail); }
+body:has(#only-failures:checked) .check-passed { display: none; }
 .allowed { color: var(--muted); margin: 8px 0; }
 .allowed ul { margin: 2px 0; padding-left: 20px; }
 button.goto { font: 12px var(--mono); color: var(--link); background: none; border: none; padding: 0; cursor: pointer; text-align: left; overflow-wrap: anywhere; }

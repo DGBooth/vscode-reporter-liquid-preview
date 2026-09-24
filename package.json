@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -129,6 +129,9 @@
         "@types/vscode": "^1.32.0"
     },
     "dependencies": {
-        "liquidjs": "^8.4.1"
+        "css-select": "^5.2.2",
+        "liquidjs": "^8.4.1",
+        "parse5": "^7.3.0",
+        "parse5-htmlparser2-tree-adapter": "^7.1.0"
     }
 }

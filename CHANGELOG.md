@@ -11,6 +11,12 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.5.0] - 2026-09-24
+
+### Added
+- Checks: small, named tests within a case. Each targets part of the output with a CSS selector and checks its text, how many elements match, whether any exist, what their text contains, or their attributes. Each passes or fails on its own, with a message saying what was found. Checks appear in the report, as children of their case in the Testing view, and as separate JUnit test cases from `liquid-test`.
+- The output is parsed with parse5, which follows the same HTML rules as browsers, so selectors see the structure the preview shows. The parser only loads when a check uses a selector.
+
 ## [1.4.0] - 2026-09-23
 
 ### Added

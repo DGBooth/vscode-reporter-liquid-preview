@@ -148,6 +148,34 @@ Paths are relative to the suite file. A case can use any mix of checks:
 
 Every case also fails on a render error or a **duplicate field name**, and on filter warnings unless they are allowed. The editor offers completion and validation for these keys in any `*.liquidtest.json` file.
 
+**Checks: smaller tests within a case.** An `expected` file fails on any change to the output, including ones that don't matter. Checks are small, named assertions about parts of the output: each passes or fails on its own, and a failure says which one broke and why.
+
+```json
+{
+  "name": "two items",
+  "data": "data/two-items.json",
+  "checks": [
+    { "name": "heading names the customer", "selector": "h1", "text": "Invoice for Ada Lovelace" },
+    { "name": "one row per item", "selector": "table tr", "count": 2 },
+    { "name": "prices are formatted as money", "selector": "td:nth-child(2)", "text": ["1,250.50", "42.00"] },
+    { "name": "notes are ticked", "selector": "#includeNotes", "attributes": { "checked": true } },
+    { "name": "no empty message", "notContains": "No items." }
+  ]
+}
+```
+
+`selector` is a CSS selector that picks the elements to check. The output is parsed the way a browser parses it, so a selector sees the same structure as the preview, including where a browser would rearrange broken markup. Then any of:
+
+| Key | Checks |
+|-----|--------|
+| `exists` | `true`: the selector matches something. `false`: it matches nothing. A selector with nothing else to check means `exists: true`. |
+| `count` | How many elements match. |
+| `text` | The element's text as a reader sees it, with entities decoded and whitespace collapsed. Table cells and blocks read as separate words, and script and style are left out. A single value needs exactly one match: if several match, the check fails rather than guess which one you meant. Give a list to check each match in order. |
+| `contains` / `notContains` | With a selector: text the matched elements' text must or must not contain. Without one: text the whole HTML output must or must not contain, as a case's own `contains` does. |
+| `attributes` | Attributes of the one matched element: a value it must equal, `true` (present) or `false` (absent). |
+
+A case can use checks, `expected`, or both. If the case fails to render, its checks are reported as not run. Checks appear in the report under their case, in the Testing view as children of the case (each with its own run button in the suite file), and as separate test cases in the command line's JUnit output.
+
 **Creating them from known cases.** Most tests start as a case you have already checked by eye: a template and a data file whose output you know is right. Two ways to turn those into tests:
 
 - **Save as test…** in the HTML preview's toolbar adds the template and data file you're looking at as a case, with the output on screen as its expected output. You're asked for a name, defaulting to the data file's.

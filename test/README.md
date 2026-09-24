@@ -79,6 +79,11 @@ files are separate processes, so state never leaks across a file.
   against freezing bad output (render errors, duplicate names, warnings,
   unsaved edits), and both ways in: the command and the preview's
   "Save as test" button.
+- **`output-checks.test.js`** — checks on parts of the output: each kind
+  (`text`, `count`, `exists`, `contains`, `attributes`) and the messages it
+  fails with, that the output is parsed as a browser would, that the parser
+  only loads when a selector is used, and how checks appear in a case's result,
+  the report, the command line's JUnit and the Test Explorer.
 - **`cli.test.js`** — the command-line runner: exit codes (including finding
   no suites, which must not pass), verdicts that match the editor's, suite
   discovery, `--junit`, `--report` and `--update`, and that it loads in a
