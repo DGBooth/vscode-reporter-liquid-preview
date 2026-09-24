@@ -160,3 +160,43 @@ test('cssEscape matches the browser\'s CSS.escape', () => {
         assert.strictEqual(cssEscape(input), expected, input);
     }
 });
+
+// ---- the panel while closed -------------------------------------------------------
+//
+// The panel is fixed over the right-hand side of the preview. In 1.5.0 the
+// closed panel still took that space — `all: initial` on its host reset the
+// display that [hidden] relies on — and in a dark theme it showed as a black
+// bar covering the page and the Create test button.
+
+test('the closed panel\'s host is display: none, not reset to inline by all: initial', () => {
+    const css = fs.readFileSync(path.join(__dirname, '..', 'webview', 'test-builder.css'), 'utf8');
+    const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const host = /:host\s*\{([^}]*)\}/.exec(rules)[1];
+    assert.match(host, /display:\s*block/, 'display is set explicitly after all: initial');
+    assert.match(rules, /:host\(\[hidden\]\)\s*\{\s*display:\s*none;?\s*\}/);
+    assert.match(rules, /\.panel\[hidden\]\s*\{\s*display:\s*none;?\s*\}/);
+});
+
+test('in the real preview, the builder is hidden until opened and hidden again when closed', async () => {
+    const { renderPreview } = require('./harness');
+    const { panel } = await renderPreview({ template: '<h1>Hi {{ name }}</h1>', data: '{"name":"Ada"}' });
+    const { VirtualConsole } = require('jsdom');
+    const quiet = new VirtualConsole();
+    const dom = new JSDOM(panel.webview.html, { runScripts: 'dangerously', virtualConsole: quiet, pretendToBeVisual: true });
+    const { document } = dom.window;
+    const host = document.getElementById('lp-builder');
+    const builderPanel = () => host.shadowRoot.querySelector('.panel');
+
+    assert.strictEqual(host.hidden, true);
+    assert.strictEqual(builderPanel().hidden, true, 'the panel itself is hidden too');
+
+    document.querySelector('[data-lp-local="build-test"]').click();
+    assert.strictEqual(host.hidden, false);
+    assert.strictEqual(builderPanel().hidden, false);
+    assert.match(builderPanel().textContent, /Create a test/);
+
+    builderPanel().querySelector('[data-do="close"]').click();
+    assert.strictEqual(host.hidden, true);
+    assert.strictEqual(builderPanel().hidden, true);
+    assert.strictEqual(document.body.classList.contains('lp-building'), false, 'the page gets its width back');
+});
