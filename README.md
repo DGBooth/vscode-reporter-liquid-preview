@@ -196,6 +196,18 @@ While the builder is open, clicking the page selects rather than acts, so a tick
 
 Only add checks for things that are right in the preview now. The builder records what the page shows; it can't know whether that's what it *should* show.
 
+**Editing a test.** Open the test in the builder in either of two ways: **Edit test** in the report, or **Create test…** in the HTML preview with the same data file, then pick it from **Test** at the top of the panel. You can then:
+
+- add checks by clicking the page, as when creating one;
+- remove checks with **Remove**;
+- change their order with **↑** and **↓**, which is the order they're listed and reported in.
+
+**Save changes** updates the test in place. Checks you've added are marked *new*, and only they have to pass before the test saves: a test is often opened *because* one of its checks fails, and that shouldn't stop you reordering or removing others. Any that still fail are shown in the report afterwards.
+
+**Accepting one check's new result.** When a check fails because the page has changed on purpose (a new name, an extra row, a box now unticked), use **Accept new result** on that check in the report. You'll be asked to confirm, with the change spelled out ("it expected 'For Fred'; the page now has 'For Client4'"). The check is then updated to expect what the page shows now, and its name too, where it quoted the old value. The other checks in the test are untouched.
+
+Only checks with a value read off the page can be accepted: *reads exactly*, counts, *is ticked*, *is shown* and text-box values. When "includes 'Net 30'" or "doesn't mention…" fails, there's no single right replacement, so those offer **Remove check** instead. Rebuild them in the builder if they're still wanted. Accepting is how a real regression gets waved through, so only accept a result you've checked is right.
+
 **Creating tests in bulk from known cases.** **Reporter Liquid: Create Tests from Data Files…** (also on the right-click menu of a `.liquid` file in the Explorer or editor) takes several data files whose output you've checked and makes one case for each, with its whole output as the expected file.
 
 Either way, cases go into the suite beside the template (`invoice.liquidtest.json` for `invoice.liquid`, created if needed), and expected output goes under `expected/<template>/`. The new cases are run straight away, so the report shows them passing. What gets frozen is checked first:

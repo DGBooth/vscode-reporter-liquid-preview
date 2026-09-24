@@ -25,7 +25,7 @@ h3 { font-size: 13px; margin: 14px 0 4px; }
 .hint { color: var(--vscode-descriptionForeground, #616161); margin: 6px 0; }
 .hint.small { font-size: 12px; }
 .field { display: block; margin: 8px 0; font-weight: 600; }
-.field input { display: block; width: 100%; margin-top: 3px; font-weight: normal; }
+.field input, .field select { display: block; width: 100%; margin-top: 3px; font-weight: normal; }
 input[type="text"], textarea, select {
   box-sizing: border-box; font: inherit; padding: 4px 6px; border-radius: 2px;
   color: var(--vscode-input-foreground, #1f1f1f);
@@ -53,14 +53,24 @@ button.secondary:hover { background: var(--vscode-button-secondaryHoverBackgroun
 button.link { padding: 0; background: none; border: none; color: var(--vscode-textLink-foreground, #0066bf); }
 button.link:hover { background: none; text-decoration: underline; }
 .checks { margin: 4px 0; padding-left: 20px; }
-.checks li { margin: 3px 0; }
-.checks li span { overflow-wrap: anywhere; }
-.checks li button { margin-left: 8px; font-size: 12px; }
+.checks li { margin: 4px 0; }
+.check-row { display: flex; align-items: baseline; gap: 6px; }
+.check-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.check-text .new { font-style: normal; font-size: 11px; padding: 0 5px; border-radius: 8px;
+  color: var(--vscode-badge-foreground, #fff); background: var(--vscode-badge-background, #0078d4); }
+.check-buttons { display: inline-flex; gap: 2px; align-items: center; flex-shrink: 0; }
+.check-buttons .link { margin-left: 6px; font-size: 12px; }
+button.icon { padding: 0 6px; font-size: 12px; line-height: 18px; color: var(--vscode-button-secondaryForeground, #1f1f1f);
+  background: var(--vscode-button-secondaryBackground, #e5e5e5); }
+button.icon:hover { background: var(--vscode-button-secondaryHoverBackground, #d4d4d4); }
+button.icon[disabled] { opacity: 0.35; }
 .page-check { display: flex; gap: 4px; margin: 10px 0 6px; flex-wrap: wrap; }
 .page-check input { flex: 1; min-width: 80px; }
-.notice { padding: 6px 8px; border-radius: 3px; margin: 8px 0; }
-.notice.ok { background: var(--vscode-inputValidation-infoBackground, #e7f3ff); border: 1px solid var(--vscode-inputValidation-infoBorder, #1a85ff); }
-.notice.bad { background: var(--vscode-inputValidation-errorBackground, #fde7e9); border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100); }
+/* No filled background: text stays in the panel's own colour on the panel's
+   own background, readable in any theme; the border carries the meaning. */
+.notice { padding: 4px 8px; margin: 8px 0; border-left: 3px solid; }
+.notice.ok { border-left-color: var(--vscode-inputValidation-infoBorder, #1a85ff); }
+.notice.bad { border-left-color: var(--vscode-inputValidation-errorBorder, #be1100); }
 @media (max-width: 700px) {
   .panel { top: auto; left: 0; width: auto; max-height: 55vh; border-left: none; border-top: 1px solid var(--vscode-panel-border, #d0d0d0); box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.12); }
   textarea { margin-left: 0; width: 100%; }

@@ -135,6 +135,7 @@ async function runCase(testCase, deps) {
     const started = Date.now();
     const result = {
         name: testCase.name,
+        index: testCase.index,
         suiteFile: testCase.suiteFile,
         line: testCase.line,
         template: testCase.template,
@@ -506,6 +507,23 @@ function planNewCases({ suiteFile, suiteText, template, entries, exists = () => 
     return { suiteText: JSON.stringify(json, null, 2) + '\n', writes, added, skipped };
 }
 
+// Change one case in a suite and hand back the suite's new text. The case is
+// found by its position, then confirmed by its name — as parseSuite names it,
+// which is what a report or the builder holds — so a suite edited since the
+// tests ran can't have the wrong case changed. `mutate(raw)` edits the case's
+// JSON in place; every other case, and the suite's own settings, are kept.
+function editCase(suiteText, suiteFile, caseIndex, expectedName, mutate) {
+    const parsed = parseSuite(suiteText, suiteFile);
+    if (parsed.error) throw new Error(`${path.basename(suiteFile)} can't be edited: ${parsed.error}`);
+    const found = parsed.cases[caseIndex];
+    if (!found || found.name !== expectedName) {
+        throw new Error(`${path.basename(suiteFile)} has changed since the tests ran, so \u201c${expectedName}\u201d isn't where it was. Run the tests again, then try once more.`);
+    }
+    const json = JSON.parse(suiteText);
+    mutate(json.cases[caseIndex], found, json);
+    return JSON.stringify(json, null, 2) + '\n';
+}
+
 // A check as written to a suite: its name and the keys a check understands, in
 // a fixed order, and nothing else — whatever built it.
 function tidyCheck(check) {
@@ -551,7 +569,7 @@ function buildReportHtml(report, { interactive = false, relative = f => f } = {}
         : '';
 
     const body = report.suites.length
-        ? report.suites.map(s => buildSuiteHtml(s, relative)).join('\n')
+        ? report.suites.map(s => buildSuiteHtml(s, relative, interactive)).join('\n')
         : `<p class="empty">No test suites found. Add a <code>*.liquidtest.json</code> file to the workspace — see the README for the format.</p>`;
 
     return `<!DOCTYPE html>
@@ -578,7 +596,7 @@ ${interactive ? `<script>${REPORT_SCRIPT}</script>` : ''}
 </html>`;
 }
 
-function buildSuiteHtml(suite, relative) {
+function buildSuiteHtml(suite, relative, interactive) {
     const counts = summarize([suite]);
     const status = suite.error || counts.failed || counts.error ? 'failed' : 'passed';
     const head = `<h2>${gotoButton(suite.file, 1, relative(suite.file))}<span class="suite-counts">${counts.passed}/${counts.total} passed</span></h2>`;
@@ -586,11 +604,17 @@ function buildSuiteHtml(suite, relative) {
         return `<section class="suite suite-${status}">${head}<div class="failure failure-error">${escapeHtml(suite.error)}</div></section>`;
     }
     return `<section class="suite suite-${status}">${head}
-${suite.results.map(r => buildCaseHtml(r, relative)).join('\n')}
+${suite.results.map(r => buildCaseHtml(r, relative, interactive)).join('\n')}
 </section>`;
 }
 
-function buildCaseHtml(r, relative) {
+// Where a case is, for the buttons that change it: its suite, position and
+// name, which the extension checks still match before changing anything.
+function caseAttrs(r) {
+    return ` data-suite="${escapeHtml(r.suiteFile)}" data-case="${r.index}" data-case-name="${escapeHtml(r.name)}"`;
+}
+
+function buildCaseHtml(r, relative, interactive) {
     const failures = r.failures.map(f => buildFailureHtml(f, relative)).join('\n');
     const checkCount = r.checks && r.checks.length
         ? `<span class="check-count">${r.checks.filter(c => c.status === 'passed').length}/${r.checks.length} checks</span>`
@@ -604,7 +628,11 @@ function buildCaseHtml(r, relative) {
         ['Data', r.dataFile ? gotoButton(r.dataFile, 1, relative(r.dataFile)) : 'inline'],
         ['Expected', r.expectedFile ? gotoButton(r.expectedFile, 1, relative(r.expectedFile)) : '&mdash;']
     ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
-    const checks = r.checks && r.checks.length ? buildChecksHtml(r, relative) : '';
+    const checks = r.checks && r.checks.length ? buildChecksHtml(r, relative, interactive) : '';
+    // Editing opens the test in the HTML preview, which needs a data file.
+    const edit = interactive && r.dataFile && r.template
+        ? `<div class="case-actions"><button type="button" class="act" data-action="edit-test"${caseAttrs(r)} title="Open this test in the HTML preview to add, remove or reorder its checks">Edit test</button></div>`
+        : '';
     const output = r.actual !== null && r.actual !== undefined
         ? `<details class="output"><summary>Actual output</summary><pre>${escapeHtml(r.actual)}</pre></details>`
         : '';
@@ -612,6 +640,7 @@ function buildCaseHtml(r, relative) {
   <summary><span class="icon icon-${r.status}" title="${STATUS_LABEL[r.status]}">${STATUS_ICON[r.status]}</span><span class="case-name">${escapeHtml(r.name)}</span>${checkCount}<span class="duration">${escapeHtml(formatDuration(r.durationMs))}</span>${gotoButton(r.suiteFile, r.line, 'definition')}</summary>
   <div class="case-body">
     <dl class="facts">${facts}</dl>
+    ${edit}
     ${failures}
     ${checks}
     ${allowed}
@@ -621,14 +650,21 @@ function buildCaseHtml(r, relative) {
 }
 
 // A case's checks, one row each: passed ones compact, failed ones with why.
-function buildChecksHtml(r, relative) {
+function buildChecksHtml(r, relative, interactive) {
     const rows = r.checks.map(c => {
+        // A failed check can be updated to the page's new result, where that
+        // means something (see acceptCheck), or taken out of the test.
+        const attrs = `${caseAttrs(r)} data-check="${c.index}" data-check-name="${escapeHtml(c.name)}"`;
+        const actions = interactive && c.status === 'failed' && c.index !== undefined
+            ? `<div class="check-actions">${c.canAccept ? `<button type="button" class="act" data-action="accept-check"${attrs} title="Update this check to expect what the page shows now">Accept new result</button>` : ''}`
+                + `<button type="button" class="act secondary" data-action="remove-check"${attrs} title="Take this check out of the test">Remove check</button></div>`
+            : '';
         const icon = c.status === 'passed' ? STATUS_ICON.passed : c.status === 'skipped' ? '&ndash;' : STATUS_ICON.failed;
         const where = c.line ? gotoButton(r.suiteFile, c.line, 'definition') : '';
         const why = c.failures.length
             ? `<ul class="check-why">${c.failures.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
             : '';
-        return `<li class="check check-${c.status}"><div class="check-line"><span class="icon icon-${c.status === 'passed' ? 'passed' : c.status === 'skipped' ? 'error' : 'failed'}">${icon}</span><span class="check-name">${escapeHtml(c.name)}</span>${where}</div>${why}</li>`;
+        return `<li class="check check-${c.status}"><div class="check-line"><span class="icon icon-${c.status === 'passed' ? 'passed' : c.status === 'skipped' ? 'error' : 'failed'}">${icon}</span><span class="check-name">${escapeHtml(c.name)}</span>${where}</div>${why}${actions}</li>`;
     }).join('');
     return `<div class="checks"><div class="checks-head">Checks</div><ul>${rows}</ul></div>`;
 }
@@ -760,6 +796,13 @@ body { margin: 0; padding: 0 16px 32px; background: var(--bg); color: var(--fg);
 .check-failed .check-name { color: var(--fail); font-weight: 600; }
 .check-skipped .check-name { color: var(--muted); }
 .check-why { margin: 2px 0 2px 24px; padding-left: 16px; color: var(--fg); }
+.case-actions { margin: 4px 0 8px; }
+.check-actions { display: flex; gap: 6px; margin: 4px 0 2px 24px; flex-wrap: wrap; }
+/* All secondary: accepting a new result should be a decision, not the
+   obvious next click. The confirmation says exactly what changes. */
+button.act { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 2px; cursor: pointer; border: 1px solid var(--border);
+  background: var(--vscode-button-secondaryBackground, var(--panel)); color: var(--vscode-button-secondaryForeground, var(--fg)); }
+button.act:hover { background: var(--vscode-button-secondaryHoverBackground, var(--border)); }
 .check-count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .case-failed .check-count { color: var(--fail); }
 .allowed { color: var(--muted); margin: 8px 0; }
@@ -803,7 +846,19 @@ const REPORT_SCRIPT = `
       return;
     }
     const action = target.closest('button[data-action]');
-    if (action) api.postMessage({ type: action.getAttribute('data-action') });
+    if (action) {
+      const message = { type: action.getAttribute('data-action') };
+      if (action.hasAttribute('data-suite')) {
+        message.suiteFile = action.getAttribute('data-suite');
+        message.caseIndex = Number(action.getAttribute('data-case'));
+        message.caseName = action.getAttribute('data-case-name');
+      }
+      if (action.hasAttribute('data-check')) {
+        message.checkIndex = Number(action.getAttribute('data-check'));
+        message.checkName = action.getAttribute('data-check-name');
+      }
+      api.postMessage(message);
+    }
   });
 })();
 `;
@@ -820,6 +875,8 @@ module.exports = {
     toHunks,
     buildReportHtml,
     acceptableResults,
+    editCase,
+    tidyCheck,
     defaultSuiteFile,
     slugify,
     planNewCases

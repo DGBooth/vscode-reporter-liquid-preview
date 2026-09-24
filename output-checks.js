@@ -34,6 +34,7 @@ function parseChecks(raw, lineOf = () => null) {
 
         const check = {
             name,
+            index,
             line: lineOf(typeof c.name === 'string' ? c.name : null),
             selector: typeof c.selector === 'string' ? c.selector.trim() : null,
             error: null
@@ -142,7 +143,17 @@ function tidy(text) {
 function runChecks(checks, html) {
     const output = queryable(html);
     return checks.map(check => {
-        const result = { name: check.name, line: check.line, status: 'passed', failures: [] };
+        const result = {
+            name: check.name,
+            index: check.index,
+            line: check.line,
+            status: 'passed',
+            failures: [],
+            // Whether "accept the new result" can mean something for it: a
+            // check with a value to update, as opposed to one looking for a
+            // phrase, where there is no single right replacement.
+            canAccept: !check.error && acceptable(check)
+        };
         const fail = message => { result.failures.push(message); };
         if (check.error) {
             fail(check.error);
@@ -260,4 +271,103 @@ function asPreviewShowsIt(html) {
     return parse5.serialize(fragment, { treeAdapter: adapter });
 }
 
-module.exports = { parseChecks, runChecks, asPreviewShowsIt };
+// ---- accepting a new result -----------------------------------------------------
+
+// Checks whose expectation is a value read off the page — text, a count,
+// whether something is there, an attribute — can be updated to what the page
+// shows now. A phrase to find (contains / notContains) can't: when "includes
+// 'Net 30'" fails, nothing says which phrase should replace it.
+function acceptable(check) {
+    if (!check.selector) return false;
+    if (check.contains !== undefined || check.notContains !== undefined) return false;
+    return check.text !== undefined || check.count !== undefined || check.exists !== undefined || check.attributes !== undefined;
+}
+
+// A check's expectation updated to what `html` shows, with the old and new
+// values for each thing changed, so the reader can be asked to confirm. Its
+// name is updated where it quoted the old value (the builder's names do), so a
+// check called 'The heading reads "For Fred"' doesn't go on saying so. Returns
+// { error } instead when there is no one right new value.
+function acceptCheck(raw, html) {
+    const { checks: [check] } = parseChecks([raw]);
+    if (check.error) return { error: check.error };
+    if (!acceptable(check)) {
+        return { error: check.selector
+            ? 'This check looks for a phrase, so there\u2019s no single new result to accept. Remove it, or edit the test and check the part again.'
+            : 'This check looks for a phrase on the page, so there\u2019s no single new result to accept. Remove it, or edit the test.' };
+    }
+
+    let matches;
+    try {
+        matches = queryable(html).select(check.selector);
+    } catch (err) {
+        return { error: `The selector "${check.selector}" is not valid CSS: ${err.message}` };
+    }
+    const updated = JSON.parse(JSON.stringify(raw));
+    const changes = [];
+    let name = typeof raw.name === 'string' ? raw.name : '';
+    const quoted = value => `\u201c${value}\u201d`;
+    const renameQuoted = (from, to) => {
+        // The builder quotes values whole, or cut to 40 characters with an ellipsis.
+        for (const [a, b] of [[from, to], [shorten(from, 40), shorten(to, 40)]]) {
+            if (name.includes(quoted(a))) { name = name.split(quoted(a)).join(quoted(b)); return; }
+        }
+    };
+
+    if (check.text !== undefined) {
+        const now = matches.map(textOf);
+        if (Array.isArray(check.text)) {
+            if (now.length === 0) return { error: `\u201c${check.selector}\u201d matches nothing now, so there is no text to accept. Remove the check, or edit the test and check the part again.` };
+            changes.push({ what: 'text', from: check.text.map(tidy), to: now });
+            updated.text = now;
+        } else {
+            if (now.length !== 1) {
+                return { error: `\u201c${check.selector}\u201d matches ${now.length === 0 ? 'nothing' : now.length + ' elements'} now, so there is no single text to accept. Remove the check, or edit the test and check the part again.` };
+            }
+            changes.push({ what: 'text', from: tidy(check.text), to: now[0] });
+            renameQuoted(tidy(check.text), now[0]);
+            updated.text = now[0];
+        }
+    }
+    if (check.count !== undefined) {
+        changes.push({ what: 'count', from: check.count, to: matches.length });
+        name = name.replace(new RegExp(`\\b${check.count}\\b`), String(matches.length));
+        updated.count = matches.length;
+    }
+    if (check.exists !== undefined) {
+        const now = matches.length > 0;
+        changes.push({ what: 'shown', from: check.exists, to: now });
+        if (check.exists && !now) name = name.replace(/ is shown$/, ' is not shown');
+        if (!check.exists && now) name = name.replace(/ is not shown$/, ' is shown');
+        // A bare selector meant exists: true; it's written out now it may be false.
+        updated.exists = now;
+    }
+    if (check.attributes !== undefined) {
+        if (matches.length !== 1) {
+            return { error: `\u201c${check.selector}\u201d matches ${matches.length === 0 ? 'nothing' : matches.length + ' elements'} now, so there is no single element to accept. Remove the check, or edit the test and check the part again.` };
+        }
+        const attribs = matches[0].attribs || {};
+        updated.attributes = {};
+        for (const [attr, want] of Object.entries(check.attributes)) {
+            const has = Object.prototype.hasOwnProperty.call(attribs, attr);
+            const now = typeof want === 'boolean' ? has : (has ? attribs[attr] : false);
+            changes.push({ what: attr, from: want, to: now });
+            updated.attributes[attr] = now;
+            if (attr === 'checked' && want === true && now === false) name = name.replace(/ is ticked$/, ' is not ticked');
+            if (attr === 'checked' && want === false && now === true) name = name.replace(/ is not ticked$/, ' is ticked');
+            if (typeof want === 'string' && typeof now === 'string') renameQuoted(want, now);
+        }
+    }
+
+    if (name) updated.name = name;
+    const [after] = runChecks(parseChecks([updated]).checks, html);
+    if (after.status !== 'passed') return { error: `Even updated, this check wouldn\u2019t pass: ${after.failures[0]}` };
+    const changed = changes.filter(c => JSON.stringify(c.from) !== JSON.stringify(c.to));
+    return { check: updated, changes: changed };
+}
+
+function shorten(text, limit) {
+    return text.length > limit ? text.slice(0, limit - 1) + '\u2026' : text;
+}
+
+module.exports = { parseChecks, runChecks, asPreviewShowsIt, acceptCheck };
