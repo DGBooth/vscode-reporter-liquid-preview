@@ -115,11 +115,11 @@ test('a malformed check fails with what is wrong with it, and the others still r
         {},
         { selector: 'h1', exists: true, count: 1 },
         { selector: 'h1', text: 'Invoice for Ada & Co' });
-    assert.match(results.c0[0], /"count" checks the elements a "selector" matches, so it needs one/);
+    assert.match(results.c0[0], /"count" checks the elements a "selector" or "row" picks out, so it needs one/);
     assert.match(results.c1[0], /The selector "td\[\[" is not valid CSS/);
     assert.match(results.c2[0], /"count" must be a whole number/);
     assert.match(results.c3[0], /"text" must be text or a list of text/);
-    assert.match(results.c4[0], /A check needs a "selector", or something to check/);
+    assert.match(results.c4[0], /A check needs a "selector" or a "row", or something to check/);
     assert.match(results.c5[0], /Use "exists" or "count", not both/);
     assert.deepStrictEqual(results.c6, []);
 });
@@ -274,4 +274,35 @@ test('running a check runs its case and reports each check\'s result', async () 
     const [caseOutcome] = outcome(`${SUITE}::ada`);
     assert.strictEqual(caseOutcome.state, 'failed');
     assert.match(caseOutcome.messages[0].message, /1 check failed: a row per item/);
+});
+
+// ---- rows found by their label ----------------------------------------------------
+
+const ROWS = `<table><tr><th>Plans</th><th>Provider</th></tr><tr><td>Plan name</td><td>Other plan</td></tr></table>
+<section><table><tr><td>Plan name:</td><td>NFUM Select</td></tr><tr><td>Plan owner</td><td>Fred &amp; Co</td></tr></table></section>`;
+
+test('a row check reads the cell beside the row\'s label', () => {
+    assert.deepStrictEqual(check(ROWS, { row: 'Plan owner', text: 'Fred & Co' }), []);
+    assert.deepStrictEqual(check(ROWS, { row: 'Plan owner:', text: 'Fred & Co' }), [], 'a trailing colon on either side is the same label');
+    assert.deepStrictEqual(check(ROWS, { row: 'Plan owner', text: 'Bob' }), ['It reads “Fred & Co”; expected “Bob”.']);
+    assert.deepStrictEqual(check(ROWS, { row: 'Plan owner' }), [], 'on its own, the row is shown');
+    assert.deepStrictEqual(check(ROWS, { row: 'Missing' }), ['No row is labelled “Missing”; expected at least one.']);
+});
+
+test('a repeated label is counted, read as a list, or narrowed by a selector — never guessed', () => {
+    assert.deepStrictEqual(check(ROWS, { row: 'Plan name', count: 2 }), []);
+    assert.deepStrictEqual(check(ROWS, { row: 'Plan name', text: ['Other plan', 'NFUM Select'] }), []);
+    assert.deepStrictEqual(check(ROWS, { selector: 'section', row: 'Plan name', text: 'NFUM Select' }), []);
+    assert.match(check(ROWS, { row: 'Plan name', text: 'NFUM Select' })[0], /2 rows are labelled “Plan name”, so it's unclear which one "text" means/);
+});
+
+test('a failed row check can be accepted, and an ambiguous one isn\'t offered for accepting', () => {
+    const { checks } = parseChecks([
+        { name: '“Plan owner” reads “Bob”', row: 'Plan owner', text: 'Bob' },
+        { name: 'ambiguous', row: 'Plan name', text: 'x' },
+        { name: 'positional, now ambiguous', selector: 'td', text: 'x' }
+    ]);
+    assert.deepStrictEqual(runChecks(checks, ROWS).map(r => r.canAccept), [true, false, false]);
+    const { check: accepted } = require('../output-checks').acceptCheck({ name: '“Plan owner” reads “Bob”', row: 'Plan owner', text: 'Bob' }, ROWS);
+    assert.deepStrictEqual(accepted, { name: '“Plan owner” reads “Fred & Co”', row: 'Plan owner', text: 'Fred & Co' });
 });

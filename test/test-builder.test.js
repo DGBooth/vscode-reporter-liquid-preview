@@ -259,3 +259,73 @@ for (const [layout, template] of Object.entries(LOOP_LAYOUTS)) {
         assert.strictEqual(passes(count.check, fewer).status, 'failed');
     });
 }
+
+// ---- rows found by their label -------------------------------------------------------
+//
+// A report's label/value tables: "Plan name | NFUM Select…". A check found by
+// position ("2nd row, 2nd cell") breaks when a table is added above it; one
+// found by the row's label doesn't. This is the case that broke in practice.
+
+const LETTER = (extraTable) => `
+<section><h1>Your pension</h1>
+${extraTable ? '<table><tr><td>Reference</td><td>REF-1</td></tr><tr><td>Adviser</td><td>James</td></tr></table>' : ''}
+<table>
+  <tr><td>Crystallisation amount</td><td>£65,639.13</td></tr>
+  <tr><td>Plan name:</td><td>NFUM Select Personal Pension Plan - Decumulation</td></tr>
+</table></section>`;
+
+async function page(html) {
+    const dom = new JSDOM('<div id="r"></div>', { runScripts: 'outside-only' });
+    const root = dom.window.document.getElementById('r');
+    root.innerHTML = html;
+    dom.window.eval(BUILDER);
+    return { root, builder: dom.window.RLPTestBuilder };
+}
+
+test('clicking a value cell offers a check found by its row label, first', async () => {
+    const { root, builder } = await page(LETTER(false));
+    const cell = [...root.querySelectorAll('td')].find(td => td.textContent.startsWith('NFUM'));
+    const [first] = builder.proposalsFor(cell, root);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(first.check)), { row: 'Plan name', text: 'NFUM Select Personal Pension Plan - Decumulation' });
+    assert.strictEqual(first.name, '“Plan name” reads “NFUM Select Personal Pension Plan - Dec…”');
+});
+
+test('a check found by row label survives a table added above it; one found by position does not', async () => {
+    const before = await page(LETTER(false));
+    const cell = [...before.root.querySelectorAll('td')].find(td => td.textContent.startsWith('NFUM'));
+    const proposals = before.builder.proposalsFor(cell, before.root);
+    const byLabel = proposals.find(p => p.check.row && p.kind === 'reads').check;
+    // What the builder would have written without the label to go on.
+    const byPosition = { selector: before.builder.selectorFor(cell, before.root), text: byLabel.text };
+    assert.ok(!proposals.some(p => p.check.selector && p.kind === 'reads'), 'the positional version isn\'t offered alongside');
+
+    const after = LETTER(true);
+    assert.strictEqual(passes(byLabel, after).status, 'passed', 'the label still finds it');
+    const positional = passes(byPosition, after);
+    assert.strictEqual(positional.status, 'failed', `the position now matches the wrong thing or two things: ${byPosition.selector}`);
+});
+
+test('a label in every row of a loop gives a list and a count of those rows', async () => {
+    const recs = ['Critical Illness Plus', 'Life Cover', 'Income Protection'];
+    const html = '<table><tr><td>Plans</td><td>2</td></tr></table>'
+        + recs.map(r => `<table><tr><td>Plan name</td><td>${r}</td></tr><tr><td>Sum</td><td>1</td></tr></table>`).join('');
+    const { root, builder } = await page(html);
+    const cell = [...root.querySelectorAll('td')].find(td => td.textContent === 'Life Cover');
+    const proposals = builder.proposalsFor(cell, root);
+
+    const list = proposals.find(p => p.check.row && p.kind === 'reads');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(list.check)), { row: 'Plan name', text: recs });
+    const count = proposals.find(p => p.check.row && p.kind === 'count');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(count.check)), { row: 'Plan name', count: 3 });
+    assert.strictEqual(count.name, 'There are 3 “Plan name” rows');
+    assert.strictEqual(passes(count.check, html).status, 'passed');
+    assert.strictEqual(passes(count.check, html.replace(/<table><tr><td>Plan name<\/td><td>Life Cover[\s\S]*?<\/table>/, '')).status, 'failed', 'a missing recommendation is caught');
+});
+
+test('no row check is offered for a cell that isn\'t beside its row\'s label', async () => {
+    const { root, builder } = await page('<table><tr><td>Plan</td><td>Aviva</td><td>£60,000</td></tr></table>');
+    const third = root.querySelectorAll('td')[2];
+    assert.ok(!builder.proposalsFor(third, root).some(p => p.check.row), 'the third column is not the "Plan" value');
+    const first = root.querySelectorAll('td')[0];
+    assert.ok(!builder.proposalsFor(first, root).some(p => p.check.row), 'nor is the label itself');
+});

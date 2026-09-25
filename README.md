@@ -169,6 +169,7 @@ You don't have to write these by hand: the [test builder](#template-tests) in th
 
 | Key | Checks |
 |-----|--------|
+| `row` | Instead of (or as well as) a selector: the label a table row starts with, e.g. `"Plan name"`. The check looks at the cell beside that label, in every row that has it. A label stays put when tables are added above it or rows are inserted, where a position like "2nd row, 2nd cell" doesn't. With a `selector` too, only rows inside what it matches count. |
 | `exists` | `true`: the selector matches something. `false`: it matches nothing. A selector with nothing else to check means `exists: true`. |
 | `count` | How many elements match. |
 | `text` | The element's text as a reader sees it, with entities decoded and whitespace collapsed. Table cells and blocks read as separate words, and script and style are left out. A single value needs exactly one match: if several match, the check fails rather than guess which one you meant. Give a list to check each match in order. |
@@ -186,6 +187,8 @@ A case can use checks, `expected`, or both. If the case fails to render, its che
    - *There are 3 of these*, with the counted parts highlighted. This is how to check a loop ran once per item: click one of the three recommendation tables, and the check says there are three. It counts that element's family, found by its class (`table.recommendation`) or a repeated container with a class around it, so other tables on the page aren't counted. Only with no class to go on does it fall back to the element's position, which works when the loop's output sits in a container of its own, such as each recommendation in its own `<div>`. It can't work when the loop's tables sit directly beside other tables with nothing to tell them apart. Give the loop's element a class then (`<table class="recommendation">`). The counted tables are highlighted before you add the check, so you'll see if it's counting too many.
    - *It is ticked*, or *It shows "PO-77"* for a text box
    - *It is shown*
+
+   For a value in a label/value table ("Plan name | NFUM Select…"), the first offers find the cell **by its row's label**: *"'Plan name' reads '…'"*. Prefer these. They keep working when tables are added above or rows are inserted, where checks found by position break. If the label repeats (a "Plan name" row in each recommendation), you're offered all the values as a list, and *"There are 3 'Plan name' rows"*, a loop count that doesn't depend on the layout.
 
    Pick one, adjust the check's name if you like, and **Add check**. If you picked something too small, **Select the area around it** widens the selection.
 3. Add *The page doesn't mention…* or *The page mentions…* checks for text anywhere on the page.

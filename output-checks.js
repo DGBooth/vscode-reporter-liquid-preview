@@ -14,8 +14,17 @@
 // ---- parsing ------------------------------------------------------------------
 
 const ASSERTIONS = ['exists', 'count', 'text', 'contains', 'notContains', 'attributes'];
-// These read the matched elements, so they need a selector to say which.
+// These read particular elements, so they need a "selector" or a "row" to say which.
 const NEEDS_SELECTOR = ['exists', 'count', 'text', 'attributes'];
+
+// A row check finds a table row by its label, the text of its first cell,
+// and checks the cell beside it: "the value in the row labelled Plan name".
+// Reports are full of label/value tables, and a label stays put when a table
+// is added above it or a row is inserted, where a position like "2nd row,
+// 2nd cell" doesn't. "Plan name" and "Plan name:" are the same label.
+function tidyLabel(text) {
+    return tidy(text).replace(/\s*:$/, '');
+}
 
 // Turn a case's "checks" array into checks, each with its problems recorded on
 // it rather than thrown, so one bad check doesn't stop the others. `lineOf`
@@ -37,13 +46,14 @@ function parseChecks(raw, lineOf = () => null) {
             index,
             line: lineOf(typeof c.name === 'string' ? c.name : null),
             selector: typeof c.selector === 'string' ? c.selector.trim() : null,
+            row: typeof c.row === 'string' && tidyLabel(c.row) ? tidyLabel(c.row) : null,
             error: null
         };
         for (const key of ASSERTIONS) if (c[key] !== undefined) check[key] = c[key];
         check.error = validate(c, check);
 
-        // A selector alone asks whether anything matches it.
-        if (!check.error && check.selector && !ASSERTIONS.some(key => check[key] !== undefined)) check.exists = true;
+        // A selector or row alone asks whether anything matches it.
+        if (!check.error && (check.selector || check.row) && !ASSERTIONS.some(key => check[key] !== undefined)) check.exists = true;
         return check;
     });
     return { checks, error: null };
@@ -52,9 +62,10 @@ function parseChecks(raw, lineOf = () => null) {
 function validate(raw, check) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'A check must be an object.';
     if (raw.selector !== undefined && (typeof raw.selector !== 'string' || !raw.selector.trim())) return '"selector" must be a CSS selector.';
-    if (!check.selector && !ASSERTIONS.some(key => raw[key] !== undefined)) return 'A check needs a "selector", or something to check such as "contains".';
-    const needs = NEEDS_SELECTOR.filter(key => raw[key] !== undefined && !check.selector);
-    if (needs.length) return `"${needs[0]}" checks the elements a "selector" matches, so it needs one.`;
+    if (raw.row !== undefined && (typeof raw.row !== 'string' || !tidyLabel(raw.row))) return '"row" must be the label a table row starts with, e.g. "Plan name".';
+    if (!check.selector && !check.row && !ASSERTIONS.some(key => raw[key] !== undefined)) return 'A check needs a "selector" or a "row", or something to check such as "contains".';
+    const needs = NEEDS_SELECTOR.filter(key => raw[key] !== undefined && !check.selector && !check.row);
+    if (needs.length) return `"${needs[0]}" checks the elements a "selector" or "row" picks out, so it needs one.`;
     if (raw.exists !== undefined && typeof raw.exists !== 'boolean') return '"exists" must be true or false.';
     if (raw.count !== undefined && !(Number.isInteger(raw.count) && raw.count >= 0)) return '"count" must be a whole number.';
     if (raw.exists !== undefined && raw.count !== undefined) return 'Use "exists" or "count", not both.';
@@ -93,8 +104,46 @@ function queryable(html) {
     };
     return {
         select: selector => domLibraries().CSSselect.selectAll(selector, parsed()),
+        root: parsed,
         text: () => textOf(parsed())
     };
+}
+
+// The elements a check looks at: what its selector matches, or — for a row
+// check — the value cell of every row with its label, within what the
+// selector matches if it has one. In page order, each once.
+function targetsOf(check, output) {
+    const scopes = check.selector ? output.select(check.selector) : null;
+    if (!check.row) return scopes;
+    const { CSSselect } = domLibraries();
+    const values = [];
+    for (const scope of scopes || [output.root()]) {
+        const rows = CSSselect.selectAll('tr', scope);
+        if (scope.name === 'tr') rows.unshift(scope);
+        for (const tr of rows) {
+            const cells = (tr.children || []).filter(n => n.name === 'td' || n.name === 'th');
+            if (cells.length >= 2 && tidyLabel(textOf(cells[0])) === check.row && !values.includes(cells[1])) values.push(cells[1]);
+        }
+    }
+    return values;
+}
+
+// A parsed check as it would be written in a suite: its name, what it looks
+// at and what it expects, without the fields parsing adds or leaves empty.
+function asWritten(check) {
+    const out = { name: check.name };
+    if (check.selector) out.selector = check.selector;
+    if (check.row) out.row = check.row;
+    for (const key of ASSERTIONS) if (check[key] !== undefined) out[key] = check[key];
+    return out;
+}
+
+// How a failure names what the check looked at.
+function describeTarget(check, count) {
+    if (!check.row) return `\u201c${check.selector}\u201d matched ${count === 0 ? 'nothing' : count === 1 ? '1 element' : `${count} elements`}`;
+    const where = check.selector ? ` in \u201c${check.selector}\u201d` : '';
+    if (count === 0) return `No row${where} is labelled \u201c${check.row}\u201d`;
+    return `${count === 1 ? '1 row' : `${count} rows`}${where} ${count === 1 ? 'is' : 'are'} labelled \u201c${check.row}\u201d`;
 }
 
 let _dom = null;
@@ -165,6 +214,10 @@ function runChecks(checks, html) {
             }
         }
         if (result.failures.length) result.status = 'failed';
+        // Offer "Accept new result" only where accepting would work: a check
+        // whose target is now ambiguous (it matches two elements) has no
+        // single new value, and a button that can only fail is noise.
+        if (result.status === 'failed' && result.canAccept) result.canAccept = !acceptCheck(asWritten(check), html).error;
         return result;
     });
 }
@@ -174,7 +227,7 @@ function runChecks(checks, html) {
 function judge(check, html, output, fail) {
     const quote = s => `“${s}”`;
 
-    if (!check.selector) {
+    if (!check.selector && !check.row) {
         // No selector: the page's text, as a reader sees it. Not the HTML — a
         // check that "the page doesn't mention Smith & Co" must not pass just
         // because the HTML spells it "Smith &amp; Co".
@@ -184,8 +237,9 @@ function judge(check, html, output, fail) {
         return;
     }
 
-    const matches = output.select(check.selector);
-    const found = `“${check.selector}” matched ${matches.length === 0 ? 'nothing' : matches.length === 1 ? '1 element' : `${matches.length} elements`}`;
+    const matches = targetsOf(check, output);
+    const found = describeTarget(check, matches.length);
+    const what = check.row ? `the \u201c${check.row}\u201d row` : quote(check.selector);
 
     if (check.exists === true && matches.length === 0) return fail(`${found}; expected at least one.`);
     if (check.exists === false && matches.length > 0) fail(`${found}; expected none.`);
@@ -215,7 +269,9 @@ function judge(check, html, output, fail) {
                 if (i < texts.length && texts[i] !== want) fail(`Element ${i + 1} reads ${quote(texts[i])}; expected ${quote(want)}.`);
             });
         } else if (matches.length > 1) {
-            fail(`${found}, so it's unclear which one "text" means. Narrow the selector, or give "text" as a list with one entry per element.`);
+            fail(check.row
+                ? `${found}, so it's unclear which one "text" means. Give "text" as a list with one entry per row, or a "selector" to say which table.`
+                : `${found}, so it's unclear which one "text" means. Narrow the selector, or give "text" as a list with one entry per element.`);
         } else if (texts[0] !== tidy(check.text)) {
             fail(`It reads ${quote(texts[0])}; expected ${quote(tidy(check.text))}.`);
         }
@@ -223,10 +279,10 @@ function judge(check, html, output, fail) {
 
     const combined = matches.map(textOf).join(' ');
     for (const needle of toList(check.contains)) {
-        if (!combined.includes(tidy(needle))) fail(`The text of ${quote(check.selector)} should contain ${quote(needle)}; it reads ${quote(snip(combined))}.`);
+        if (!combined.includes(tidy(needle))) fail(`The text of ${what} should contain ${quote(needle)}; it reads ${quote(snip(combined))}.`);
     }
     for (const needle of toList(check.notContains)) {
-        if (combined.includes(tidy(needle))) fail(`The text of ${quote(check.selector)} should not contain ${quote(needle)}.`);
+        if (combined.includes(tidy(needle))) fail(`The text of ${what} should not contain ${quote(needle)}.`);
     }
 
     if (check.attributes !== undefined) {
@@ -278,7 +334,7 @@ function asPreviewShowsIt(html) {
 // shows now. A phrase to find (contains / notContains) can't: when "includes
 // 'Net 30'" fails, nothing says which phrase should replace it.
 function acceptable(check) {
-    if (!check.selector) return false;
+    if (!check.selector && !check.row) return false;
     if (check.contains !== undefined || check.notContains !== undefined) return false;
     return check.text !== undefined || check.count !== undefined || check.exists !== undefined || check.attributes !== undefined;
 }
@@ -299,10 +355,11 @@ function acceptCheck(raw, html) {
 
     let matches;
     try {
-        matches = queryable(html).select(check.selector);
+        matches = targetsOf(check, queryable(html));
     } catch (err) {
         return { error: `The selector "${check.selector}" is not valid CSS: ${err.message}` };
     }
+    const target = check.row ? `The \u201c${check.row}\u201d row` : `\u201c${check.selector}\u201d`;
     const updated = JSON.parse(JSON.stringify(raw));
     const changes = [];
     let name = typeof raw.name === 'string' ? raw.name : '';
@@ -317,12 +374,12 @@ function acceptCheck(raw, html) {
     if (check.text !== undefined) {
         const now = matches.map(textOf);
         if (Array.isArray(check.text)) {
-            if (now.length === 0) return { error: `\u201c${check.selector}\u201d matches nothing now, so there is no text to accept. Remove the check, or edit the test and check the part again.` };
+            if (now.length === 0) return { error: `${target} matches nothing now, so there is no text to accept. Remove the check, or edit the test and check the part again.` };
             changes.push({ what: 'text', from: check.text.map(tidy), to: now });
             updated.text = now;
         } else {
             if (now.length !== 1) {
-                return { error: `\u201c${check.selector}\u201d matches ${now.length === 0 ? 'nothing' : now.length + ' elements'} now, so there is no single text to accept. Remove the check, or edit the test and check the part again.` };
+                return { error: `${target} matches ${now.length === 0 ? 'nothing' : now.length + ' elements'} now, so there is no single text to accept. Remove the check, or edit the test and check the part again.` };
             }
             changes.push({ what: 'text', from: tidy(check.text), to: now[0] });
             renameQuoted(tidy(check.text), now[0]);
@@ -344,7 +401,7 @@ function acceptCheck(raw, html) {
     }
     if (check.attributes !== undefined) {
         if (matches.length !== 1) {
-            return { error: `\u201c${check.selector}\u201d matches ${matches.length === 0 ? 'nothing' : matches.length + ' elements'} now, so there is no single element to accept. Remove the check, or edit the test and check the part again.` };
+            return { error: `${target} matches ${matches.length === 0 ? 'nothing' : matches.length + ' elements'} now, so there is no single element to accept. Remove the check, or edit the test and check the part again.` };
         }
         const attribs = matches[0].attribs || {};
         updated.attributes = {};

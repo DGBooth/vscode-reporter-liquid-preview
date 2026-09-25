@@ -47,6 +47,10 @@
                     "type": "string",
                     "description": "A CSS selector for the elements to check, e.g. \"h1\", \"table tr\", \"#includeNotes\", \"td:nth-child(2)\". The output is parsed the way a browser parses it. On its own, it checks that something matches."
                 },
+                "row": {
+                    "type": "string",
+                    "description": "The label a table row starts with, e.g. \"Plan name\" (a trailing colon doesn't matter). The check looks at the cell beside that label, in every row with it. Survives tables being added or moved, where a position doesn't. Can be combined with \"selector\" to look only inside what it matches."
+                },
                 "exists": {
                     "type": "boolean",
                     "description": "true: the selector matches something. false: it matches nothing."
