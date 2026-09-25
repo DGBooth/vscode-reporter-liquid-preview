@@ -293,6 +293,78 @@
         return text || el.getAttribute('data-editor-id') || el.getAttribute('name') || el.id || '';
     }
 
+    // ---- rows found by their label ----------------------------------------------
+    //
+    // Must match targetsOf in output-checks.js: a row's label is its first
+    // cell's text ("Plan name:" and "Plan name" are the same label), and the
+    // row check looks at the cell beside it.
+
+    function tidyLabel(text) {
+        return String(text).replace(/\s+/g, ' ').trim().replace(/\s*:$/, '');
+    }
+
+    function cellsOf(tr) {
+        return Array.from(tr.children).filter(c => tagOf(c) === 'td' || tagOf(c) === 'th');
+    }
+
+    // The value cell of every row labelled `label`, in page order.
+    function rowValueCells(root, label) {
+        const out = [];
+        for (const tr of matches(root, 'tr') || []) {
+            const cells = cellsOf(tr);
+            if (cells.length >= 2 && tidyLabel(readableText(cells[0])) === label && out.indexOf(cells[1]) === -1) out.push(cells[1]);
+        }
+        return out;
+    }
+
+    // Checks that find `el`'s row by its label — offered first, because they
+    // survive tables being added and rows being inserted, where a position
+    // like "2nd row, 2nd cell" breaks. Only for a value cell (or something in
+    // one) sitting right after its row's label.
+    function rowProposals(el, root) {
+        const cell = el.closest && el.closest('td, th');
+        if (!cell || !root.contains(cell) || !cell.parentElement || tagOf(cell.parentElement) !== 'tr') return [];
+        const cells = cellsOf(cell.parentElement);
+        if (cells.indexOf(cell) !== 1) return [];
+        const label = tidyLabel(readableText(cells[0]));
+        if (!label || label.length > 60) return [];
+        const values = rowValueCells(root, label);
+        if (values.indexOf(cell) === -1) return [];
+        const quoted = '\u201c' + short(label, 40) + '\u201d';
+        const text = readableText(cell);
+        const out = [];
+        if (values.length === 1) {
+            if (text) {
+                out.push({
+                    kind: 'reads', label: 'It reads exactly \u201c' + short(text, 120) + '\u201d (the ' + quoted + ' row)',
+                    name: quoted + ' reads \u201c' + short(text, 40) + '\u201d',
+                    check: { row: label, text }
+                });
+                out.push({
+                    kind: 'includes', label: 'It includes (the ' + quoted + ' row):', editable: text,
+                    name: quoted + ' includes \u201c' + short(text, 40) + '\u201d',
+                    nameFor: value => quoted + ' includes \u201c' + short(value, 40) + '\u201d',
+                    check: { row: label, contains: text }
+                });
+                if (text.length > 80) out.unshift(out.splice(1, 1)[0]);
+            }
+            out.push({ kind: 'shown', label: 'The ' + quoted + ' row is shown', name: 'The ' + quoted + ' row is shown', check: { row: label, exists: true } });
+        } else {
+            const texts = values.map(readableText);
+            out.push({
+                kind: 'reads', label: 'The ' + values.length + ' ' + quoted + ' rows read ' + texts.map(t => '\u201c' + short(t, 30) + '\u201d').join(', '),
+                name: 'The ' + quoted + ' rows read ' + texts.map(t => '\u201c' + short(t, 24) + '\u201d').join(', '),
+                check: { row: label, text: texts }
+            });
+            out.push({
+                kind: 'count', label: 'There are ' + values.length + ' ' + quoted + ' rows (highlighted)',
+                name: 'There are ' + values.length + ' ' + quoted + ' rows',
+                check: { row: label, count: values.length }
+            });
+        }
+        return out;
+    }
+
     // What could be true about `el`, in plain words, each with the check that
     // proves it and a suggested name. The first is the one to preselect.
     function proposalsFor(el, root) {
@@ -323,8 +395,16 @@
             });
         }
 
+        // Found by its row's label, ahead of anything found by position. Where
+        // there is one, the positional versions of the same checks aren't
+        // offered at all: two near-identical choices, one of which breaks when
+        // a table is added above, is a trap for a reader who can't tell them
+        // apart.
+        const byRow = tag !== 'input' ? rowProposals(el, root) : [];
+        out.push(...byRow);
+
         const text = readableText(el);
-        if (selector && text && tag !== 'input') {
+        if (selector && text && tag !== 'input' && !byRow.length) {
             out.push({
                 kind: 'reads',
                 label: 'It reads exactly “' + short(text, 120) + '”',
@@ -354,7 +434,7 @@
             });
         }
 
-        if (selector) {
+        if (selector && !byRow.length) {
             out.push({
                 kind: 'shown',
                 label: 'It is shown',
@@ -366,7 +446,7 @@
         return out;
     }
 
-    const api = { readableText, cssEscape, selectorFor, groupSelectorFor, proposalsFor, nounFor };
+    const api = { rowValueCells, tidyLabel, readableText, cssEscape, selectorFor, groupSelectorFor, proposalsFor, nounFor };
     if (typeof window !== 'undefined') window.RLPTestBuilder = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
 
@@ -414,7 +494,19 @@
 
     function syncGroup() {
         const p = state.picked && state.proposals[state.choice];
+        if (p && p.kind === 'count' && p.check.row) return showCells(rowValueCells(root(), p.check.row));
         showGroup(p && p.kind === 'count' ? p.check.selector : null);
+    }
+
+    function showCells(cells) {
+        for (const box of groupBoxes) box.remove();
+        groupBoxes = cells.map(el => {
+            const box = document.createElement('div');
+            box.className = 'lp-builder-group';
+            document.body.appendChild(box);
+            place(box, el);
+            return box;
+        });
     }
 
     function place(box, el) {

@@ -11,6 +11,15 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.8.0] - 2026-09-25
+
+### Added
+- Row checks: `"row": "Plan name"` finds a table row by its label (its first cell's text, trailing colon ignored) and checks the cell beside it. A check found this way survives a table being added above it or a row being inserted, where one found by position ("2nd row, 2nd cell") starts matching two cells and fails. A repeated label can be read as a list or counted: *"There are 3 'Plan name' rows"* checks that a loop ran once per item without depending on the layout. A `selector` alongside narrows where to look.
+- The test builder offers row checks first when you click a value cell beside its row's label. It doesn't also offer the position-based versions, which break when a table is added above.
+
+### Fixed
+- **Accept new result** is only offered where accepting would work. A check whose target now matches two elements has no single new value, so it shows only **Remove check**.
+
 ## [1.7.1] - 2026-09-24
 
 ### Fixed

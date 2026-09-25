@@ -91,6 +91,9 @@ files are separate processes, so state never leaks across a file.
   pass. Also: selectors prefer names over positions, a table cell's count is its
   column, proposals read in plain words, and the builder reads text exactly as
   the runner does.
+  Row checks: clicking a value cell offers a check found by its row's label;
+  it keeps passing when a table is added above, where the positional one
+  fails; a label repeated in a loop gives a list and a count.
 - **`unbalanced-html.test.js`** — output with a stray closing tag, loaded as
   a whole page in jsdom as a browser would: the rest of the document stays in
   the preview's container and its section, first load matches an edit, the
