@@ -47,6 +47,10 @@
                     "type": "string",
                     "description": "A CSS selector for the elements to check, e.g. \"h1\", \"table tr\", \"#includeNotes\", \"td:nth-child(2)\". The output is parsed the way a browser parses it. On its own, it checks that something matches."
                 },
+                "tableWith": {
+                    "type": "string",
+                    "description": "With \"row\": look only in tables that also have a row with this label, e.g. \"Crystallisation amount\". This is how a check says \"the Plan name in this table\" when the label repeats, without depending on where the table is."
+                },
                 "row": {
                     "type": "string",
                     "description": "The label a table row starts with, e.g. \"Plan name\" (a trailing colon doesn't matter). The check looks at the cell beside that label, in every row with it. Survives tables being added or moved, where a position doesn't. Can be combined with \"selector\" to look only inside what it matches."

@@ -170,6 +170,7 @@ You don't have to write these by hand: the [test builder](#template-tests) in th
 | Key | Checks |
 |-----|--------|
 | `row` | Instead of (or as well as) a selector: the label a table row starts with, e.g. `"Plan name"`. The check looks at the cell beside that label, in every row that has it. A label stays put when tables are added above it or rows are inserted, where a position like "2nd row, 2nd cell" doesn't. With a `selector` too, only rows inside what it matches count. |
+| `tableWith` | With `row`: look only in tables that also have a row with this label, e.g. `"Crystallisation amount"`. This is how to say "the Plan name in *this* table" when the label repeats, without depending on where the table is. |
 | `exists` | `true`: the selector matches something. `false`: it matches nothing. A selector with nothing else to check means `exists: true`. |
 | `count` | How many elements match. |
 | `text` | The element's text as a reader sees it, with entities decoded and whitespace collapsed. Table cells and blocks read as separate words, and script and style are left out. A single value needs exactly one match: if several match, the check fails rather than guess which one you meant. Give a list to check each match in order. |
@@ -188,7 +189,7 @@ A case can use checks, `expected`, or both. If the case fails to render, its che
    - *It is ticked*, or *It shows "PO-77"* for a text box
    - *It is shown*
 
-   For a value in a label/value table ("Plan name | NFUM Select…"), the first offers find the cell **by its row's label**: *"'Plan name' reads '…'"*. Prefer these. They keep working when tables are added above or rows are inserted, where checks found by position break. If the label repeats (a "Plan name" row in each recommendation), you're offered all the values as a list, and *"There are 3 'Plan name' rows"*, a loop count that doesn't depend on the layout.
+   For a value in a label/value table ("Plan name | NFUM Select…"), the first offers find the cell **by its row's label**: *"'Plan name' reads '…'"*. Prefer these. They keep working when tables are added above or rows are inserted, where checks found by position break. The label can be anything in the row's first column, as long as the value is the cell right beside it. If the label repeats (a "Plan name" row in each recommendation, or in two tables), the first offer is **just this table**: the cell you clicked, in its table. The table is named by its class if it has one, otherwise by another row label only it has (*"in the table with 'Crystallisation amount'"*), so adding tables doesn't break it. Only with neither does it fall back to the table's position, and the offer says so. You're also offered all the values as a list, and *"There are 3 'Plan name' rows"*, a loop count that doesn't depend on the layout.
 
    Pick one, adjust the check's name if you like, and **Add check**. If you picked something too small, **Select the area around it** widens the selection.
 3. Add *The page doesn't mention…* or *The page mentions…* checks for text anywhere on the page.

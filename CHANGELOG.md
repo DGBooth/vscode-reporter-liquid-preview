@@ -11,6 +11,14 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.9.0] - 2026-09-25
+
+### Fixed
+- Row checks saved from the test builder in 1.8.0 lost their `"row"`, so they were written as just a name and a text and could never pass (the report said "text" needs a "selector" or "row"). **Rebuild any check you created or accepted with 1.8.0.** The fields a saved check keeps now come from the same list the runner reads, and a new test saves every kind of check the builder offers and runs it from the suite file.
+
+### Added
+- **Just this table**: when a row label repeats across tables, the builder's first offer checks the cell you clicked in its own table. The table is named by its class, or else by another row label only it has, e.g. `{ "tableWith": "Crystallisation amount", "row": "Plan name", … }`. Either survives tables being added above. Only with neither does it use the table's position, and the offer says it will break if tables are added.
+
 ## [1.8.0] - 2026-09-25
 
 ### Added

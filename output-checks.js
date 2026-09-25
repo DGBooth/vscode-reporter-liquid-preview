@@ -14,6 +14,10 @@
 // ---- parsing ------------------------------------------------------------------
 
 const ASSERTIONS = ['exists', 'count', 'text', 'contains', 'notContains', 'attributes'];
+// Every key a check is written with, in the order it's written. Saving a check
+// keeps these and nothing else (template-tests' tidyCheck), so a key missing
+// here is silently dropped from saved checks: add new keys here first.
+const CHECK_KEYS = ['name', 'selector', 'tableWith', 'row'].concat(ASSERTIONS);
 // These read particular elements, so they need a "selector" or a "row" to say which.
 const NEEDS_SELECTOR = ['exists', 'count', 'text', 'attributes'];
 
@@ -47,6 +51,7 @@ function parseChecks(raw, lineOf = () => null) {
             line: lineOf(typeof c.name === 'string' ? c.name : null),
             selector: typeof c.selector === 'string' ? c.selector.trim() : null,
             row: typeof c.row === 'string' && tidyLabel(c.row) ? tidyLabel(c.row) : null,
+            tableWith: typeof c.tableWith === 'string' && tidyLabel(c.tableWith) ? tidyLabel(c.tableWith) : null,
             error: null
         };
         for (const key of ASSERTIONS) if (c[key] !== undefined) check[key] = c[key];
@@ -63,6 +68,8 @@ function validate(raw, check) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return 'A check must be an object.';
     if (raw.selector !== undefined && (typeof raw.selector !== 'string' || !raw.selector.trim())) return '"selector" must be a CSS selector.';
     if (raw.row !== undefined && (typeof raw.row !== 'string' || !tidyLabel(raw.row))) return '"row" must be the label a table row starts with, e.g. "Plan name".';
+    if (raw.tableWith !== undefined && (typeof raw.tableWith !== 'string' || !tidyLabel(raw.tableWith))) return '"tableWith" must be the label of another row in the table, e.g. "Crystallisation amount".';
+    if (raw.tableWith !== undefined && !check.row) return '"tableWith" narrows a "row" check to one table, so it needs a "row" too.';
     if (!check.selector && !check.row && !ASSERTIONS.some(key => raw[key] !== undefined)) return 'A check needs a "selector" or a "row", or something to check such as "contains".';
     const needs = NEEDS_SELECTOR.filter(key => raw[key] !== undefined && !check.selector && !check.row);
     if (needs.length) return `"${needs[0]}" checks the elements a "selector" or "row" picks out, so it needs one.`;
@@ -113,19 +120,43 @@ function queryable(html) {
 // check — the value cell of every row with its label, within what the
 // selector matches if it has one. In page order, each once.
 function targetsOf(check, output) {
-    const scopes = check.selector ? output.select(check.selector) : null;
+    let scopes = check.selector ? output.select(check.selector) : null;
     if (!check.row) return scopes;
-    const { CSSselect } = domLibraries();
+    // "tableWith": only tables that also have a row with that label — how a
+    // check says "the Plan name in this table" without a position.
+    if (check.tableWith) {
+        const tables = [];
+        for (const scope of scopes || [output.root()]) {
+            for (const table of descendants(scope, 'table')) {
+                if (!tables.includes(table) && labelledRows(table, check.tableWith).length) tables.push(table);
+            }
+        }
+        scopes = tables;
+    }
     const values = [];
     for (const scope of scopes || [output.root()]) {
-        const rows = CSSselect.selectAll('tr', scope);
-        if (scope.name === 'tr') rows.unshift(scope);
-        for (const tr of rows) {
-            const cells = (tr.children || []).filter(n => n.name === 'td' || n.name === 'th');
-            if (cells.length >= 2 && tidyLabel(textOf(cells[0])) === check.row && !values.includes(cells[1])) values.push(cells[1]);
+        for (const cells of labelledRows(scope, check.row)) {
+            if (!values.includes(cells[1])) values.push(cells[1]);
         }
     }
     return values;
+}
+
+// `scope` and everything in it named `name`, in page order.
+function descendants(scope, name) {
+    const found = domLibraries().CSSselect.selectAll(name, scope);
+    if (scope.name === name) found.unshift(scope);
+    return found;
+}
+
+// The cells of each row in `scope` whose first cell is labelled `label`.
+function labelledRows(scope, label) {
+    const out = [];
+    for (const tr of descendants(scope, 'tr')) {
+        const cells = (tr.children || []).filter(n => n.name === 'td' || n.name === 'th');
+        if (cells.length >= 2 && tidyLabel(textOf(cells[0])) === label) out.push(cells);
+    }
+    return out;
 }
 
 // A parsed check as it would be written in a suite: its name, what it looks
@@ -133,6 +164,7 @@ function targetsOf(check, output) {
 function asWritten(check) {
     const out = { name: check.name };
     if (check.selector) out.selector = check.selector;
+    if (check.tableWith) out.tableWith = check.tableWith;
     if (check.row) out.row = check.row;
     for (const key of ASSERTIONS) if (check[key] !== undefined) out[key] = check[key];
     return out;
@@ -141,7 +173,8 @@ function asWritten(check) {
 // How a failure names what the check looked at.
 function describeTarget(check, count) {
     if (!check.row) return `\u201c${check.selector}\u201d matched ${count === 0 ? 'nothing' : count === 1 ? '1 element' : `${count} elements`}`;
-    const where = check.selector ? ` in \u201c${check.selector}\u201d` : '';
+    const where = (check.selector ? ` in \u201c${check.selector}\u201d` : '')
+        + (check.tableWith ? ` in a table with a \u201c${check.tableWith}\u201d row` : '');
     if (count === 0) return `No row${where} is labelled \u201c${check.row}\u201d`;
     return `${count === 1 ? '1 row' : `${count} rows`}${where} ${count === 1 ? 'is' : 'are'} labelled \u201c${check.row}\u201d`;
 }
@@ -427,4 +460,4 @@ function shorten(text, limit) {
     return text.length > limit ? text.slice(0, limit - 1) + '\u2026' : text;
 }
 
-module.exports = { parseChecks, runChecks, asPreviewShowsIt, acceptCheck };
+module.exports = { CHECK_KEYS, parseChecks, runChecks, asPreviewShowsIt, acceptCheck };
