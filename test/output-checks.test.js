@@ -306,3 +306,20 @@ test('a failed row check can be accepted, and an ambiguous one isn\'t offered fo
     const { check: accepted } = require('../output-checks').acceptCheck({ name: '“Plan owner” reads “Bob”', row: 'Plan owner', text: 'Bob' }, ROWS);
     assert.deepStrictEqual(accepted, { name: '“Plan owner” reads “Fred & Co”', row: 'Plan owner', text: 'Fred & Co' });
 });
+
+test('tableWith narrows a row check to the table that also has another label', () => {
+    const html = '<table><tr><td>Reference</td><td>R1</td></tr><tr><td>Plan name</td><td>A</td></tr></table>'
+        + '<table><tr><td>Crystallisation amount</td><td>£1</td></tr><tr><td>Plan name:</td><td>B</td></tr></table>';
+    assert.deepStrictEqual(check(html, { tableWith: 'Crystallisation amount', row: 'Plan name', text: 'B' }), []);
+    assert.deepStrictEqual(check(html, { tableWith: 'Reference', row: 'Plan name', text: 'A' }), []);
+    assert.match(check(html, { tableWith: 'Nope', row: 'Plan name', text: 'A' })[0], /No row in a table with a “Nope” row is labelled “Plan name”/);
+    assert.match(check(html, { tableWith: 'Reference', text: 'A' })[0], /"tableWith" narrows a "row" check to one table, so it needs a "row" too/);
+});
+
+test('a saved check keeps every key a check can have', () => {
+    const { CHECK_KEYS } = require('../output-checks');
+    const { tidyCheck } = require('../template-tests');
+    const full = {};
+    for (const key of CHECK_KEYS) full[key] = key === 'attributes' ? { a: true } : key;
+    assert.deepStrictEqual(Object.keys(tidyCheck(Object.assign({ extra: 1 }, full))), CHECK_KEYS);
+});

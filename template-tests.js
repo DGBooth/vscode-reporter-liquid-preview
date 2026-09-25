@@ -8,7 +8,7 @@
 // and the test suite can drive it directly.
 
 const path = require('path');
-const { parseChecks, runChecks } = require('./output-checks');
+const { parseChecks, runChecks, CHECK_KEYS } = require('./output-checks');
 
 const SUITE_GLOB = '**/*.liquidtest.json';
 const WHITESPACE_MODES = ['exact', 'collapse'];
@@ -528,7 +528,7 @@ function editCase(suiteText, suiteFile, caseIndex, expectedName, mutate) {
 // a fixed order, and nothing else — whatever built it.
 function tidyCheck(check) {
     const out = {};
-    for (const key of ['name', 'selector', 'exists', 'count', 'text', 'contains', 'notContains', 'attributes']) {
+    for (const key of CHECK_KEYS) {
         if (check[key] !== undefined) out[key] = check[key];
     }
     return out;

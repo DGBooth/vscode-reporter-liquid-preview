@@ -313,8 +313,9 @@ test('a label in every row of a loop gives a list and a count of those rows', as
     const cell = [...root.querySelectorAll('td')].find(td => td.textContent === 'Life Cover');
     const proposals = builder.proposalsFor(cell, root);
 
-    const list = proposals.find(p => p.check.row && p.kind === 'reads');
+    const list = proposals.find(p => p.check.row && Array.isArray(p.check.text));
     assert.deepStrictEqual(JSON.parse(JSON.stringify(list.check)), { row: 'Plan name', text: recs });
+    assert.ok(proposals[0].check.row && !Array.isArray(proposals[0].check.text), '"just this table" — the one clicked — comes first');
     const count = proposals.find(p => p.check.row && p.kind === 'count');
     assert.deepStrictEqual(JSON.parse(JSON.stringify(count.check)), { row: 'Plan name', count: 3 });
     assert.strictEqual(count.name, 'There are 3 “Plan name” rows');
@@ -328,4 +329,98 @@ test('no row check is offered for a cell that isn\'t beside its row\'s label', a
     assert.ok(!builder.proposalsFor(third, root).some(p => p.check.row), 'the third column is not the "Plan" value');
     const first = root.querySelectorAll('td')[0];
     assert.ok(!builder.proposalsFor(first, root).some(p => p.check.row), 'nor is the label itself');
+});
+
+// ---- just this table ----------------------------------------------------------------
+
+const TABLE = (rows, attrs = '') => `<table${attrs}>${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('')}</table>`;
+
+test('"just this table" names the table by another label only it has, and survives tables added above', async () => {
+    const letter = extra => (extra ? TABLE([['Plan name', 'NFUM Select'], ['Adviser', 'James']]) : '')
+        + TABLE([['Reference', 'R1'], ['Plan name', 'NFUM Select']])
+        + TABLE([['Crystallisation amount', '£65,639.13'], ['Plan name:', 'NFUM Select']]);
+    const { root, builder } = await page(letter(false));
+    const cell = [...root.querySelectorAll('td')].filter(td => td.textContent === 'NFUM Select').pop();
+    const [first] = builder.proposalsFor(cell, root);
+
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(first.check)), { tableWith: 'Crystallisation amount', row: 'Plan name', text: 'NFUM Select' });
+    assert.strictEqual(first.name, '“Plan name” reads “NFUM Select” (in the table with “Crystallisation amount”)');
+    assert.match(first.label, /^Just this table/);
+    assert.strictEqual(passes(first.check, letter(true)).status, 'passed', 'another "Plan name" table above changes nothing');
+});
+
+test('"just this table" uses the table\'s class when it has one', async () => {
+    const { root, builder } = await page(TABLE([['Plan name', 'A']], ' class="summary"') + TABLE([['Plan name', 'A']], ' class="detail"'));
+    const cell = root.querySelectorAll('td')[3];
+    const [first] = builder.proposalsFor(cell, root);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(first.check)), { selector: 'table.detail', row: 'Plan name', text: 'A' });
+});
+
+test('with nothing to name the table by, "just this table" says it is found by position, and why that is fragile', async () => {
+    const { root, builder } = await page(TABLE([['Plan name', 'A']]) + TABLE([['Plan name', 'A']]));
+    const [first] = builder.proposalsFor(root.querySelectorAll('td')[3], root);
+    assert.match(first.name, /\(in this table, found by its position\)$/);
+    assert.match(first.label, /This breaks if tables are added above it; giving the table a class makes it sturdier/);
+});
+
+// ---- saved and run again --------------------------------------------------------------
+//
+// Every check the builder offers has to survive being saved — written to the
+// suite through the real save path, read back and run. 1.8.0 shipped row
+// checks that the save step silently stripped of their "row", because the
+// list of keys a saved check keeps didn't include it.
+
+test('every check the builder offers passes after being saved to a suite and run from it', async () => {
+    const os = require('os');
+    const { extension, harnessReset } = require('./harness');
+    const templateTests = require('../template-tests');
+    harnessReset();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rlp-roundtrip-'));
+    try {
+        const template = `${TEMPLATE}
+${TABLE([['Reference', 'R1'], ['Plan name', '{{ customer.name }}']])}
+${TABLE([['Crystallisation amount', '£65,639.13'], ['Plan name:', '{{ customer.name }}']])}`;
+        fs.writeFileSync(path.join(dir, 'letter.liquid'), template);
+        fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(DATA));
+        const { html } = await engine.renderForTest(template, DATA, path.join(dir, 'letter.liquid'));
+
+        const dom = new JSDOM('<div id="r"></div>', { runScripts: 'outside-only' });
+        const root = dom.window.document.getElementById('r');
+        root.innerHTML = html;
+        dom.window.eval(BUILDER);
+        const offered = [];
+        const seen = new Set();
+        for (const el of root.querySelectorAll('*')) {
+            for (const p of dom.window.RLPTestBuilder.proposalsFor(el, root)) {
+                const check = JSON.parse(JSON.stringify(p.check));
+                const key = JSON.stringify(check);
+                if (!seen.has(key)) { seen.add(key); offered.push(Object.assign({ name: `${p.kind} ${offered.length}` }, check)); }
+            }
+        }
+        assert.ok(offered.some(c => c.row) && offered.some(c => c.tableWith), 'row and table checks are among them');
+
+        const replies = [];
+        await extension.saveBuiltTest(
+            { templateUri: path.join(dir, 'letter.liquid'), dataUri: path.join(dir, 'data.json') },
+            { webview: { postMessage: m => { replies.push(m); return Promise.resolve(true); } } },
+            { name: 'everything', checks: offered, wholePage: false }
+        );
+        assert.strictEqual(replies[0].ok, true, replies[0].message);
+
+        const suiteFile = path.join(dir, 'letter.liquidtest.json');
+        const saved = JSON.parse(fs.readFileSync(suiteFile, 'utf8')).cases[0].checks;
+        assert.deepStrictEqual(saved.map(c => { const { name, ...rest } = c; return rest; }), offered.map(c => { const { name, ...rest } = c; return rest; }), 'saved exactly as offered');
+
+        const suite = templateTests.parseSuite(fs.readFileSync(suiteFile, 'utf8'), suiteFile);
+        const result = await templateTests.runSuite(suite, {
+            readText: f => fs.promises.readFile(f, 'utf8'),
+            render: engine.renderForTest,
+            format: engine.formatHtml
+        });
+        const failing = result.results[0].checks.filter(c => c.status !== 'passed').map(c => `${c.name}: ${c.failures[0]}`);
+        assert.deepStrictEqual(failing, []);
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+        harnessReset();
+    }
 });

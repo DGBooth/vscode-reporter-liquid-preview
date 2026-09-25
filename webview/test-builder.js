@@ -307,14 +307,63 @@
         return Array.from(tr.children).filter(c => tagOf(c) === 'td' || tagOf(c) === 'th');
     }
 
-    // The value cell of every row labelled `label`, in page order.
-    function rowValueCells(root, label) {
+    // The value cell of every row labelled `label`, in page order — only in
+    // tables that also have a row labelled `tableWith`, when given.
+    function rowValueCells(root, label, tableWith) {
+        const scopes = tableWith ? tablesWith(root, tableWith) : null;
         const out = [];
         for (const tr of matches(root, 'tr') || []) {
+            if (scopes && !scopes.some(t => t.contains(tr))) continue;
             const cells = cellsOf(tr);
             if (cells.length >= 2 && tidyLabel(readableText(cells[0])) === label && out.indexOf(cells[1]) === -1) out.push(cells[1]);
         }
         return out;
+    }
+
+    // Tables with a row labelled `label`.
+    function tablesWith(root, label) {
+        return (matches(root, 'table') || []).filter(table =>
+            (matches(root, 'tr') || []).some(tr => table.contains(tr) && cellsOf(tr).length >= 2 && tidyLabel(readableText(cellsOf(tr)[0])) === label));
+    }
+
+    // How a check can say "the one in this table" when a label repeats across
+    // tables — by a name, never a position if it can help it, since a
+    // position is what breaks when a table is added: the table's own class or
+    // id; else another row label only this table has ("the table with a
+    // Crystallisation amount row"); else, as a last resort, its position,
+    // flagged as such. Returns the scope and how to describe it, or null.
+    function tableScope(cell, root, label) {
+        const table = cell.closest('table');
+        if (!table || !root.contains(table)) return null;
+        const only = scope => {
+            const found = scope.selector
+                ? rowValueCellsIn(root, label, scope.selector)
+                : rowValueCells(root, label, scope.tableWith);
+            return found.length === 1 && found[0] === cell;
+        };
+        const named = selectorFor(table, root);
+        if (named && !/:nth-of-type/.test(named) && only({ selector: named })) {
+            return { check: { selector: named }, words: 'in ' + named, fragile: false };
+        }
+        for (const tr of matches(root, 'tr') || []) {
+            if (!table.contains(tr) || tr.closest('table') !== table) continue;
+            const cells = cellsOf(tr);
+            if (cells.length < 2) continue;
+            const other = tidyLabel(readableText(cells[0]));
+            if (!other || other === label || other.length > 60) continue;
+            const withIt = tablesWith(root, other);
+            if (withIt.length === 1 && withIt[0] === table && only({ tableWith: other })) {
+                return { check: { tableWith: other }, words: 'in the table with \u201c' + short(other, 30) + '\u201d', fragile: false };
+            }
+        }
+        if (named && only({ selector: named })) return { check: { selector: named }, words: 'in this table, found by its position', fragile: true };
+        return null;
+    }
+
+    // rowValueCells within what `selector` matches.
+    function rowValueCellsIn(root, label, selector) {
+        const scopes = matches(root, selector) || [];
+        return rowValueCells(root, label).filter(c => scopes.some(s => s.contains(c)));
     }
 
     // Checks that find `el`'s row by its label — offered first, because they
@@ -350,6 +399,17 @@
             }
             out.push({ kind: 'shown', label: 'The ' + quoted + ' row is shown', name: 'The ' + quoted + ' row is shown', check: { row: label, exists: true } });
         } else {
+            // The label repeats: first, just the one clicked, in its table.
+            const scope = text ? tableScope(cell, root, label) : null;
+            if (scope) {
+                out.push({
+                    kind: 'reads',
+                    label: 'Just this table: it reads exactly \u201c' + short(text, 100) + '\u201d (' + scope.words + ')'
+                        + (scope.fragile ? '. This breaks if tables are added above it; giving the table a class makes it sturdier.' : ''),
+                    name: quoted + ' reads \u201c' + short(text, 40) + '\u201d (' + scope.words + ')',
+                    check: Object.assign({}, scope.check, { row: label, text })
+                });
+            }
             const texts = values.map(readableText);
             out.push({
                 kind: 'reads', label: 'The ' + values.length + ' ' + quoted + ' rows read ' + texts.map(t => '\u201c' + short(t, 30) + '\u201d').join(', '),
@@ -446,7 +506,7 @@
         return out;
     }
 
-    const api = { rowValueCells, tidyLabel, readableText, cssEscape, selectorFor, groupSelectorFor, proposalsFor, nounFor };
+    const api = { rowValueCells, tableScope, tidyLabel, readableText, cssEscape, selectorFor, groupSelectorFor, proposalsFor, nounFor };
     if (typeof window !== 'undefined') window.RLPTestBuilder = api;
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
 
