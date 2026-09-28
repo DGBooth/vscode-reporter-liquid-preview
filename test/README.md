@@ -94,6 +94,12 @@ files are separate processes, so state never leaks across a file.
   Row checks: clicking a value cell offers a check found by its row's label;
   it keeps passing when a table is added above, where the positional one
   fails; a label repeated in a loop gives a list and a count.
+- **`relocating-checks.test.js`** — checks found by position after a section
+  above them is removed: those whose text is still on the page are marked as
+  looking in the wrong place (a changed value or a row check isn't), the
+  report offers **Find it by its text** per check and for the whole test, and
+  the rewritten checks pass. The builder offers a page-text check first for a
+  part found only by position.
 - **`unbalanced-html.test.js`** — output with a stray closing tag, loaded as
   a whole page in jsdom as a browser would: the rest of the document stays in
   the preview's container and its section, first load matches an edit, the

@@ -251,6 +251,13 @@ function runChecks(checks, html) {
         // whose target is now ambiguous (it matches two elements) has no
         // single new value, and a button that can only fail is noise.
         if (result.status === 'failed' && result.canAccept) result.canAccept = !acceptCheck(asWritten(check), html).error;
+        if (result.status === 'failed' && !check.error) {
+            const moved = relocation(check, output);
+            if (moved) {
+                result.relocatable = true;
+                result.failures.push(moved);
+            }
+        }
         return result;
     });
 }
@@ -360,6 +367,58 @@ function asPreviewShowsIt(html) {
     return parse5.serialize(fragment, { treeAdapter: adapter });
 }
 
+// ---- finding a check by its text -------------------------------------------------
+
+// A check found by its selector that fails even though the text it expects is
+// still on the page is most likely looking in the wrong place, not at wrong
+// content. The usual cause is a positional selector ("the 4th paragraph") after
+// a section above it was added or removed: every such check now reads its
+// neighbour, and accepting the new result would record the neighbour's text.
+// Only selector checks: a row check is found by its label, so it doesn't shift.
+function expectedTexts(check) {
+    if (!check.selector || check.row) return null;
+    const texts = typeof check.text === 'string' ? [check.text] : [];
+    if (check.contains !== undefined) texts.push(...toList(check.contains));
+    const tidied = texts.map(tidy).filter(Boolean);
+    return tidied.length ? tidied : null;
+}
+
+// Why the check looks misplaced, or null. The text must be somewhere on the
+// page but not in what the selector matches now: text that's there already
+// failed for another reason, which moving the check wouldn't fix.
+function relocation(check, output) {
+    const texts = expectedTexts(check);
+    if (!texts) return null;
+    let here = '';
+    try {
+        here = targetsOf(check, output).map(textOf).join(' ');
+    } catch (err) {
+        return null;
+    }
+    const page = output.text();
+    if (!texts.every(t => page.includes(t)) || texts.every(t => here.includes(t))) return null;
+    return texts.length === 1
+        ? `“${snip(texts[0])}” is still on the page, just not where this check looks. If part of the page above it was added or removed, find it by its text instead.`
+        : 'What this check expects is still on the page, just not where it looks. If part of the page above it was added or removed, find it by its text instead.';
+}
+
+// The check rewritten to look for its text anywhere on the page, which a
+// section above it being added or removed can't shift. Returns { check } or
+// { error }; the new check has to pass against `html`.
+function relocateCheck(raw, html) {
+    const { checks: [check] } = parseChecks([raw]);
+    if (check.error) return { error: check.error };
+    const texts = expectedTexts(check);
+    if (!texts) return { error: 'Only a check that finds text by a selector can look for it by its text instead.' };
+    let name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    // The builder's names describe the part: "The paragraph reads “…”".
+    name = name.replace(/^The .+? (?:reads|includes) (?=“)/, 'The page shows ');
+    const moved = { name: name || check.name, contains: texts.length === 1 ? texts[0] : texts };
+    const [after] = runChecks(parseChecks([moved]).checks, html);
+    if (after.status !== 'passed') return { error: `Found by its text, this check still wouldn’t pass: ${after.failures[0]}` };
+    return { check: moved };
+}
+
 // ---- accepting a new result -----------------------------------------------------
 
 // Checks whose expectation is a value read off the page — text, a count,
@@ -460,4 +519,4 @@ function shorten(text, limit) {
     return text.length > limit ? text.slice(0, limit - 1) + '\u2026' : text;
 }
 
-module.exports = { CHECK_KEYS, parseChecks, runChecks, asPreviewShowsIt, acceptCheck };
+module.exports = { CHECK_KEYS, parseChecks, runChecks, asPreviewShowsIt, acceptCheck, relocateCheck };
