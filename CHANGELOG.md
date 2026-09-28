@@ -11,6 +11,14 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.10.0] - 2026-09-28
+
+### Added
+- **Find it by its text**: when a section of a template is removed, checks that find their part by position ("the 4th paragraph") shift onto the next part down and fail. The report now spots these. If the text a failed check expects is still on the page, it says so and offers **Find it by its text**, which changes the check to look for that text anywhere on the page. **Find all N by their text** on the test fixes every shifted check at once. **Accept new result** is still offered but comes second: accepting a shifted check records its neighbour's text.
+
+### Changed
+- For a part the builder can only find by position, such as a paragraph with no class or id, the first offer is now *The page shows "…"*, which doesn't depend on where it is. The position-based offers remain, labelled as found by position.
+
 ## [1.9.0] - 2026-09-25
 
 ### Fixed

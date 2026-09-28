@@ -630,9 +630,16 @@ function buildCaseHtml(r, relative, interactive) {
     ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
     const checks = r.checks && r.checks.length ? buildChecksHtml(r, relative, interactive) : '';
     // Editing opens the test in the HTML preview, which needs a data file.
-    const edit = interactive && r.dataFile && r.template
-        ? `<div class="case-actions"><button type="button" class="act" data-action="edit-test"${caseAttrs(r)} title="Open this test in the HTML preview to add, remove or reorder its checks">Edit test</button></div>`
+    const editButton = interactive && r.dataFile && r.template
+        ? `<button type="button" class="act" data-action="edit-test"${caseAttrs(r)} title="Open this test in the HTML preview to add, remove or reorder its checks">Edit test</button>`
         : '';
+    // Removing a section shifts every positional check below it at once, so
+    // they can all be moved to their text in one go.
+    const relocatable = interactive && r.checks ? r.checks.filter(c => c.relocatable && c.index !== undefined).length : 0;
+    const relocateAll = relocatable > 1
+        ? `<button type="button" class="act" data-action="relocate-checks"${caseAttrs(r)} title="Every failed check whose text is still on the page looks for it anywhere on the page instead">Find all ${relocatable} by their text</button>`
+        : '';
+    const edit = editButton || relocateAll ? `<div class="case-actions">${relocateAll}${editButton}</div>` : '';
     const output = r.actual !== null && r.actual !== undefined
         ? `<details class="output"><summary>Actual output</summary><pre>${escapeHtml(r.actual)}</pre></details>`
         : '';
@@ -656,7 +663,8 @@ function buildChecksHtml(r, relative, interactive) {
         // means something (see acceptCheck), or taken out of the test.
         const attrs = `${caseAttrs(r)} data-check="${c.index}" data-check-name="${escapeHtml(c.name)}"`;
         const actions = interactive && c.status === 'failed' && c.index !== undefined
-            ? `<div class="check-actions">${c.canAccept ? `<button type="button" class="act" data-action="accept-check"${attrs} title="Update this check to expect what the page shows now">Accept new result</button>` : ''}`
+            ? `<div class="check-actions">${c.relocatable ? `<button type="button" class="act" data-action="relocate-check"${attrs} title="Look for this check’s text anywhere on the page, instead of in one place">Find it by its text</button>` : ''}`
+                + `${c.canAccept ? `<button type="button" class="act${c.relocatable ? ' secondary' : ''}" data-action="accept-check"${attrs} title="Update this check to expect what the page shows now">Accept new result</button>` : ''}`
                 + `<button type="button" class="act secondary" data-action="remove-check"${attrs} title="Take this check out of the test">Remove check</button></div>`
             : '';
         const icon = c.status === 'passed' ? STATUS_ICON.passed : c.status === 'skipped' ? '&ndash;' : STATUS_ICON.failed;
@@ -796,7 +804,7 @@ body { margin: 0; padding: 0 16px 32px; background: var(--bg); color: var(--fg);
 .check-failed .check-name { color: var(--fail); font-weight: 600; }
 .check-skipped .check-name { color: var(--muted); }
 .check-why { margin: 2px 0 2px 24px; padding-left: 16px; color: var(--fg); }
-.case-actions { margin: 4px 0 8px; }
+.case-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
 .check-actions { display: flex; gap: 6px; margin: 4px 0 2px 24px; flex-wrap: wrap; }
 /* All secondary: accepting a new result should be a decision, not the
    obvious next click. The confirmation says exactly what changes. */

@@ -464,16 +464,33 @@
         out.push(...byRow);
 
         const text = readableText(el);
+        // A part with no name of its own can only be found by where it is
+        // ("the 4th paragraph"), and every such check shifts onto its
+        // neighbour when a section above is added or removed. What it says
+        // doesn't move, so for these the first offer checks the page shows
+        // the text, wherever it is; the positional offers stay, labelled.
+        const byPosition = !selector || /:nth-/.test(selector);
+        const positionNote = byPosition ? ' (found by position: breaks if anything above it is added or removed)' : '';
+        if (byPosition && text && tag !== 'input' && !byRow.length) {
+            out.push({
+                kind: 'includes',
+                label: 'The page shows:',
+                editable: text,
+                name: 'The page shows “' + short(text, 40) + '”',
+                nameFor: value => 'The page shows “' + short(value, 40) + '”',
+                check: { contains: text }
+            });
+        }
         if (selector && text && tag !== 'input' && !byRow.length) {
             out.push({
                 kind: 'reads',
-                label: 'It reads exactly “' + short(text, 120) + '”',
+                label: 'It reads exactly “' + short(text, 120) + '”' + positionNote,
                 name: 'The ' + noun + ' reads “' + short(text, 40) + '”',
                 check: { selector, text }
             });
             out.push({
                 kind: 'includes',
-                label: 'It includes:',
+                label: 'It includes' + positionNote + ':',
                 editable: text,
                 name: 'The ' + noun + ' includes “' + short(text, 40) + '”',
                 nameFor: value => 'The ' + noun + ' includes “' + short(value, 40) + '”',
@@ -481,7 +498,7 @@
             });
             // Long text rarely needs checking word for word: start with the
             // part to keep, which the reader can trim.
-            if (text.length > 80) out.unshift(out.splice(out.length - 1, 1)[0]);
+            if (text.length > 80 && !byPosition) out.unshift(out.splice(out.length - 1, 1)[0]);
         }
 
         const group = groupSelectorFor(el, root);
@@ -497,7 +514,7 @@
         if (selector && !byRow.length) {
             out.push({
                 kind: 'shown',
-                label: 'It is shown',
+                label: 'It is shown' + positionNote,
                 name: 'The ' + noun + (text ? ' “' + short(text, 40) + '”' : '') + ' is shown',
                 check: { selector, exists: true }
             });

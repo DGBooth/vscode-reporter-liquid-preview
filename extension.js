@@ -3,7 +3,7 @@ const vscode = require('vscode');
 const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
 const updates = require('./updates');
-const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck } = require('./output-checks');
+const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck, relocateCheck } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
 // inlined into each preview document.
@@ -1640,6 +1640,8 @@ async function handleTestReportMessage(message) {
         await acceptActualOutput(_lastTestReport);
     } else if (message.type === 'accept-check') {
         await acceptCheckResult(message);
+    } else if (message.type === 'relocate-check' || message.type === 'relocate-checks') {
+        await relocateChecks(message);
     } else if (message.type === 'remove-check') {
         await removeCheck(message);
     } else if (message.type === 'edit-test') {
@@ -1695,6 +1697,66 @@ async function acceptCheckResult({ suiteFile, caseIndex, caseName, checkIndex, c
         return accepted;
     } catch (err) {
         vscode.window.showErrorMessage(`The result wasn\u2019t accepted: ${err.message}`);
+        return null;
+    }
+}
+
+// Change checks that look in the wrong place to look for their text anywhere
+// on the page: one check (checkIndex given) or every failed check in the case
+// whose text is still on the page. Removing a section above shifts every
+// positional check below it onto its neighbour; accepting those would record
+// the neighbours' text, and finding them by their text is what fixes them.
+async function relocateChecks({ suiteFile, caseIndex, caseName, checkIndex, checkName }, { confirm = true } = {}) {
+    try {
+        const suiteText = await readWorkspaceText(suiteFile);
+        const suite = templateTests.parseSuite(suiteText, suiteFile);
+        const testCase = suite.cases[caseIndex];
+        const rawCase = testCase && testCase.name === caseName ? JSON.parse(suiteText).cases[caseIndex] : null;
+        if (!rawCase || !Array.isArray(rawCase.checks)) {
+            throw new Error(`${path.basename(suiteFile)} has changed since the tests ran. Run the tests again, then try once more.`);
+        }
+        const single = checkIndex !== undefined && checkIndex !== null;
+        if (single && (!testCase.checks[checkIndex] || testCase.checks[checkIndex].name !== checkName)) {
+            throw new Error(`${path.basename(suiteFile)} has changed since the tests ran. Run the tests again, then try once more.`);
+        }
+
+        // Against a fresh render, as accepting is.
+        const result = await templateTests.runCase(testCase, templateTestDeps);
+        if (result.actual === null || result.actual === undefined) throw new Error('The test’s page doesn’t render at the moment.');
+        const indexes = single ? [checkIndex] : result.checks.filter(c => c.relocatable).map(c => c.index);
+        if (!indexes.length) throw new Error('No failed check in this test has its text elsewhere on the page now. Run the tests again to see the latest.');
+        const moved = new Map();
+        for (const i of indexes) {
+            const relocated = relocateCheck(rawCase.checks[i], result.actual);
+            if (relocated.error) {
+                if (single) throw new Error(relocated.error);
+                continue;
+            }
+            moved.set(i, relocated.check);
+        }
+        if (!moved.size) throw new Error('None of these checks would pass when found by their text.');
+
+        if (confirm) {
+            const what = moved.size === 1
+                ? `“${testCase.checks[[...moved.keys()][0]].name}” will look for its text anywhere on the page, instead of in one place.`
+                : `${moved.size} checks will look for their text anywhere on the page, instead of in one place each.`;
+            const choice = await vscode.window.showWarningMessage(
+                `${what} This stops them breaking when parts of the page above are added or removed. They'll no longer notice the text moving, only it going missing.`,
+                { modal: true },
+                'Find by text'
+            );
+            if (choice !== 'Find by text') return null;
+        }
+
+        if (!await saveDirtyInputs([suiteFile])) return null;
+        const updated = templateTests.editCase(suiteText, suiteFile, caseIndex, caseName, raw => {
+            for (const [i, check] of moved) raw.checks[i] = templateTests.tidyCheck(check);
+        });
+        await require('fs').promises.writeFile(suiteFile, updated, 'utf8');
+        await rerunAfterEdit();
+        return [...moved.values()];
+    } catch (err) {
+        vscode.window.showErrorMessage(`The checks weren’t changed: ${err.message}`);
         return null;
     }
 }
@@ -2456,6 +2518,7 @@ Object.assign(module.exports, {
     installUpdate,
     registerUpdates,
     removeCheck,
+    relocateChecks,
     editTestInBuilder,
     builtTestsFor,
     listBuiltTests,
