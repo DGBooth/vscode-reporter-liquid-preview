@@ -11,6 +11,16 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.11.0] - 2026-10-01
+
+### Added
+- Liquid and HTML editing support for `.liquid` files, so Shopify Liquid isn't needed. If it's installed, you're offered a link to disable it, once.
+  - Colouring for Liquid and HTML together, in attributes, `<style>` and `<script>` too, with Reporter's tags coloured as such.
+  - Completions: Liquid tags (block tags with their end tags), filters with what they do, and field names from the data the template is used with. Fields are read from open previews' data files and the template's test cases, including inside `{% for %}` loops. Also `fields.` names from the template's own Reporter tags, Reporter tags' options, and HTML tags and attributes.
+  - Closing as you type: a block tag's `%}` adds its end tag, and an element's `>` adds its closing tag (`reporterLiquidPreview.autoClose`).
+  - Indentation that follows HTML elements and Liquid blocks.
+- **Format Document** for templates, using Shopify's Liquid formatter for Prettier taught Reporter's tags. Liquid tags on their own line get `{%-`. Before anything is applied, the template is rendered before and after with every set of data it's used with, and with none. If the page would change, nothing is applied and you're told where. A `{%-` that would remove a space the page needs is left out. `reporterLiquidPreview.format.printWidth` sets where lines wrap.
+
 ## [1.10.0] - 2026-09-28
 
 ### Added

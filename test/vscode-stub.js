@@ -28,6 +28,8 @@ const errorAnswers = [];
 // Every commands.executeCommand call, and every env.openExternal link.
 const executedCommands = [];
 const openedLinks = [];
+// Every window.setStatusBarMessage text, in order.
+const statusMessages = [];
 // Settings, by full key ("section.name").
 const settings = new Map();
 // Every test controller the extension created, with what its runs reported.
@@ -45,6 +47,12 @@ class Position {
     constructor(line, character) {
         this.line = line;
         this.character = character;
+    }
+    translate(lines, characters) {
+        return new Position(this.line + lines, this.character + characters);
+    }
+    isEqual(other) {
+        return other.line === this.line && other.character === this.character;
     }
 }
 
@@ -171,6 +179,15 @@ function createTestController(id, label) {
     return controller;
 }
 
+// Providers the extension registers, by kind, for tests to call directly.
+const providers = { formatting: [], completion: [] };
+
+class SnippetString { constructor(value) { this.value = value; } }
+class MarkdownString { constructor(value) { this.value = value; } }
+class CompletionItem { constructor(label, kind) { this.label = label; this.kind = kind; } }
+const TextEdit = { replace: (range, newText) => ({ range, newText }) };
+const CompletionItemKind = { Text: 0, Method: 1, Function: 2, Constructor: 3, Field: 4, Variable: 5, Class: 6, Interface: 7, Module: 8, Property: 9, Unit: 10, Value: 11, Enum: 12, Keyword: 13, Snippet: 14, Color: 15, File: 16, Reference: 17, Folder: 18 };
+
 // ---- the module itself ----------------------------------------------------
 
 const vscode = {
@@ -194,7 +211,15 @@ const vscode = {
         parse: value => ({ scheme: value.split(':')[0], fsPath: value, path: value, toString: () => value })
     },
 
+    SnippetString,
+    MarkdownString,
+    CompletionItem,
+    CompletionItemKind,
+    TextEdit,
+
     languages: {
+        registerDocumentFormattingEditProvider: (selector, provider) => { providers.formatting.push(provider); return new Disposable(); },
+        registerCompletionItemProvider: (selector, provider) => { providers.completion.push(provider); return new Disposable(); },
         createDiagnosticCollection: () => ({
             name: 'stub',
             clear: () => publishedDiagnostics.clear(),
@@ -225,6 +250,7 @@ const vscode = {
             createdPanels.push(panel);
             return panel;
         },
+        setStatusBarMessage: message => { statusMessages.push(message); return new Disposable(); },
         showErrorMessage: message => { shownErrors.push(message); return Promise.resolve(errorAnswers.shift()); },
         showInformationMessage: message => { shownMessages.push(message); return Promise.resolve(infoAnswers.shift()); },
         showWarningMessage: message => { shownMessages.push(message); return Promise.resolve(warningAnswers.shift()); },
@@ -342,6 +368,7 @@ function reset() {
     infoAnswers.length = 0;
     errorAnswers.length = 0;
     executedCommands.length = 0;
+    statusMessages.length = 0;
     openedLinks.length = 0;
     settings.clear();
     inputBoxAnswers.length = 0;
@@ -353,6 +380,8 @@ function reset() {
 
 module.exports = {
     vscode,
+    providers,
+    statusMessages,
     install,
     reset,
     workspaceFiles,

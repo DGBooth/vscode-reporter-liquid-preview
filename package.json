@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.10.0",
+    "version": "1.11.0",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -27,6 +27,7 @@
         "Testing"
     ],
     "activationEvents": [
+        "onLanguage:liquid",
         "onCommand:reporterLiquidPreview.preview",
         "onCommand:reporterLiquidPreview.htmlPreview",
         "onCommand:reporterLiquidPreview.fullHtmlPreview",
@@ -45,9 +46,25 @@
         "languages": [
             {
                 "id": "liquid",
+                "aliases": [
+                    "Liquid",
+                    "liquid"
+                ],
                 "extensions": [
                     ".liquid"
-                ]
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "liquid",
+                "scopeName": "text.html.liquid",
+                "path": "./syntaxes/liquid.tmLanguage.json",
+                "embeddedLanguages": {
+                    "source.css": "css",
+                    "source.js": "javascript"
+                }
             }
         ],
         "jsonValidation": [
@@ -97,6 +114,17 @@
                     "type": "boolean",
                     "default": true,
                     "description": "Once a day, when the extension starts, check GitHub for a newer release and offer to install it. \"Reporter Liquid: Check for Updates\" checks on demand either way."
+                },
+                "reporterLiquidPreview.autoClose": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "In .liquid files: typing a block tag's %} adds its end tag, and typing an HTML tag's > adds its closing tag."
+                },
+                "reporterLiquidPreview.format.printWidth": {
+                    "type": "integer",
+                    "default": 120,
+                    "minimum": 40,
+                    "description": "Format Document wraps lines longer than this."
                 }
             }
         },
@@ -132,7 +160,12 @@
                 "key": "ctrl+k f",
                 "when": "editorLangId == liquid"
             }
-        ]
+        ],
+        "configurationDefaults": {
+            "[liquid]": {
+                "editor.defaultFormatter": "DGBooth.reporter-liquid-preview"
+            }
+        }
     },
     "scripts": {
         "test": "node --test test/*.test.js",
@@ -142,12 +175,17 @@
     },
     "devDependencies": {
         "@types/vscode": "^1.32.0",
-        "jsdom": "^26.1.0"
+        "jsdom": "^26.1.0",
+        "vscode-oniguruma": "^2.0.1",
+        "vscode-textmate": "^9.3.2"
     },
     "dependencies": {
+        "@shopify/prettier-plugin-liquid": "1.11.2",
         "css-select": "^5.2.2",
         "liquidjs": "^8.4.1",
         "parse5": "^7.3.0",
-        "parse5-htmlparser2-tree-adapter": "^7.1.0"
+        "parse5-htmlparser2-tree-adapter": "^7.1.0",
+        "prettier": "3.9.9",
+        "vscode-html-languageservice": "5.6.2"
     }
 }
