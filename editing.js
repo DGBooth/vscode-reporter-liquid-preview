@@ -1,6 +1,6 @@
 // Help while editing a template: what to offer at the cursor inside Liquid
 // (tags, filters, the fields of the data the template is used with), what to
-// insert as you type the end of a block tag, and the template
+// insert as you type a tag, and the template
 // with its Liquid blanked out so an HTML service can read the HTML around it.
 // Nothing here depends on VS Code; extension.js turns these into its types.
 
@@ -348,16 +348,45 @@ function reporterFields(text) {
 // or null. `before` and `after` are the line's text either side of the cursor,
 // after the keystroke; `whole` the template's text.
 //
-// Typing the `%}` of a block tag, with nothing after it on the line, adds its
-// end tag after the cursor, with the same `{%` or `{%-`. Not if the template
-// already closes every such block: retyping the end of a tag that has its end
-// tag shouldn't add another.
-//
-// `{%` and `{{` are left to the editor: `{` pairs with `}`, which the closing
-// `}` types over. A snippet that also put `%}` after the cursor would be
-// doubled by anyone who types the closing `%}` themselves.
+//   `{%-` or `{% ` → the tag's `%}` after the cursor, taking in the `}` the
+//   editor paired with `{`.
+//   Typing the `%}` yourself types over one already there, rather than
+//   doubling it, whoever put it there: in Liquid, `%` before `%}` or `}`
+//   between `%}` and `}` is never meant.
+//   The `%}` of a block tag, typed or typed over, with nothing after it on the
+//   line → its end tag after the cursor, with the same `{%` or `{%-`.
 function afterTyping(before, after, typed, whole = null) {
-    if (typed !== '}' || !/%\}$/.test(before) || !/^\s*$/.test(after)) return null;
+    if ((typed === '-' && /\{%-$/.test(before)) || (typed === ' ' && /\{% $/.test(before))) {
+        const paired = /^\}(?!\})/.test(after) ? 1 : 0;
+        // A `%}` further on, before another tag starts, closes a tag already there.
+        if (/^[^{]*%\}/.test(after.slice(paired))) return null;
+        return { start: before.length, end: before.length + paired, snippet: '$0 %}' };
+    }
+    if (typed === '%') {
+        const closer = /^(\s*)%\}/.exec(after);
+        if (!closer) return null;
+        // `x %` typed before ` %}` gives `x %}`, not `x  %}`; `x -%` keeps its dash.
+        const typedBefore = before.slice(0, -1);
+        const spaces = /\s*$/.exec(typedBefore)[0];
+        const dash = /-$/.test(typedBefore);
+        return { start: typedBefore.length - spaces.length, end: before.length + closer[1].length + 1, snippet: (dash ? '' : ' ') + '%$0' };
+    }
+    if (typed === '}' && /%\}$/.test(before)) {
+        if (/^\}/.test(after)) {
+            return { start: before.length - 1, end: before.length + 1, snippet: '}' + (endTag(before, after.slice(1), whole) || '$0') };
+        }
+        const tail = endTag(before, after, whole);
+        return tail ? { start: before.length, end: before.length, snippet: tail } : null;
+    }
+    return null;
+}
+
+// The end tag for the block tag `before` ends with, as a snippet to follow
+// it; null if it isn't one, something follows it on the line, or the template
+// already closes every such block (retyping the end of a tag that has its end
+// tag shouldn't add another).
+function endTag(before, after, whole) {
+    if (!/^\s*$/.test(after)) return null;
     const m = /\{%(-?)\s*(if|unless|for|case|capture|tablerow|comment|raw|optional|editor|choice)\b[^%]*-?%\}$/.exec(before);
     if (!m) return null;
     if (whole !== null) {
@@ -366,7 +395,7 @@ function afterTyping(before, after, typed, whole = null) {
         const closed = tags.filter(t => t.name === 'end' + m[2]).length;
         if (closed >= opened) return null;
     }
-    return { start: before.length, end: before.length, snippet: `$0{%${m[1]} end${m[2]} %}` };
+    return `$0{%${m[1]} end${m[2]} %}`;
 }
 
 // ---- for the HTML service ----------------------------------------------------------

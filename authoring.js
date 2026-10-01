@@ -170,20 +170,28 @@ function toRange(r) {
 
 // ---- as you type ----------------------------------------------------------------------
 
-// After a single keystroke in the active template: the end tag after a block
-// tag's `%}`, and an HTML element's closing tag after its `>` (or after `</`).
+// After a single keystroke in the active template: a tag's `%}` after `{%-`,
+// typing over it, the end tag after a block tag's `%}` (see
+// editing.afterTyping), and an HTML element's closing tag after its `>` (or
+// after `</`).
 async function closeAsYouType(event) {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document !== event.document || event.document.languageId !== 'liquid') return;
     if (!vscode.workspace.getConfiguration('reporterLiquidPreview').get('autoClose', true)) return;
     // Not on undo or redo, which would otherwise put back what was undone.
     if (vscode.TextDocumentChangeReason && event.reason) return;
-    if (event.contentChanges.length !== 1 || editor.selections.length !== 1) return;
+    if (event.contentChanges.length !== 1) return;
     const change = event.contentChanges[0];
     const typed = change.text;
     if (typed.length !== 1) return;
     const cursor = change.range.start.translate(0, 1);
-    if (!editor.selection.active.isEqual(cursor)) return;
+    // The editor moves its cursor after telling of the change, so look once
+    // it has (as VS Code's own HTML tag closing does), and only if nothing
+    // else has been typed meanwhile.
+    const version = event.document.version;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    if (event.document.version !== version || vscode.window.activeTextEditor !== editor) return;
+    if (editor.selections.length !== 1 || !editor.selection.active.isEqual(cursor)) return;
 
     const line = event.document.lineAt(cursor.line).text;
     const edit = editing.afterTyping(line.slice(0, cursor.character), line.slice(cursor.character), typed, event.document.getText());
