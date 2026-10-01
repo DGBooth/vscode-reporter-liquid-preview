@@ -93,12 +93,22 @@ test('nothing is offered as Liquid in HTML, or in a comment', () => {
 
 // Type `keys` one at a time at the end of `start`, as an editor would with
 // this extension: `{` pairs with `}` (VS Code's own bracket pairing, one edit
-// the extension ignores), every other key goes through afterTyping. The line,
-// with \u2038 where the cursor ends up.
+// the extension ignores), \t moves to a snippet's final tab stop, and every
+// other key goes through afterTyping. The line, with \u2038 at the cursor.
 function typeKeys(keys, start = '', rest = '') {
     let before = start;
     let after = rest;
+    let finalStop = null; // The snippet's $0, as a distance from the line's end.
     for (const key of keys) {
+        if (key === '\t') {
+            if (finalStop !== null) {
+                const line = before + after;
+                before = line.slice(0, line.length - finalStop);
+                after = line.slice(line.length - finalStop);
+                finalStop = null;
+            }
+            continue;
+        }
         if (key === '{' && /^(\s|\}|$)/.test(after)) {
             before += '{';
             after = '}' + after;
@@ -108,9 +118,13 @@ function typeKeys(keys, start = '', rest = '') {
         const edit = editing.afterTyping(before, after, key, before + after);
         if (!edit) continue;
         const line = before + after;
-        const [head, tail] = edit.snippet.split('$0');
-        before = line.slice(0, edit.start) + head;
-        after = tail + line.slice(edit.end);
+        const inserted = line.slice(0, edit.start) + edit.snippet + line.slice(edit.end);
+        // The cursor goes to $1 if there is one, else $0; Tab later goes to $0.
+        const cursorAt = inserted.indexOf(edit.snippet.includes('$1') ? '$1' : '$0');
+        const plain = inserted.replace(/\$[01]/g, '');
+        finalStop = edit.snippet.includes('$1') ? plain.length - inserted.replace(/\$1/, '').indexOf('$0') : null;
+        before = plain.slice(0, cursorAt);
+        after = plain.slice(cursorAt);
     }
     return before + '\u2038' + after;
 }
@@ -124,7 +138,15 @@ test('typing {%- or {% gives the tag\u2019s %}, and typing %} yourself types ove
     assert.strictEqual(typeKeys('<p>{%- assign a = 1 %}', '', '</p>'), '<p>{%- assign a = 1 %}\u2038</p>');
 });
 
-test('typing a block tag\u2019s %} adds its end tag, with the same dash', () => {
+test('starting a block tag adds its end tag at once, and Tab goes between them', () => {
+    assert.strictEqual(typeKeys('{%- if a'), '{%- if a\u2038 %}{%- endif %}');
+    assert.strictEqual(typeKeys('{%- if a\t'), '{%- if a %}\u2038{%- endif %}');
+    assert.strictEqual(typeKeys('{%- for item in items\tx'), '{%- for item in items %}x\u2038{%- endfor %}');
+    assert.strictEqual(typeKeys('{% unless a'), '{% unless a\u2038 %}{% endunless %}', 'with the dash it opens with');
+    assert.strictEqual(typeKeys('{%- optional "x"\t'), '{%- optional "x" %}\u2038{%- endoptional %}');
+});
+
+test('typing the whole block tag yourself gives one %} and one end tag', () => {
     assert.strictEqual(typeKeys('{%- if a %}'), '{%- if a %}\u2038{%- endif %}');
     assert.strictEqual(typeKeys('{% for i in items %}'), '{% for i in items %}\u2038{% endfor %}');
     assert.strictEqual(typeKeys('{%- optional "x" -%}'), '{%- optional "x" -%}\u2038{%- endoptional %}');
@@ -137,6 +159,8 @@ test('an existing tag is left alone, and a closed block gets no second end tag',
     assert.strictEqual(editing.afterTyping('{%-', ' if a %}', '-'), null, 'adding a dash to a tag already there');
     assert.strictEqual(editing.afterTyping('{%- if a %}', '', '}', '{%- if a %}\n<p>x</p>\n{%- endif %}'), null);
     assert.ok(editing.afterTyping('{%- if b %}', '', '}', '{%- if a %}{%- endif %}\n{%- if b %}'), 'but this one isn\u2019t closed');
+    assert.strictEqual(editing.afterTyping('{%- if ', ' %}', ' ', '{%- if  %}\n<p>x</p>\n{%- endif %}'), null, 'retyping the start of a closed block');
+    assert.strictEqual(typeKeys(' ', '{%- if', ' a %}'), '{%- if \u2038 a %}', 'a space typed inside a tag already there');
     assert.strictEqual(editing.afterTyping('{{ a ', '}}', '%'), null, '% elsewhere is just a %');
 });
 
