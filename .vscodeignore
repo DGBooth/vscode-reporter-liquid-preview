@@ -26,3 +26,29 @@ node_modules/parse5/dist/serializer/**
 node_modules/parse5/dist/tokenizer/**
 node_modules/parse5/dist/tree-adapters/**
 node_modules/parse5-htmlparser2-tree-adapter/dist/*.js
+# Formatting loads Prettier's standalone build with its Babel, ESTree and
+# PostCSS plugins, and Shopify's Liquid plugin as one bundle (see
+# formatter.js), so the rest of Prettier, the plugin's unbundled build and
+# what only that needs are left out.
+node_modules/prettier/bin/**
+node_modules/prettier/internal/**
+node_modules/prettier/index.*
+node_modules/prettier/doc.*
+node_modules/prettier/*.mjs
+node_modules/prettier/plugins/*.mjs
+node_modules/prettier/plugins/acorn.js
+node_modules/prettier/plugins/angular.js
+node_modules/prettier/plugins/flow.js
+node_modules/prettier/plugins/glimmer.js
+node_modules/prettier/plugins/graphql.js
+node_modules/prettier/plugins/html.js
+node_modules/prettier/plugins/markdown.js
+node_modules/prettier/plugins/meriyah.js
+node_modules/prettier/plugins/typescript.js
+node_modules/prettier/plugins/yaml.js
+node_modules/@shopify/prettier-plugin-liquid/dist/**
+node_modules/@shopify/liquid-html-parser/**
+node_modules/line-column/**
+node_modules/isarray/**
+node_modules/isobject/**
+node_modules/html-styles/**

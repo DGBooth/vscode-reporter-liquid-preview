@@ -1,0 +1,50 @@
+{
+    "comments": {
+        "blockComment": ["{%- comment %}", "{%- endcomment %}"]
+    },
+    "brackets": [
+        ["<!--", "-->"],
+        ["{%", "%}"],
+        ["{{", "}}"],
+        ["{", "}"],
+        ["[", "]"],
+        ["(", ")"]
+    ],
+    "autoClosingPairs": [
+        { "open": "{", "close": "}" },
+        { "open": "[", "close": "]" },
+        { "open": "(", "close": ")" },
+        { "open": "\"", "close": "\"", "notIn": ["comment"] },
+        { "open": "'", "close": "'", "notIn": ["string", "comment"] },
+        { "open": "<!--", "close": "-->", "notIn": ["comment", "string"] }
+    ],
+    "autoCloseBefore": ";:.,=}])>` \n\t",
+    "surroundingPairs": [
+        { "open": "\"", "close": "\"" },
+        { "open": "'", "close": "'" },
+        { "open": "{", "close": "}" },
+        { "open": "[", "close": "]" },
+        { "open": "(", "close": ")" },
+        { "open": "<", "close": ">" }
+    ],
+    "indentationRules": {
+        "increaseIndentPattern": "^\\s*(<(?!(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\\b)([-_\\.A-Za-z0-9]+)(?=\\s|>)\\b[^>]*>(?!.*</\\2>)|\\{%-?\\s*(?:if|unless|for|case|when|else|elsif|capture|tablerow|comment|raw|optional|editor|choice|or)\\b(?!.*\\{%-?\\s*end(?:if|unless|for|case|capture|tablerow|comment|raw|optional|editor|choice)\\b)[^%]*-?%\\}\\s*)$",
+        "decreaseIndentPattern": "^\\s*(</[-_\\.A-Za-z0-9]+\\b[^>]*>|-->|\\{%-?\\s*(?:end\\w+|else|elsif|when|or)\\b)"
+    },
+    "onEnterRules": [
+        {
+            "beforeText": { "pattern": "<(?!(?:area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)\\b)([_:\\w][_:\\w\\-.\\d]*)(?:(?:[^'\"/>]|\"[^\"]*\"|'[^']*')*?(?!\\/)>)[^<]*$", "flags": "i" },
+            "afterText": { "pattern": "^<\\/([_:\\w][_:\\w\\-.\\d]*)\\s*>", "flags": "i" },
+            "action": { "indent": "indentOutdent" }
+        },
+        {
+            "beforeText": "\\{%-?\\s*(?:if|unless|for|case|when|else|elsif|capture|tablerow|optional|editor|choice|or)\\b[^%]*-?%\\}\\s*$",
+            "afterText": "^\\s*\\{%-?\\s*(?:end\\w+|else|elsif|when|or)\\b",
+            "action": { "indent": "indentOutdent" }
+        },
+        {
+            "beforeText": "\\{%-?\\s*(?:if|unless|for|case|when|else|elsif|capture|tablerow|optional|editor|choice|or)\\b[^%]*-?%\\}\\s*$",
+            "action": { "indent": "indent" }
+        }
+    ]
+}

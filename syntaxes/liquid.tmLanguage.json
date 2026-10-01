@@ -1,0 +1,104 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Liquid",
+    "scopeName": "text.html.liquid",
+    "comment": "HTML with Liquid in it. Liquid is injected everywhere in the document, so it is coloured inside attribute values, <style> and <script> as well as between tags.",
+    "patterns": [
+        { "include": "#liquid" },
+        { "include": "text.html.basic" }
+    ],
+    "injections": {
+        "L:text.html.liquid -comment.block.liquid -meta.raw.liquid -meta.tag.liquid -meta.object.liquid": {
+            "patterns": [{ "include": "#liquid" }]
+        }
+    },
+    "repository": {
+        "liquid": {
+            "patterns": [
+                { "include": "#comment" },
+                { "include": "#raw" },
+                { "include": "#tag" },
+                { "include": "#object" }
+            ]
+        },
+        "comment": {
+            "name": "comment.block.liquid",
+            "begin": "\\{%-?\\s*comment\\s*-?%\\}",
+            "end": "\\{%-?\\s*endcomment\\s*-?%\\}"
+        },
+        "raw": {
+            "name": "meta.raw.liquid",
+            "begin": "(\\{%-?)\\s*(raw)\\s*(-?%\\})",
+            "beginCaptures": {
+                "1": { "name": "punctuation.definition.tag.begin.liquid" },
+                "2": { "name": "keyword.control.liquid" },
+                "3": { "name": "punctuation.definition.tag.end.liquid" }
+            },
+            "end": "(\\{%-?)\\s*(endraw)\\s*(-?%\\})",
+            "endCaptures": {
+                "1": { "name": "punctuation.definition.tag.begin.liquid" },
+                "2": { "name": "keyword.control.liquid" },
+                "3": { "name": "punctuation.definition.tag.end.liquid" }
+            },
+            "contentName": "string.unquoted.raw.liquid"
+        },
+        "tag": {
+            "name": "meta.tag.liquid",
+            "begin": "(\\{%-?)\\s*(?:(if|elsif|else|endif|unless|endunless|case|when|endcase|for|endfor|break|continue|tablerow|endtablerow|cycle)|(optional|endoptional|editor|endeditor|choice|endchoice|or)|(assign|capture|endcapture|increment|decrement|include|layout|block|endblock)|([A-Za-z_]\\w*))?\\b",
+            "beginCaptures": {
+                "1": { "name": "punctuation.definition.tag.begin.liquid" },
+                "2": { "name": "keyword.control.liquid" },
+                "3": { "name": "entity.name.tag.reporter.liquid" },
+                "4": { "name": "storage.type.liquid" },
+                "5": { "name": "entity.name.tag.liquid" }
+            },
+            "end": "-?%\\}",
+            "endCaptures": { "0": { "name": "punctuation.definition.tag.end.liquid" } },
+            "patterns": [{ "include": "#expression" }]
+        },
+        "object": {
+            "name": "meta.object.liquid",
+            "begin": "\\{\\{-?",
+            "beginCaptures": { "0": { "name": "punctuation.definition.tag.begin.liquid" } },
+            "end": "-?\\}\\}",
+            "endCaptures": { "0": { "name": "punctuation.definition.tag.end.liquid" } },
+            "patterns": [{ "include": "#expression" }]
+        },
+        "expression": {
+            "patterns": [
+                { "name": "string.quoted.double.liquid", "begin": "\"", "end": "\"" },
+                { "name": "string.quoted.single.liquid", "begin": "'", "end": "'" },
+                { "name": "constant.numeric.liquid", "match": "-?\\b\\d+(?:\\.\\d+)?\\b" },
+                { "name": "constant.language.liquid", "match": "\\b(?:true|false|nil|null|empty|blank)\\b" },
+                { "name": "keyword.operator.comparison.liquid", "match": "==|!=|<>|<=|>=|<|>|\\bcontains\\b" },
+                { "name": "keyword.operator.logical.liquid", "match": "\\b(?:and|or)\\b" },
+                { "name": "keyword.operator.range.liquid", "match": "\\.\\." },
+                { "name": "keyword.operator.assignment.liquid", "match": "=" },
+                {
+                    "match": "(\\|)\\s*([A-Za-z_]\\w*)",
+                    "captures": {
+                        "1": { "name": "keyword.operator.filter.liquid" },
+                        "2": { "name": "support.function.filter.liquid" }
+                    }
+                },
+                {
+                    "match": "\\b([A-Za-z_][\\w-]*)\\s*(:)",
+                    "captures": {
+                        "1": { "name": "variable.parameter.liquid" },
+                        "2": { "name": "punctuation.separator.key-value.liquid" }
+                    }
+                },
+                { "name": "keyword.other.liquid", "match": "\\b(?:in|reversed|with|as)\\b" },
+                {
+                    "match": "(\\.)([A-Za-z_][\\w-]*)",
+                    "captures": {
+                        "1": { "name": "punctuation.accessor.liquid" },
+                        "2": { "name": "variable.other.member.liquid" }
+                    }
+                },
+                { "name": "variable.other.liquid", "match": "\\b[A-Za-z_][\\w-]*" },
+                { "name": "punctuation.separator.liquid", "match": "," }
+            ]
+        }
+    }
+}

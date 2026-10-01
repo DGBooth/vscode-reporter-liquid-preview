@@ -5,7 +5,8 @@ npm test
 ```
 
 Runs every `test/*.test.js` with Node's built-in test runner — no dependencies
-beyond the ones the extension already has. Individual files and filters work as
+beyond the extension's own and its dev dependencies (jsdom for the webviews,
+vscode-textmate with vscode-oniguruma for the grammar). Individual files and filters work as
 usual:
 
 ```
@@ -100,6 +101,21 @@ files are separate processes, so state never leaks across a file.
   report offers **Find it by its text** per check and for the whole test, and
   the rewritten checks pass. The builder offers a page-text check first for a
   part found only by position.
+- **`formatter.test.js`** — Format Document's logic: Reporter's tags laid out
+  as blocks and put back as written, double quotes kept, `{%-` added where a
+  tag starts a line except where the page needs the space before it (found by
+  rendering), formatting twice changes nothing more, raw and comment blocks are
+  kept, and a layout that changes the page, or a template that can't be read or
+  rendered, is refused. Also how two pages are compared: whitespace a reader
+  can't see doesn't count, a lost space between words does.
+- **`authoring.test.js`** — writing templates: completions (every filter and
+  tag the engine has is described; tags bring end tags; data fields by path,
+  through loops and assigns; `fields.` names from Reporter's tags), what typing
+  `%}` and `>` inserts (and that `{%` is left to the editor), the providers as
+  VS Code calls them (data from tests and previews, Format Document's edit and
+  its refusal), and the
+  grammar, tokenised with vscode-textmate against a stand-in HTML grammar:
+  Liquid in attributes is coloured, in comments it isn't.
 - **`unbalanced-html.test.js`** — output with a stray closing tag, loaded as
   a whole page in jsdom as a browser would: the rest of the document stays in
   the preview's container and its section, first load matches an edit, the

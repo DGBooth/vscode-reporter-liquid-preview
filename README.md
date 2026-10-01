@@ -113,6 +113,24 @@ The same problems are published to VS Code's **Problems** panel and underlined i
 
 While a template does not parse, the preview keeps showing the last version that did — but its warnings are suppressed, because their line numbers describe a file that is no longer on disk. Only the parse error, which is current, is reported.
 
+### Writing Templates
+
+`.liquid` files get Liquid and HTML support together, so you don't need Shopify Liquid or another Liquid extension. If Shopify Liquid is installed, you'll be offered a link to disable it once: the two would compete to colour, complete and format templates, and it reports Reporter's tags as unknown.
+
+- **Colouring** for Liquid and HTML, Liquid inside attributes, `<style>` and `<script>` included. Reporter's tags (`optional`, `editor`, `choice`, `or`) are coloured as such.
+- **Completions** inside Liquid:
+  - After `{%`, the tags. Choosing a block tag inserts its end tag too: `if` gives `{%- if … %}{%- endif %}`.
+  - After `|`, the filters, with what each takes and does, Reporter's own (`money`, `markdownify`…) included.
+  - Field names from the data the template is used with: the data file of each HTML preview open on it, and the data of each test case for it. `{{ customer.` offers `name` and `address`. In `{% for item in items %}`, `item.` offers the fields of the list's items; `forloop.` its position.
+  - `fields.` offers the names this template's `editor`, `optional` and `choice` tags give their fields. After `{% editor "name", ` you're offered the tag's options.
+- **HTML completions** outside Liquid: tags, attributes and their values, as in an `.html` file.
+- **Closing as you type**: typing the `%}` of a block tag (`{%- if a %}`) adds its end tag, unless the template already closes it. Typing an element's `>` adds its closing tag. Turn this off with `reporterLiquidPreview.autoClose`. `{` pairs with `}` as in any file, so `{%` gives `{%}`, and the closing `}` you type replaces the paired one.
+- **Indentation**: Enter after an opening tag or block tag indents; a closing tag or `{%- end… %}` lines up with what it closes.
+- **Format Document** (`Shift+Alt+F`) lays out the whole template: HTML, Liquid and Reporter's tags indented by nesting, `<style>` and `<script>` tidied. It uses Shopify's Liquid formatter for Prettier, taught Reporter's tags. Double quotes are kept, and a Liquid tag on its own line gets the house `{%-`, so the layout's line breaks don't reach the page.
+  - **It checks it hasn't changed the page.** Before applying anything, it renders the template before and after formatting with every set of data the template is used with (its previews' and its tests'), and with no data. If the page would show anything differently, it leaves the template alone and says where. Whitespace a reader can't see, such as between blocks, doesn't count. A missing space between words does. Where `{%-` would remove a space the page needs (`<span>a</span> {% if x %}<span>b</span>`), that tag keeps its space.
+  - **The check is only as good as the data.** A branch none of the data reaches isn't rendered, so it isn't checked. The status bar says how many sets of data it checked against; with no previews or tests that's none but the empty one. Add tests that reach the branches that matter.
+  - `reporterLiquidPreview.format.printWidth` sets where lines wrap (120 by default). The indent follows the editor's tab settings.
+
 ### Template Tests
 
 Check that templates still render what they should, against data you control. A test suite is a `*.liquidtest.json` file anywhere in the workspace; each case renders a template with some data and checks the output. Cases render through exactly the same engine as the preview, custom tags, filters and warnings included, so a test sees what the preview would.

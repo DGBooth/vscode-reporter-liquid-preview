@@ -3,6 +3,7 @@ const vscode = require('vscode');
 const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
 const updates = require('./updates');
+const { registerAuthoring } = require('./authoring');
 const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck, relocateCheck } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
@@ -191,6 +192,13 @@ function activate(context) {
 
     registerTemplateTests(context);
     registerUpdates(context);
+    registerAuthoring(context, {
+        readText: readWorkspaceText,
+        suiteFiles: discoverSuiteFiles,
+        parseSuite: templateTests.parseSuite,
+        render: async (text, data, file) => (await renderForTest(text, data, file)).html,
+        previews: () => Object.keys(htmlPreviews).map(id => htmlPreviews[id].preview)
+    });
 }
 
 // Index just past the Liquid tag or expression starting at `i`, or the end of
