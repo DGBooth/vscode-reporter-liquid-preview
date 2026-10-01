@@ -11,6 +11,12 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.11.1] - 2026-10-01
+
+### Fixed
+- Typing `{%-` (or `{% `) now adds the tag's ` %}` after the cursor; 1.11.0 left `{%-}`. Typing the `%}` yourself types over the one added, so typing a whole tag gives what you typed, and finishing a block tag adds its end tag.
+- Closing as you type could do nothing at all: the extension looked for the cursor before the editor had moved it. It now looks once it has, as VS Code's own HTML tag closing does.
+
 ## [1.11.0] - 2026-10-01
 
 ### Added

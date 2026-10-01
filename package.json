@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Live preview for Reporter Liquid templates",
-    "version": "1.11.0",
+    "version": "1.11.1",
     "publisher": "DGBooth",
     "engines": {
         "vscode": "^1.32.0"
@@ -118,7 +118,7 @@
                 "reporterLiquidPreview.autoClose": {
                     "type": "boolean",
                     "default": true,
-                    "description": "In .liquid files: typing a block tag's %} adds its end tag, and typing an HTML tag's > adds its closing tag."
+                    "description": "In .liquid files: typing {%- adds the tag's %} (typing %} yourself types over it), finishing a block tag adds its end tag, and typing an HTML tag's > adds its closing tag."
                 },
                 "reporterLiquidPreview.format.printWidth": {
                     "type": "integer",

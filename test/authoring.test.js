@@ -91,14 +91,53 @@ test('nothing is offered as Liquid in HTML, or in a comment', () => {
 
 // ---- typing -------------------------------------------------------------------------------
 
-test('typing the %} of a block tag adds its end tag, with the same dash', () => {
+// Type `keys` one at a time at the end of `start`, as an editor would with
+// this extension: `{` pairs with `}` (VS Code's own bracket pairing, one edit
+// the extension ignores), every other key goes through afterTyping. The line,
+// with \u2038 where the cursor ends up.
+function typeKeys(keys, start = '', rest = '') {
+    let before = start;
+    let after = rest;
+    for (const key of keys) {
+        if (key === '{' && /^(\s|\}|$)/.test(after)) {
+            before += '{';
+            after = '}' + after;
+            continue;
+        }
+        before += key;
+        const edit = editing.afterTyping(before, after, key, before + after);
+        if (!edit) continue;
+        const line = before + after;
+        const [head, tail] = edit.snippet.split('$0');
+        before = line.slice(0, edit.start) + head;
+        after = tail + line.slice(edit.end);
+    }
+    return before + '\u2038' + after;
+}
+
+test('typing {%- or {% gives the tag\u2019s %}, and typing %} yourself types over it', () => {
+    assert.strictEqual(typeKeys('{%-'), '{%-\u2038 %}');
+    assert.strictEqual(typeKeys('{% '), '{% \u2038 %}');
+    assert.strictEqual(typeKeys('{%- assign a = 1 %}'), '{%- assign a = 1 %}\u2038');
+    assert.strictEqual(typeKeys('{%- assign a = 1%}'), '{%- assign a = 1 %}\u2038', 'the space before %} kept');
+    assert.strictEqual(typeKeys('{%- assign a = 1 -%}'), '{%- assign a = 1 -%}\u2038');
+    assert.strictEqual(typeKeys('<p>{%- assign a = 1 %}', '', '</p>'), '<p>{%- assign a = 1 %}\u2038</p>');
+});
+
+test('typing a block tag\u2019s %} adds its end tag, with the same dash', () => {
+    assert.strictEqual(typeKeys('{%- if a %}'), '{%- if a %}\u2038{%- endif %}');
+    assert.strictEqual(typeKeys('{% for i in items %}'), '{% for i in items %}\u2038{% endfor %}');
+    assert.strictEqual(typeKeys('{%- optional "x" -%}'), '{%- optional "x" -%}\u2038{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- if a %}', '', '<p>x</p>'), '{%- if a %}\u2038<p>x</p>', 'not with something after it');
+    // Typed without the editor\u2019s help, with no %} already there.
     assert.deepStrictEqual(editing.afterTyping('  {%- for i in items %}', '', '}'), { start: 23, end: 23, snippet: '$0{%- endfor %}' });
-    assert.deepStrictEqual(editing.afterTyping('{% optional "x" %}', '  ', '}'), { start: 18, end: 18, snippet: '$0{% endoptional %}' });
-    assert.strictEqual(editing.afterTyping('{%- assign a = 1 %}', '', '}'), null, 'not a block');
-    assert.strictEqual(editing.afterTyping('{%- if a %}', '<p>x</p>', '}'), null, 'not with something after it');
-    assert.strictEqual(editing.afterTyping('{%- if a %}', '', '}', '{%- if a %}\n<p>x</p>\n{%- endif %}'), null, 'not when the block is already closed');
-    assert.ok(editing.afterTyping('{%- if b %}', '', '}', '{%- if a %}{%- endif %}\n{%- if b %}'), 'but when this one isn\u2019t');
-    assert.strictEqual(editing.afterTyping('{%', '}', '%'), null, '{% is left to the editor\u2019s own brace pairing');
+});
+
+test('an existing tag is left alone, and a closed block gets no second end tag', () => {
+    assert.strictEqual(editing.afterTyping('{%-', ' if a %}', '-'), null, 'adding a dash to a tag already there');
+    assert.strictEqual(editing.afterTyping('{%- if a %}', '', '}', '{%- if a %}\n<p>x</p>\n{%- endif %}'), null);
+    assert.ok(editing.afterTyping('{%- if b %}', '', '}', '{%- if a %}{%- endif %}\n{%- if b %}'), 'but this one isn\u2019t closed');
+    assert.strictEqual(editing.afterTyping('{{ a ', '}}', '%'), null, '% elsewhere is just a %');
 });
 
 test('Liquid is blanked out for the HTML service, keeping every position', () => {
@@ -188,6 +227,25 @@ test('typing > closes the HTML element; typing %} closes the block', async () =>
     await type('<br>', '>');
     stub.vscode.window.activeTextEditor = undefined;
     assert.deepStrictEqual(snippets.map(([snippet]) => snippet), ['$0</section>', '$0{%- endfor %}'], 'nothing after <br>, which has no end tag');
+});
+
+test('the cursor is read once the editor has moved it, and a further keystroke cancels', async () => {
+    const snippets = [];
+    const doc = Object.assign(documentOf('{%-}'), { version: 1 });
+    // As in VS Code: when the change is told of, the cursor is still before
+    // the typed "-"; it moves just after.
+    const editor = { document: doc, selections: [{}], selection: { active: new Position(0, 2) }, insertSnippet: async snippet => { snippets.push(snippet.value); } };
+    stub.vscode.window.activeTextEditor = editor;
+    const typed = authoring.closeAsYouType({ document: doc, contentChanges: [{ text: '-', range: { start: new Position(0, 2) } }] });
+    setImmediate(() => { editor.selection = { active: new Position(0, 3) }; });
+    await typed;
+    assert.deepStrictEqual(snippets, ['$0 %}']);
+
+    const next = authoring.closeAsYouType({ document: doc, contentChanges: [{ text: '-', range: { start: new Position(0, 2) } }] });
+    doc.version = 2;
+    await next;
+    stub.vscode.window.activeTextEditor = undefined;
+    assert.deepStrictEqual(snippets, ['$0 %}'], 'another change came first');
 });
 
 // ---- the grammar ---------------------------------------------------------------------------

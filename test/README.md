@@ -110,10 +110,12 @@ files are separate processes, so state never leaks across a file.
   can't see doesn't count, a lost space between words does.
 - **`authoring.test.js`** — writing templates: completions (every filter and
   tag the engine has is described; tags bring end tags; data fields by path,
-  through loops and assigns; `fields.` names from Reporter's tags), what typing
-  `%}` and `>` inserts (and that `{%` is left to the editor), the providers as
-  VS Code calls them (data from tests and previews, Format Document's edit and
-  its refusal), and the
+  through loops and assigns; `fields.` names from Reporter's tags); typing,
+  simulated key by key with the editor's own brace pairing: `{%-` gets its
+  `%}`, typing `%}` types over it, a block tag gets its end tag, `>` closes an
+  element, and the cursor is read only once the editor has moved it; the
+  providers as VS Code calls them (data from tests and previews, Format
+  Document's edit and its refusal); and the
   grammar, tokenised with vscode-textmate against a stand-in HTML grammar:
   Liquid in attributes is coloured, in comments it isn't.
 - **`unbalanced-html.test.js`** — output with a stray closing tag, loaded as
