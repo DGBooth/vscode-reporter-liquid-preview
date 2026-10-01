@@ -112,7 +112,8 @@ files are separate processes, so state never leaks across a file.
   tag the engine has is described; tags bring end tags; data fields by path,
   through loops and assigns; `fields.` names from Reporter's tags); typing,
   simulated key by key with the editor's own brace pairing: `{%-` gets its
-  `%}`, typing `%}` types over it, a block tag gets its end tag, `>` closes an
+  `%}`, typing `%}` types over it, starting a block tag adds its end tag with
+  Tab going between them, `>` closes an
   element, and the cursor is read only once the editor has moved it; the
   providers as VS Code calls them (data from tests and previews, Format
   Document's edit and its refusal); and the

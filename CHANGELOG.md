@@ -11,6 +11,11 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [1.11.2] - 2026-10-01
+
+### Fixed
+- Starting a block tag adds its end tag. Typing `{%- if ` now gives `{%- if │ %}{%- endif %}`: type the condition, then Tab goes between the tags. In 1.11.1 the end tag only came when you typed the closing `%}` yourself, which the added `%}` meant you never did.
+
 ## [1.11.1] - 2026-10-01
 
 ### Fixed

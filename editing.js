@@ -353,9 +353,27 @@ function reporterFields(text) {
 //   Typing the `%}` yourself types over one already there, rather than
 //   doubling it, whoever put it there: in Liquid, `%` before `%}` or `}`
 //   between `%}` and `}` is never meant.
-//   The `%}` of a block tag, typed or typed over, with nothing after it on the
-//   line → its end tag after the cursor, with the same `{%` or `{%-`.
+//   The space after a block tag's name (`{%- if `), with nothing after the
+//   tag on the line → its end tag, as a snippet: the condition first, then Tab
+//   to between the tags. The same `{%` or `{%-` as the tag opens with.
+//   The `%}` of a block tag typed or typed over, where that didn't happen →
+//   its end tag after the cursor.
 function afterTyping(before, after, typed, whole = null) {
+    // The space after a block tag's name: the tag becomes a snippet, with the
+    // cursor where its condition goes and Tab taking it on to between the
+    // tag and its end tag.
+    const block = typed === ' ' && new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\s$`).exec(before);
+    if (block) {
+        const closer = /^\s*-?%\}/.exec(after);
+        const rest = closer ? after.slice(closer[0].length) : after;
+        if (/^\s*$/.test(rest) && !closedAlready(block[2], whole)) {
+            return {
+                start: before.length,
+                end: before.length + (closer ? closer[0].length : 0),
+                snippet: `$1${closer ? ' ' + closer[0].trim() : ' %}'}$0{%${block[1]} end${block[2]} %}`
+            };
+        }
+    }
     if ((typed === '-' && /\{%-$/.test(before)) || (typed === ' ' && /\{% $/.test(before))) {
         const paired = /^\}(?!\})/.test(after) ? 1 : 0;
         // A `%}` further on, before another tag starts, closes a tag already there.
@@ -387,15 +405,18 @@ function afterTyping(before, after, typed, whole = null) {
 // tag shouldn't add another).
 function endTag(before, after, whole) {
     if (!/^\s*$/.test(after)) return null;
-    const m = /\{%(-?)\s*(if|unless|for|case|capture|tablerow|comment|raw|optional|editor|choice)\b[^%]*-?%\}$/.exec(before);
-    if (!m) return null;
-    if (whole !== null) {
-        const tags = liquidTags(whole);
-        const opened = tags.filter(t => t.name === m[2]).length;
-        const closed = tags.filter(t => t.name === 'end' + m[2]).length;
-        if (closed >= opened) return null;
-    }
+    const m = new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\b[^%]*-?%\\}$`).exec(before);
+    if (!m || closedAlready(m[2], whole)) return null;
     return `$0{%${m[1]} end${m[2]} %}`;
+}
+
+const BLOCK_TAGS = 'if|unless|for|case|capture|tablerow|comment|raw|optional|editor|choice';
+
+// Whether `whole` already has an end tag for every `name` block it opens.
+function closedAlready(name, whole) {
+    if (whole === null) return false;
+    const tags = liquidTags(whole);
+    return tags.filter(t => t.name === 'end' + name).length >= tags.filter(t => t.name === name).length;
 }
 
 // ---- for the HTML service ----------------------------------------------------------
