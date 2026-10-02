@@ -17,6 +17,8 @@ node_modules/**/*.d.ts
 node_modules/**/*.d.ts.map
 node_modules/**/*.map
 node_modules/**/*.md
+# ...except a licence written as Markdown, which has to ship with the code.
+!node_modules/**/LICENSE.md
 node_modules/**/lib/esm/**
 node_modules/css-what/lib/es/**
 node_modules/parse5/dist/*.js
