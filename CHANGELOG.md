@@ -16,6 +16,7 @@ version bump, so a version can include work committed before its bump.
 ### Changed
 - The README describes the extension as it is now: an overview and a getting-started section at the top, Reporter's tags with their options and how answers are given in data, a settings and shortcuts reference, a map of the source, and credits that say what came from the original Shopify Liquid Preview and what the extension uses from Shopify and Microsoft. The command-line example pins the current version.
 - The extension's description and categories in VS Code's Extensions view match what it does.
+- A LICENSE file with the MIT licence the original Shopify Liquid Preview declared in its README, and its copyright notice alongside this fork's. Neither project had the file before, so the licence's own condition, that its notice travels with the code, wasn't met.
 
 ## [1.11.2] - 2026-10-01
 

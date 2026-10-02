@@ -411,4 +411,4 @@ It is unrelated to Shopify's own **Shopify Liquid** extension, which it replaces
 
 ## License
 
-MIT
+MIT, as the original Shopify Liquid Preview declared. See [LICENSE](LICENSE). The libraries bundled in the `.vsix` keep their own licences (MIT, BSD-2-Clause and ISC), in their folders under `node_modules`: as a licence file where the library publishes one, otherwise in its `package.json`.

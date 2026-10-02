@@ -4,6 +4,7 @@
     "description": "Preview, edit, format and test Reporter Liquid templates",
     "version": "1.11.3",
     "publisher": "DGBooth",
+    "license": "MIT",
     "engines": {
         "vscode": "^1.32.0"
     },
