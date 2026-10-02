@@ -1,6 +1,31 @@
 # Reporter Liquid Preview for Visual Studio Code
 
-Live preview for Reporter Liquid templates. Renders templates on the fly with JSON data, updating as you type.
+Everything for writing and checking Reporter's Liquid templates in VS Code:
+
+- **[Previews](#live-html-preview)** that render a template with JSON data as you type, plus a [Document Options view](#full-html-preview-document-options-view) that shows every option a document offers, for colleagues who don't read Liquid.
+- **[Problems](#problems-panel)** located to the line, in the preview and VS Code's Problems panel.
+- **[Editing support](#writing-templates)** for Liquid and HTML together: colouring, completions (including your data's field names), closing tags as you type, and a Format Document that checks it hasn't changed the page.
+- **[Template tests](#template-tests)** that render templates against known data and check the output, built by clicking the preview, with a report, the Testing view and a [command-line runner for CI](#running-template-tests-in-ci).
+- **[Reporter's own tags and filters](#custom-liquid-tags)** (`optional`, `editor`, `choice`, `money`, `markdownify`…), rendered as Reporter renders them.
+
+## Getting started
+
+Install the `.vsix` from the [latest release](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases/latest) with **Extensions: Install from VSIX…**. It updates itself from then on (see [Updates](#updates)). If you have Shopify Liquid installed, disable it for Reporter templates: this extension does its job, and the two would compete.
+
+1. Open a `.liquid` file.
+2. Press `ctrl+k h` for the HTML preview, and pick a `.json` data file when asked. (`ctrl+k v` gives a plain-text preview, and `ctrl+k f` the Document Options view, which needs no data.)
+3. Edit the template or the data: the preview updates as you type.
+4. To keep a render you've checked, press **Create test…** in the HTML preview and click the parts that matter. Run **Reporter Liquid: Run Template Tests** whenever you change the template.
+
+### Updates
+
+The extension is shared through its [GitHub releases](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases) rather than a marketplace, and keeps itself up to date. Once a day, a few seconds after it starts, it checks GitHub for a newer release and offers it: **Install**, **What's new** (the release notes) or **Skip this version**. **Install** downloads the release's `.vsix`, checks it's exactly the file GitHub published (its SHA-256 fingerprint), installs it, and offers to reload the window.
+
+- **Reporter Liquid: Check for Updates** checks straight away, and also offers a version you skipped.
+- The daily check can be turned off with the **Reporter Liquid Preview › Check For Updates** setting (`reporterLiquidPreview.checkForUpdates`).
+- The check needs to reach `api.github.com` and GitHub's download host. It goes through VS Code's proxy settings. When it can't get through, the daily check stays quiet, and **Check for Updates** says why.
+- It runs when the extension starts in a window: when you first open a `.liquid` file, a preview or a workspace with template tests, not on every VS Code launch.
+- Versions before 1.7.0 can't update themselves, so anyone on those needs to install 1.7.0 by hand once.
 
 ## Features
 
@@ -66,13 +91,15 @@ The Full HTML Preview's standalone export inlines the contents of these same fil
 
 ### Custom Liquid Tags
 
-The extension registers several Reporter-specific Liquid tags beyond the standard set:
+Reporter's own tags, rendered as Reporter renders them. Each takes a field name, quoted (`"notes"`) or as a variable holding it. In Reporter, the reader's answer comes back as `fields.<name>`; to preview or test an answer, put it under `fields` in the data, e.g. `{ "fields": { "includeNotes": "true", "delivery": "1" } }`.
 
-| Tag | Description |
-|-----|-------------|
-| `{% optional %}…{% endoptional %}` | Marks optional content with a checkbox wrapper. |
-| `{% editor %}…{% endeditor %}` | Marks an editable region, rendering an input or textarea from data. |
-| `{% choice %}…{% or %}…{% endchoice %}` | Defines multiple alternatives separated by `{% or %}`, rendered as radio buttons. |
+| Tag | Renders | Options and answer |
+|-----|---------|--------------------|
+| `{% optional "name" %}…{% endoptional %}` | Its contents with a tick box. | Ticked when `fields.name` is `"true"`. |
+| `{% editor "name" %}…{% endeditor %}` | A text box, or a text area with `lines` over 1. | `placeholder`, `lines` (1), `maxlength` (100), `minlength` (0). Its value is `fields.name`. |
+| `{% choice "name", title: "…" %}…{% or %}…{% endchoice %}` | Options separated by `{% or %}`, as radio buttons, under an optional `title`. | `fields.name` is the chosen option's number, from `"0"` for the first (the default). |
+
+Each field name should be used once per template; the [Problems panel](#problems-panel) flags a repeat.
 
 ### Custom Liquid Filters
 
@@ -261,7 +288,7 @@ See [`examples/template-tests`](examples/template-tests) for a working suite.
 Tests that only run when someone remembers to open the editor get skipped. `liquid-test` runs the same suites from the command line, through the same engine and the same checks as the editor, so a case passes in CI exactly when it passes in VS Code. The only difference: the editor includes unsaved edits, and `liquid-test` reads files as saved on disk.
 
 ```
-npx github:DGBooth/vscode-reporter-liquid-preview#v1.4.0 [options] [paths...]
+npx github:DGBooth/vscode-reporter-liquid-preview#v1.11.3 [options] [paths...]
 ```
 
 With no paths it searches the current folder recursively for `*.liquidtest.json`, skipping `node_modules` and hidden folders. It needs Node 20 or newer.
@@ -281,7 +308,7 @@ In a GitHub Actions workflow in your templates repository:
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.4.0 --report liquid-test-report.html --junit liquid-tests.xml
+- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.11.3 --report liquid-test-report.html --junit liquid-tests.xml
 - uses: actions/upload-artifact@v4
   if: always()
   with:
@@ -291,25 +318,22 @@ In a GitHub Actions workflow in your templates repository:
 
 Pin the tag to the version of the extension you have installed (see [Releases](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases)). The engine changes along with the extension, and an unpinned runner can disagree with the editor. `if: always()` keeps the report when the tests fail, which is when you need it.
 
-### Installing and updates
+## Settings and shortcuts
 
-The extension is shared through its [GitHub releases](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases) rather than a marketplace. To install it, download the `.vsix` from the latest release and run **Extensions: Install from VSIX…** in VS Code.
+| Setting | Default | |
+|---------|---------|--|
+| `reporterLiquidPreview.autoClose` | on | Closing as you type in `.liquid` files: the `%}` after `{%-`, block end tags, HTML closing tags. |
+| `reporterLiquidPreview.format.printWidth` | 120 | Where Format Document wraps lines. |
+| `reporterLiquidPreview.checkForUpdates` | on | The daily check for a new release. |
 
-From then on it keeps itself up to date. Once a day, a few seconds after it starts, it checks GitHub for a newer release and offers it: **Install**, **What's new** (the release notes) or **Skip this version**. **Install** downloads the release's `.vsix`, checks it's exactly the file GitHub published (its SHA-256 fingerprint), installs it, and offers to reload the window.
+| Shortcut (in a `.liquid` file) | |
+|----------|--|
+| `ctrl+k h` | HTML preview |
+| `ctrl+k v` | Plain-text preview |
+| `ctrl+k f` | Document Options view (Full HTML Preview) |
+| `Shift+Alt+F` | Format Document (VS Code's own shortcut) |
 
-- **Reporter Liquid: Check for Updates** checks straight away, and also offers a version you skipped.
-- The daily check can be turned off with the **Reporter Liquid Preview › Check For Updates** setting (`reporterLiquidPreview.checkForUpdates`).
-- The check needs to reach `api.github.com` and GitHub's download host. It goes through VS Code's proxy settings. When it can't get through, the daily check stays quiet, and **Check for Updates** says why.
-- It runs when the extension starts, which is when you first open a preview or run a template test in a window, not on every VS Code launch.
-- Versions before 1.7.0 can't update themselves, so anyone on those needs to install 1.7.0 by hand once.
-
-## Usage
-
-1. Open a `.liquid` file.
-2. Press `ctrl+k h` to open the HTML preview (or `ctrl+k v` for the plain-text preview, or `ctrl+k f` for the Full HTML Preview).
-3. Select a `.json` data file when prompted (not required for Full HTML Preview).
-4. Edit your template or data file — the preview updates automatically.
-5. To keep a render you've checked, press **Create test…** in the HTML preview and click the parts that matter, then run **Reporter Liquid: Run Template Tests** whenever you change the template (see [Template Tests](#template-tests)).
+All commands are in the command palette under **Reporter Liquid:**. **Create Tests from Data Files…** is also on the right-click menu of a `.liquid` file.
 
 ## Development
 
@@ -320,18 +344,32 @@ npm run package         # rebuild the committed .vsix
 npm run check:package   # is the committed .vsix built from this source?
 ```
 
-The rendering engine (LiquidJS with the custom tags and filters, and the
-problem locations) lives in `engine.js`, which never loads `vscode`. Both the
-extension and the command-line runner in `bin/liquid-test.js` use it, so the
-two cannot drift apart. `npm run test:templates` runs the runner on the
-example suite.
+Where things are. Only `extension.js` and `authoring.js` load `vscode`; the
+rest runs under plain Node, which is how the command-line runner and the tests
+use them.
+
+| File | |
+|------|--|
+| `engine.js` | The rendering engine: LiquidJS with Reporter's tags and filters, and where each problem is. Shared by the extension and the command-line runner, so the two can't drift apart. |
+| `extension.js` | The previews, the problems panel, template tests in the editor (report, Testing view, creating and editing tests), updates. |
+| `template-tests.js` | Suites: reading them, running cases, the report, editing a suite in place. |
+| `output-checks.js` | Checks: parsing the output as a browser would, selectors and row labels, accepting and relocating. |
+| `webview/test-builder.js` | The point-and-click test builder in the HTML preview. |
+| `formatter.js` | Format Document: the layout, the `{%-` house style, and the before/after rendering check. |
+| `editing.js` | Completions and closing as you type. |
+| `authoring.js` | Both of those as VS Code providers, and the HTML language service. |
+| `syntaxes/`, `language-configuration.json` | Colouring, brackets and indentation for `.liquid` files. |
+| `updates.js` | Checking for and verifying a new release. |
+| `bin/liquid-test.js` | The command-line runner. `npm run test:templates` runs it on the example suite. |
 
 The test suite runs on Node's built-in runner (Node 20 or newer) against a
-stubbed `vscode` module, so it needs no dependencies beyond the extension's own
-and no extension host. It covers the rendering path — including a byte-for-byte
-comparison against a stock LiquidJS engine, which guards the wrapper that lets
-warnings name their line — the located problems panel, and the HTML handed to
-the webview. See [`test/README.md`](test/README.md).
+stubbed `vscode` module, so it needs no extension host. Beyond the extension's
+own dependencies it uses jsdom (the webviews) and vscode-textmate with
+vscode-oniguruma (the grammar). It covers the rendering path — including a
+byte-for-byte comparison against a stock LiquidJS engine, which guards the
+wrapper that lets warnings name their line — the located problems panel, the
+HTML handed to the webview, template tests and the builder, editing support and
+the formatter. See [`test/README.md`](test/README.md).
 
 The `.vsix` is committed alongside the source, so it can go stale when a change
 lands without a repackage — and the stale one is what gets installed.
@@ -362,12 +400,14 @@ To install a release, download its `.vsix` and run **Extensions: Install from VS
 
 ## Credits
 
-This extension is based on [Shopify Liquid Preview for Visual Studio Code](https://github.com/kirchner-trevor/vscode-shopify-liquid-preview) by [kirchner-trevor](https://github.com/kirchner-trevor), which was itself inspired by:
+This extension began as a fork of [Shopify Liquid Preview for Visual Studio Code](https://github.com/kirchner-trevor/vscode-shopify-liquid-preview) by [kirchner-trevor](https://github.com/kirchner-trevor), a plain-text Liquid preview, which was itself inspired by:
 
 - [Handlebars Preview for Visual Studio Code](https://github.com/chaliy/vscode-handlebars-preview/)
 - [A HTML previewer for Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=tht13.html-preview-vscode)
 
-New functionality added for Reporter includes the HTML webview preview, Full HTML Preview with annotated Liquid tag visualisation and standalone HTML export, in-preview HTML source views with formatting and syntax highlighting, automatic CSS injection, custom Reporter Liquid tag support (`optional`, `editor`, `choice`), custom filters, the located problems panel with editor navigation and Problems-panel integration, template tests with a results report and Test Explorer integration, and status bar indicators.
+Little of that remains beyond the plain-text preview. Everything else was added for Reporter: the HTML preview, the Document Options view and its standalone export, the HTML source views, CSS loading, Reporter's tags and filters, the located problems panel, template tests with checks, the test builder, the report, the Testing view and the command-line runner, editing support and formatting, and updates from GitHub releases.
+
+It is unrelated to Shopify's own **Shopify Liquid** extension, which it replaces for Reporter templates. Format Document uses Shopify's [Prettier plugin for Liquid](https://github.com/Shopify/theme-tools/tree/main/packages/prettier-plugin-liquid) (MIT), bundled at a fixed version, and HTML completions use Microsoft's [vscode-html-languageservice](https://github.com/microsoft/vscode-html-languageservice) (MIT).
 
 ## License
 
