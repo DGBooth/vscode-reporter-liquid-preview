@@ -5,11 +5,17 @@ tags it `v<version>` and publishes a GitHub release with the `.vsix` and this
 version's notes (see [Releasing](README.md#releasing)).
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+Changes that haven't been released yet are listed under Unreleased.
 Versions before 1.2.0 were written up from the commit history after the fact.
 Their tags were added then too: each marks the commit that built the final
 `.vsix` published under that version number, and its notes describe that
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
+
+## [1.12.0] - 2026-10-06
+
+### Changed
+- `optional`, `editor` and `choice` (and `or` inside a choice) complete over several lines, as in a formatted template: what's inside each on its own indented line, and each choice option on its own. Starting one as you type (`{%- optional `) gives the same, and Tab goes to the content line. Liquid's own tags still complete on one line. Format Document keeps this layout.
 
 ## [1.11.3] - 2026-10-02
 
