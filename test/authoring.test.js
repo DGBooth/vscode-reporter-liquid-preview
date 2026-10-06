@@ -41,7 +41,7 @@ test('in a tag, its name: a block brings its end tag in the house style, replaci
     assert.strictEqual(ifTag.insert, 'if ${1:condition} %}$0{%- endif %}');
     assert.deepStrictEqual(ifTag.replace, [6, 10], 'the typed "i" and the " %}" after it');
     assert.deepStrictEqual(item('<p>{%- i\u2038}', 'if').replace, [7, 9], 'or the } the editor paired with {');
-    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}" %}$0{%- endoptional %}');
+    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}" %}\n\t$0\n{%- endoptional %}');
     assert.strictEqual(item('{%- ‸', 'optional').detail, 'Reporter tag');
     assert.strictEqual(item('{%- ‸', 'assign').insert, 'assign ${1:name} = ${2:value} %}');
 });
@@ -94,39 +94,46 @@ test('nothing is offered as Liquid in HTML, or in a comment', () => {
 // Type `keys` one at a time at the end of `start`, as an editor would with
 // this extension: `{` pairs with `}` (VS Code's own bracket pairing, one edit
 // the extension ignores), \t moves to a snippet's final tab stop, and every
-// other key goes through afterTyping. The line, with \u2038 at the cursor.
+// other key goes through afterTyping. A snippet goes in as VS Code puts it in:
+// each later line takes the cursor line's indentation, and a leading tab
+// becomes the editor's indent (two spaces here). The document, with \u2038 at
+// the cursor.
 function typeKeys(keys, start = '', rest = '') {
-    let before = start;
-    let after = rest;
-    let finalStop = null; // The snippet's $0, as a distance from the line's end.
+    let doc = start + rest;
+    let cursor = start.length;
+    let finalStop = null; // The snippet's $0, as a distance from the document's end.
+    const lineAround = () => {
+        const from = doc.lastIndexOf('\n', cursor - 1) + 1;
+        const end = doc.indexOf('\n', cursor);
+        return { from, before: doc.slice(from, cursor), after: doc.slice(cursor, end < 0 ? doc.length : end) };
+    };
     for (const key of keys) {
         if (key === '\t') {
-            if (finalStop !== null) {
-                const line = before + after;
-                before = line.slice(0, line.length - finalStop);
-                after = line.slice(line.length - finalStop);
-                finalStop = null;
-            }
+            if (finalStop !== null) cursor = doc.length - finalStop;
+            finalStop = null;
             continue;
         }
-        if (key === '{' && /^(\s|\}|$)/.test(after)) {
-            before += '{';
-            after = '}' + after;
+        if (key === '{' && /^(\s|\}|$)/.test(lineAround().after)) {
+            doc = doc.slice(0, cursor) + '{}' + doc.slice(cursor);
+            cursor += 1;
             continue;
         }
-        before += key;
-        const edit = editing.afterTyping(before, after, key, before + after);
+        doc = doc.slice(0, cursor) + key + doc.slice(cursor);
+        cursor += 1;
+        const { from, before, after } = lineAround();
+        const edit = editing.afterTyping(before, after, key, doc);
         if (!edit) continue;
-        const line = before + after;
-        const inserted = line.slice(0, edit.start) + edit.snippet + line.slice(edit.end);
+        const indent = /^\s*/.exec(before)[0];
+        const snippet = edit.snippet.split('\n').map((line, n) => n ? indent + line.replace(/^\t/, '  ') : line).join('\n');
+        const inserted = doc.slice(0, from + edit.start) + snippet + doc.slice(from + edit.end);
         // The cursor goes to $1 if there is one, else $0; Tab later goes to $0.
-        const cursorAt = inserted.indexOf(edit.snippet.includes('$1') ? '$1' : '$0');
+        const first = inserted.indexOf(snippet.includes('$1') ? '$1' : '$0');
         const plain = inserted.replace(/\$[01]/g, '');
-        finalStop = edit.snippet.includes('$1') ? plain.length - inserted.replace(/\$1/, '').indexOf('$0') : null;
-        before = plain.slice(0, cursorAt);
-        after = plain.slice(cursorAt);
+        finalStop = snippet.includes('$1') ? plain.length - inserted.replace(/\$1/, '').indexOf('$0') : null;
+        doc = plain;
+        cursor = first;
     }
-    return before + '\u2038' + after;
+    return doc.slice(0, cursor) + '\u2038' + doc.slice(cursor);
 }
 
 test('typing {%- or {% gives the tag\u2019s %}, and typing %} yourself types over it', () => {
@@ -143,13 +150,34 @@ test('starting a block tag adds its end tag at once, and Tab goes between them',
     assert.strictEqual(typeKeys('{%- if a\t'), '{%- if a %}\u2038{%- endif %}');
     assert.strictEqual(typeKeys('{%- for item in items\tx'), '{%- for item in items %}x\u2038{%- endfor %}');
     assert.strictEqual(typeKeys('{% unless a'), '{% unless a\u2038 %}{% endunless %}', 'with the dash it opens with');
-    assert.strictEqual(typeKeys('{%- optional "x"\t'), '{%- optional "x" %}\u2038{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- capture x\t'), '{%- capture x %}\u2038{%- endcapture %}');
+});
+
+test('Reporter\u2019s tags go in over several lines, as a formatted template has them', () => {
+    // From the completion list: what's inside on its own indented line, and each choice option on its own.
+    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}" %}\n\t$0\n{%- endoptional %}');
+    assert.strictEqual(item('{%- ‸', 'editor').insert, 'editor "${1:name}"${2:, placeholder: "${3}"} %}\n\t$0\n{%- endeditor %}');
+    assert.strictEqual(item('{%- ‸', 'choice').insert, 'choice "${1:name}", title: "${2:Title}" %}\n\t${3:First option}\n{%- or %}\n\t${4:Second option}\n{%- endchoice %}');
+    assert.strictEqual(item('{%- ‸', 'or').insert, 'or %}\n\t$0');
+    assert.strictEqual(item('{%- ‸', 'if').insert, 'if ${1:condition} %}$0{%- endif %}', 'Liquid\u2019s own tags stay on one line');
+
+    // As typed: the end tag comes at once, with the content line between; Tab goes to it.
+    assert.strictEqual(typeKeys('{%- optional "x"'), '{%- optional "x"\u2038 %}\n  \n{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- optional "x"\tHello'), '{%- optional "x" %}\n  Hello\u2038\n{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- choice "d"\tFirst'), '{%- choice "d" %}\n  First\u2038\n{%- endchoice %}');
+    assert.strictEqual(typeKeys('{%- editor "r"\t'), '{%- editor "r" %}\n  \u2038\n{%- endeditor %}');
+    assert.strictEqual(typeKeys('{% optional "x"\t'), '{% optional "x" %}\n  \u2038\n{% endoptional %}', 'with the dash it opens with');
+    // Inside something else, each line takes the one the tag is on.
+    assert.strictEqual(typeKeys('{%- optional "x"\t', '    '), '    {%- optional "x" %}\n      \u2038\n    {%- endoptional %}');
+    // Typing the %} yourself: the same layout, once, with the cursor left on the tag's line.
+    assert.strictEqual(typeKeys('{%- optional "x" %}'), '{%- optional "x" %}\u2038\n  \n{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- optional "x" %}', '', '\n  Hello\n{%- endoptional %}'), '{%- optional "x" %}\u2038\n  Hello\n{%- endoptional %}', 'not when it\u2019s already closed');
 });
 
 test('typing the whole block tag yourself gives one %} and one end tag', () => {
     assert.strictEqual(typeKeys('{%- if a %}'), '{%- if a %}\u2038{%- endif %}');
     assert.strictEqual(typeKeys('{% for i in items %}'), '{% for i in items %}\u2038{% endfor %}');
-    assert.strictEqual(typeKeys('{%- optional "x" -%}'), '{%- optional "x" -%}\u2038{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- capture x -%}'), '{%- capture x -%}\u2038{%- endcapture %}');
     assert.strictEqual(typeKeys('{%- if a %}', '', '<p>x</p>'), '{%- if a %}\u2038<p>x</p>', 'not with something after it');
     // Typed without the editor\u2019s help, with no %} already there.
     assert.deepStrictEqual(editing.afterTyping('  {%- for i in items %}', '', '}'), { start: 23, end: 23, snippet: '$0{%- endfor %}' });

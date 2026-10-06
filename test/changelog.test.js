@@ -18,7 +18,12 @@ test('the version in package.json has release notes', () => {
 });
 
 test('versions are dated, unique and newest first', () => {
-    const headings = [...changelog.matchAll(/^## \[(.+?)\](.*)$/gm)];
+    const all = [...changelog.matchAll(/^## \[(.+?)\](.*)$/gm)];
+    // "Unreleased" collects changes that aren't in a release yet: first, undated, no version.
+    const unreleased = all.filter(h => h[1] === 'Unreleased');
+    assert.ok(unreleased.length <= 1, 'one Unreleased section at most');
+    if (unreleased.length) assert.strictEqual(all[0][1], 'Unreleased', 'Unreleased comes first');
+    const headings = all.filter(h => h[1] !== 'Unreleased');
     assert.ok(headings.length > 0);
     const versions = headings.map(h => h[1]);
     for (const h of headings) assert.match(h[2], /^ - \d{4}-\d{2}-\d{2}$/, `## [${h[1]}] needs " - YYYY-MM-DD"`);
@@ -38,6 +43,12 @@ test('notes are one version\'s section, without its heading', () => {
     assert.strictEqual(notesFor(text, '1.0.0'), '- a');
     assert.strictEqual(notesFor(text, '1.0'), null, 'a prefix is not a match');
     assert.strictEqual(notesFor(text, '2.0.0'), null);
+});
+
+test('an Unreleased section is not any version\'s notes, and does not end the one below it', () => {
+    const text = '# Changelog\n\n## [Unreleased]\n\n- soon\n\n## [1.0.0] - 2026-01-01\n\n- a\n';
+    assert.strictEqual(notesFor(text, '1.0.0'), '- a');
+    assert.strictEqual(notesFor(text, 'Unreleased'), '- soon', 'what a bump would have to rename');
 });
 
 test('package-lock.json carries the same version as package.json', () => {

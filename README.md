@@ -147,11 +147,20 @@ While a template does not parse, the preview keeps showing the last version that
 - **Colouring** for Liquid and HTML, Liquid inside attributes, `<style>` and `<script>` included. Reporter's tags (`optional`, `editor`, `choice`, `or`) are coloured as such.
 - **Completions** inside Liquid:
   - After `{%`, the tags. Choosing a block tag inserts its end tag too: `if` gives `{%- if … %}{%- endif %}`.
+  - Reporter's tags go in over several lines, as in a formatted template: what's inside on its own indented line, and each `choice` option on its own. `choice` gives two options, and `or` inside a choice adds the next. Liquid's own tags stay on one line.
+
+    ```liquid
+    {%- choice "name", title: "Title" %}
+      First option
+    {%- or %}
+      Second option
+    {%- endchoice %}
+    ```
   - After `|`, the filters, with what each takes and does, Reporter's own (`money`, `markdownify`…) included.
   - Field names from the data the template is used with: the data file of each HTML preview open on it, and the data of each test case for it. `{{ customer.` offers `name` and `address`. In `{% for item in items %}`, `item.` offers the fields of the list's items; `forloop.` its position.
   - `fields.` offers the names this template's `editor`, `optional` and `choice` tags give their fields. After `{% editor "name", ` you're offered the tag's options.
 - **HTML completions** outside Liquid: tags, attributes and their values, as in an `.html` file.
-- **Closing as you type**: typing `{%-` (or `{% `) adds the tag's ` %}` after the cursor. Starting a block tag (`{%- if `) adds its end tag at once, unless the template already closes it: type the condition, then press Tab to go between the tags. Typing the `%}` yourself types over the one already there rather than doubling it, so typing a whole tag gives exactly what you typed. Typing an element's `>` adds its closing tag. Turn all of this off with `reporterLiquidPreview.autoClose`.
+- **Closing as you type**: typing `{%-` (or `{% `) adds the tag's ` %}` after the cursor. Starting a block tag (`{%- if `) adds its end tag at once, unless the template already closes it: type the condition, then press Tab to go between the tags. For `optional`, `editor` and `choice` that's the indented line between them. Typing the `%}` yourself types over the one already there rather than doubling it, so you still get one `%}` and one end tag; the cursor then stays on the tag's line, with the content line already below it. Typing an element's `>` adds its closing tag. Turn all of this off with `reporterLiquidPreview.autoClose`.
 - **Indentation**: Enter after an opening tag or block tag indents; a closing tag or `{%- end… %}` lines up with what it closes.
 - **Format Document** (`Shift+Alt+F`) lays out the whole template: HTML, Liquid and Reporter's tags indented by nesting, `<style>` and `<script>` tidied. It uses Shopify's Liquid formatter for Prettier, taught Reporter's tags. Double quotes are kept, and a Liquid tag on its own line gets the house `{%-`, so the layout's line breaks don't reach the page.
   - **It checks it hasn't changed the page.** Before applying anything, it renders the template before and after formatting with every set of data the template is used with (its previews' and its tests'), and with no data. If the page would show anything differently, it leaves the template alone and says where. Whitespace a reader can't see, such as between blocks, doesn't count. A missing space between words does. Where `{%-` would remove a space the page needs (`<span>a</span> {% if x %}<span>b</span>`), that tag keeps its space.
@@ -389,8 +398,10 @@ suite (and the example template suite) across all three Node versions.
 
 Every version is a tagged GitHub release with its notes and `.vsix` attached. [CHANGELOG.md](CHANGELOG.md) lists them all.
 
+**A release happens only when a version bump is merged into `main`.** Any other change merges without releasing anything: it goes under `## [Unreleased]` at the top of the changelog, and reaches users with the next release. Until then, rebuild the `.vsix` under the current version (`npm run package`) so `npm run check:package` passes; the published release keeps its original file.
+
 1. Bump `version` in `package.json` and `package-lock.json`.
-2. Add a `## [<version>] - YYYY-MM-DD` section to the top of `CHANGELOG.md`. `npm test` fails until the current version has one.
+2. Rename `## [Unreleased]` in `CHANGELOG.md` to `## [<version>] - YYYY-MM-DD`, or add that section if there are no unreleased notes. `npm test` fails until the current version has one.
 3. `npm run package` to rebuild the `.vsix`, and commit it with the rest.
 4. Merge into `main`. The Release workflow runs the tests and the package check, tags the commit `v<version>`, and publishes the release with that version's changelog section as its notes and the `.vsix` attached. A merge that doesn't change the version does nothing.
 

@@ -89,33 +89,36 @@ const FILTERS = {
     where: [': "property", "value"', 'The items of a list whose property has the value. Missing data is a warning, not an error (Reporter).']
 };
 
-// Tags, as inserted: the tag's text after `{%-`, as a snippet. A block tag
-// brings its end tag, in the house style (`{%-`).
+// Tags, as inserted: the tag's text after `{%-` up to its `%}`, as a snippet. A
+// block tag brings its end tag, in the house style (`{%-`). Reporter's tags go
+// in over several lines, as a formatted template has them: what's inside each
+// on its own indented line, and each choice option on its own (`\t` becomes
+// the editor's own indent).
 const TAGS = {
-    if: ['if ${1:condition} %}$0{%DASH endif', 'Shows its contents when the condition is true.'],
-    unless: ['unless ${1:condition} %}$0{%DASH endunless', 'Shows its contents when the condition is false.'],
-    elsif: ['elsif ${1:condition}', 'Another condition within an if.'],
-    else: ['else', 'What to show when no condition above was true.'],
-    case: ['case ${1:variable} %}\n{%DASH when ${2:"value"} %}$0\n{%DASH endcase', 'Picks the "when" that matches the value.'],
-    when: ['when ${1:"value"}', 'A value within a case.'],
-    for: ['for ${1:item} in ${2:list} %}$0{%DASH endfor', 'Repeats its contents once per item of a list.'],
-    break: ['break', 'Stops a for loop.'],
-    continue: ['continue', 'Skips to the next item of a for loop.'],
-    cycle: ['cycle ${1:"odd", "even"}', 'Each time it runs, the next of its values.'],
-    tablerow: ['tablerow ${1:item} in ${2:list} %}$0{%DASH endtablerow', 'Table rows and cells, one cell per item.'],
-    assign: ['assign ${1:name} = ${2:value}', 'Gives a value a name.'],
-    capture: ['capture ${1:name} %}$0{%DASH endcapture', 'Gives what its contents render a name.'],
-    increment: ['increment ${1:counter}', 'Shows a counter, then adds one to it.'],
-    decrement: ['decrement ${1:counter}', 'Takes one from a counter, then shows it.'],
-    comment: ['comment %}$0{%DASH endcomment', 'Text that isn’t rendered.'],
-    raw: ['raw %}$0{%DASH endraw', 'Text shown as written, Liquid included.'],
-    include: ['include "${1:file}"', 'Renders another template here.'],
-    layout: ['layout "${1:file}"', 'Renders this template inside another.'],
-    block: ['block ${1:name} %}$0{%DASH endblock', 'A part of a layout this template fills in.'],
-    optional: ['optional "${1:name}" %}$0{%DASH endoptional', 'Reporter: a part the reader can tick to include. Its field is fields.name ("true" when ticked).'],
-    editor: ['editor "${1:name}"${2:, placeholder: "${3}"} %}{%DASH endeditor', 'Reporter: a text box the reader fills in. Its field is fields.name. Options: placeholder, lines, maxlength, minlength.'],
-    choice: ['choice "${1:name}", title: "${2:Title}" %}${3:First option}{%DASH or %}${4:Second option}{%DASH endchoice', 'Reporter: options the reader picks one of, separated by {% or %}. Its field is fields.name ("0" for the first).'],
-    or: ['or', 'Reporter: the next option within a choice.']
+    if: ['if ${1:condition} %}$0{%DASH endif %}', 'Shows its contents when the condition is true.'],
+    unless: ['unless ${1:condition} %}$0{%DASH endunless %}', 'Shows its contents when the condition is false.'],
+    elsif: ['elsif ${1:condition} %}', 'Another condition within an if.'],
+    else: ['else %}', 'What to show when no condition above was true.'],
+    case: ['case ${1:variable} %}\n{%DASH when ${2:"value"} %}$0\n{%DASH endcase %}', 'Picks the "when" that matches the value.'],
+    when: ['when ${1:"value"} %}', 'A value within a case.'],
+    for: ['for ${1:item} in ${2:list} %}$0{%DASH endfor %}', 'Repeats its contents once per item of a list.'],
+    break: ['break %}', 'Stops a for loop.'],
+    continue: ['continue %}', 'Skips to the next item of a for loop.'],
+    cycle: ['cycle ${1:"odd", "even"} %}', 'Each time it runs, the next of its values.'],
+    tablerow: ['tablerow ${1:item} in ${2:list} %}$0{%DASH endtablerow %}', 'Table rows and cells, one cell per item.'],
+    assign: ['assign ${1:name} = ${2:value} %}', 'Gives a value a name.'],
+    capture: ['capture ${1:name} %}$0{%DASH endcapture %}', 'Gives what its contents render a name.'],
+    increment: ['increment ${1:counter} %}', 'Shows a counter, then adds one to it.'],
+    decrement: ['decrement ${1:counter} %}', 'Takes one from a counter, then shows it.'],
+    comment: ['comment %}$0{%DASH endcomment %}', 'Text that isn’t rendered.'],
+    raw: ['raw %}$0{%DASH endraw %}', 'Text shown as written, Liquid included.'],
+    include: ['include "${1:file}" %}', 'Renders another template here.'],
+    layout: ['layout "${1:file}" %}', 'Renders this template inside another.'],
+    block: ['block ${1:name} %}$0{%DASH endblock %}', 'A part of a layout this template fills in.'],
+    optional: ['optional "${1:name}" %}\n\t$0\n{%DASH endoptional %}', 'Reporter: a part the reader can tick to include. Its field is fields.name ("true" when ticked).'],
+    editor: ['editor "${1:name}"${2:, placeholder: "${3}"} %}\n\t$0\n{%DASH endeditor %}', 'Reporter: a text box the reader fills in. Its field is fields.name. Options: placeholder, lines, maxlength, minlength.'],
+    choice: ['choice "${1:name}", title: "${2:Title}" %}\n\t${3:First option}\n{%DASH or %}\n\t${4:Second option}\n{%DASH endchoice %}', 'Reporter: options the reader picks one of, separated by {% or %}. Its field is fields.name ("0" for the first).'],
+    or: ['or %}\n\t$0', 'Reporter: the next option within a choice.']
 };
 
 const REPORTER_OPTIONS = {
@@ -196,7 +199,7 @@ function completionsAt(text, offset, datasets = []) {
                 label: name,
                 kind: reporter ? 'reporter' : 'keyword',
                 // End tags in the house style, whatever the opening tag has.
-                insert: TAGS[name][0].replace(/DASH/g, '-') + ' %}',
+                insert: TAGS[name][0].replace(/DASH/g, '-'),
                 detail: reporter ? 'Reporter tag' : 'Liquid tag',
                 documentation: TAGS[name][1],
                 replace
@@ -370,7 +373,7 @@ function afterTyping(before, after, typed, whole = null) {
             return {
                 start: before.length,
                 end: before.length + (closer ? closer[0].length : 0),
-                snippet: `$1${closer ? ' ' + closer[0].trim() : ' %}'}$0{%${block[1]} end${block[2]} %}`
+                snippet: `$1${closer ? ' ' + closer[0].trim() : ' %}'}${inside(block[2])}{%${block[1]} end${block[2]} %}`
             };
         }
     }
@@ -407,7 +410,13 @@ function endTag(before, after, whole) {
     if (!/^\s*$/.test(after)) return null;
     const m = new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\b[^%]*-?%\\}$`).exec(before);
     if (!m || closedAlready(m[2], whole)) return null;
-    return `$0{%${m[1]} end${m[2]} %}`;
+    return `${inside(m[2])}{%${m[1]} end${m[2]} %}`;
+}
+
+// What goes between a block tag and its end tag, with the cursor ($0) in it:
+// beside them for Liquid's tags, on a line of its own, indented, for Reporter's.
+function inside(name) {
+    return /^(optional|editor|choice)$/.test(name) ? '\n\t$0\n' : '$0';
 }
 
 const BLOCK_TAGS = 'if|unless|for|case|capture|tablerow|comment|raw|optional|editor|choice';
