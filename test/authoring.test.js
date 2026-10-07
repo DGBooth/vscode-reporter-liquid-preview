@@ -86,7 +86,54 @@ test('Reporter tags’ options', () => {
 test('nothing is offered as Liquid in HTML, or in a comment', () => {
     assert.strictEqual(offered('<p>‸</p>'), null);
     assert.strictEqual(offered('{{ a }} <p>‸'), null);
-    assert.strictEqual(offered('{% comment %} {{ ‸ {% endcomment %}'), null);
+    assert.deepStrictEqual(offered('{% comment %} {{ ‸ {% endcomment %}'), [], 'a stray {{ in a comment is not Liquid either');
+});
+
+test('end tags: the end of the block the cursor is in comes first, then what goes inside it', () => {
+    const first = (text, n) => offered(text).slice(0, n);
+    // In an if that nothing closes yet.
+    assert.deepStrictEqual(first('{%- if a %}\n  <p>x</p>\n{%- ‸ %}', 4), ['endif', 'else', 'elsif', 'assign']);
+    assert.deepStrictEqual(first('{%- if a %}\n  <p>x</p>\n{%- end‸ %}', 3), ['endif', 'else', 'elsif'], 'typing end changes nothing; the editor narrows the list');
+    // In an if that something below already closes: what goes inside it first, its end tag after.
+    assert.deepStrictEqual(first('{%- if a %}\n{%- ‸ %}\n{%- endif %}', 4), ['else', 'elsif', 'endif', 'assign']);
+    // The tag being typed has no `%}` yet, and doesn't swallow the one below.
+    assert.deepStrictEqual(first('{%- if a %}\n{%- ‸\n{%- endif %}', 3), ['else', 'elsif', 'endif']);
+    // Nested: the innermost first, break and continue in a loop, the outer end after.
+    assert.deepStrictEqual(first('{%- if a %}{%- for x in y %}\n{%- ‸ %}', 5), ['endfor', 'else', 'break', 'continue', 'endif']);
+    assert.deepStrictEqual(first('{%- for x in y %}{%- if a %}\n{%- ‸ %}\n{%- endif %}{%- endfor %}', 6), ['else', 'elsif', 'break', 'continue', 'endif', 'endfor']);
+    // A block that has been closed is not offered again.
+    assert.deepStrictEqual(first('{%- if a %}{%- for x in y %}{%- endfor %}\n{%- ‸ %}', 3), ['endif', 'else', 'elsif']);
+    assert.deepStrictEqual(first('{%- case x %}\n{%- when 1 %}\n{%- ‸ %}', 3), ['endcase', 'when', 'else']);
+    assert.deepStrictEqual(first('{%- choice "d" %}\n  A\n{%- ‸ %}', 2), ['endchoice', 'or']);
+    assert.deepStrictEqual(first('{%- unless a %}\n{%- ‸ %}', 2), ['endunless', 'else']);
+});
+
+test('end tags: nothing to end means no end tags, and else and the like come last', () => {
+    const labels = offered('<p>x</p>\n{%- ‸ %}');
+    assert.deepStrictEqual(labels.filter(l => l.startsWith('end')), []);
+    assert.deepStrictEqual(labels.slice(-6), ['break', 'continue', 'elsif', 'else', 'when', 'or']);
+    const closed = offered('{%- if a %}{%- endif %}\n{%- ‸ %}');
+    assert.deepStrictEqual(closed.filter(l => l.startsWith('end')), [], 'an if that is closed, with the cursor after it');
+});
+
+test('end tags: a comment or raw block can only be ended', () => {
+    assert.deepStrictEqual(offered('{%- comment %}\n  notes\n{%- ‸ %}'), ['endcomment']);
+    assert.deepStrictEqual(offered('{%- raw %}{{ x }}\n{%- ‸ %}'), ['endraw']);
+    assert.deepStrictEqual(offered('{%- comment %}\n  notes\n{%- ‸'), ['endcomment'], 'with no %} yet');
+    assert.deepStrictEqual(offered('{%- comment %} {{ ‸ {%- endcomment %}'), []);
+    assert.ok(offered('{%- comment %}notes{%- endcomment %}\n{%- ‸ %}').includes('if'), 'after it, tags again');
+});
+
+test('end tags say what they end, and take the end of the tag with them', () => {
+    const endif = item('{%- if a %}\n{%- end‸ %}', 'endif');
+    assert.strictEqual(endif.insert, 'endif %}');
+    assert.strictEqual(endif.detail, 'Ends {% if a %} from line 1');
+    assert.match(endif.documentation, /Closes the if block that \{% if a %\} opens, on line 1/);
+    assert.deepStrictEqual(endif.replace, [16, 22], 'the typed "end" and the " %}" after it');
+    assert.deepStrictEqual(item('{%- if a %}\n{%- end‸}', 'endif').replace, [16, 20], 'or the } the editor paired with {');
+    const reporter = item('{%- optional "notes" %}\n  hi\n{%- ‸ %}', 'endoptional');
+    assert.strictEqual(reporter.kind, 'reporter');
+    assert.strictEqual(reporter.detail, 'Ends {% optional "notes" %} from line 1');
 });
 
 // ---- typing -------------------------------------------------------------------------------
@@ -181,6 +228,14 @@ test('typing the whole block tag yourself gives one %} and one end tag', () => {
     assert.strictEqual(typeKeys('{%- if a %}', '', '<p>x</p>'), '{%- if a %}\u2038<p>x</p>', 'not with something after it');
     // Typed without the editor\u2019s help, with no %} already there.
     assert.deepStrictEqual(editing.afterTyping('  {%- for i in items %}', '', '}'), { start: 23, end: 23, snippet: '$0{%- endfor %}' });
+});
+
+test('typing an end or middle tag gives it its %}, and leaves the cursor before it', () => {
+    for (const tag of ['endif', 'else', 'elsif a', 'endfor', 'endchoice', 'or', 'when 1', 'break']) {
+        assert.strictEqual(typeKeys(`{%- ${tag}`), `{%- ${tag}\u2038 %}`, tag);
+        assert.strictEqual(typeKeys(`{%- ${tag} %}`), `{%- ${tag} %}\u2038`, `${tag}, closed by hand`);
+    }
+    assert.strictEqual(typeKeys('{%- endif', '  <p>x</p>\n'), '  <p>x</p>\n{%- endif\u2038 %}', 'on a line of its own');
 });
 
 test('an existing tag is left alone, and a closed block gets no second end tag', () => {
@@ -281,23 +336,46 @@ test('typing > closes the HTML element; typing %} closes the block', async () =>
     assert.deepStrictEqual(snippets.map(([snippet]) => snippet), ['$0</section>', '$0{%- endfor %}'], 'nothing after <br>, which has no end tag');
 });
 
-test('the cursor is read once the editor has moved it, and a further keystroke cancels', async () => {
-    const snippets = [];
-    const doc = Object.assign(documentOf('{%-}'), { version: 1 });
-    // As in VS Code: when the change is told of, the cursor is still before
-    // the typed "-"; it moves just after.
-    const editor = { document: doc, selections: [{}], selection: { active: new Position(0, 2) }, insertSnippet: async snippet => { snippets.push(snippet.value); } };
-    stub.vscode.window.activeTextEditor = editor;
-    const typed = authoring.closeAsYouType({ document: doc, contentChanges: [{ text: '-', range: { start: new Position(0, 2) } }] });
-    setImmediate(() => { editor.selection = { active: new Position(0, 3) }; });
-    await typed;
-    assert.deepStrictEqual(snippets, ['$0 %}']);
+// A document whose text can change under a pending keystroke, as another
+// extension's edit would.
+function editableDocument(text) {
+    const doc = documentOf(text);
+    doc.version = 1;
+    doc.setText = next => {
+        doc.getText = () => next;
+        doc.lineAt = n => ({ text: next.split('\n')[n] });
+        doc.version++;
+    };
+    return doc;
+}
 
-    const next = authoring.closeAsYouType({ document: doc, contentChanges: [{ text: '-', range: { start: new Position(0, 2) } }] });
-    doc.version = 2;
-    await next;
-    stub.vscode.window.activeTextEditor = undefined;
-    assert.deepStrictEqual(snippets, ['$0 %}'], 'another change came first');
+test('the cursor is read once the editor has moved it; only a change on the line itself cancels', async () => {
+    // `{%-}` on line 1: the "-" has just been typed, the cursor not yet after it.
+    const typeDash = async during => {
+        const snippets = [];
+        const doc = editableDocument('<p>x</p>\n{%-}');
+        // As in VS Code: when the change is told of, the cursor is still before
+        // the typed "-"; it moves just after.
+        const editor = { document: doc, selections: [{}], selection: { active: new Position(1, 2) }, insertSnippet: async snippet => { snippets.push(snippet.value); } };
+        stub.vscode.window.activeTextEditor = editor;
+        const pending = authoring.closeAsYouType({ document: doc, contentChanges: [{ text: '-', range: { start: new Position(1, 2) } }] });
+        setImmediate(() => {
+            editor.selection = { active: new Position(1, 3) };
+            if (during) during(doc, editor);
+        });
+        await pending;
+        stub.vscode.window.activeTextEditor = undefined;
+        return snippets;
+    };
+
+    assert.deepStrictEqual(await typeDash(), ['$0 %}'], 'the tag gets its %}');
+    assert.deepStrictEqual(await typeDash(doc => doc.setText('<h1>x</h1>\n{%-}')), ['$0 %}'], 'an edit on another line meanwhile does not stop it');
+    assert.deepStrictEqual(await typeDash(doc => doc.setText('<p>x</p>\n{%- %}')), [], 'a %} added meanwhile by something else is not doubled');
+    assert.deepStrictEqual(await typeDash((doc, editor) => {
+        doc.setText('<p>x</p>\n{%-a}');
+        editor.selection = { active: new Position(1, 4) };
+    }), [], 'another keystroke came first');
+    assert.deepStrictEqual(await typeDash(doc => doc.setText('{%-}')), [], 'the line it was on is gone');
 });
 
 // ---- the grammar ---------------------------------------------------------------------------

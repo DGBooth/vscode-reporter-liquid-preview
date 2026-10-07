@@ -185,16 +185,31 @@ async function closeAsYouType(event) {
     const typed = change.text;
     if (typed.length !== 1) return;
     const cursor = change.range.start.translate(0, 1);
+    const lineNow = () => {
+        try {
+            const text = event.document.lineAt(cursor.line).text;
+            return typeof text === 'string' ? text : null;
+        } catch (err) {
+            return null; // The line is gone.
+        }
+    };
     // The editor moves its cursor after telling of the change, so look once
-    // it has (as VS Code's own HTML tag closing does), and only if nothing
-    // else has been typed meanwhile.
-    const version = event.document.version;
+    // it has (as VS Code's own HTML tag closing does). What was typed is what
+    // the line says before the cursor now; if that is still so, the keystroke
+    // is the last thing that happened there, whatever else changed elsewhere in
+    // the meantime (another extension's edit, say: stopping for any change in
+    // the document at all would leave the editor's own `}` and nothing more).
+    const before = (lineNow() || '').slice(0, cursor.character);
     await new Promise(resolve => setTimeout(resolve, 10));
-    if (event.document.version !== version || vscode.window.activeTextEditor !== editor) return;
+    if (vscode.window.activeTextEditor !== editor) return;
     if (editor.selections.length !== 1 || !editor.selection.active.isEqual(cursor)) return;
+    const line = lineNow();
+    // Typed over, or something else typed first.
+    if (line === null || line.slice(0, cursor.character) !== before) return;
 
-    const line = event.document.lineAt(cursor.line).text;
-    const edit = editing.afterTyping(line.slice(0, cursor.character), line.slice(cursor.character), typed, event.document.getText());
+    // What follows the cursor is read now, so anything another extension has
+    // added since (a `%}` of its own) is seen and not doubled.
+    const edit = editing.afterTyping(before, line.slice(cursor.character), typed, event.document.getText());
     if (edit) {
         const range = new vscode.Range(cursor.line, edit.start, cursor.line, edit.end);
         await editor.insertSnippet(new vscode.SnippetString(edit.snippet), range, { undoStopBefore: false, undoStopAfter: false });

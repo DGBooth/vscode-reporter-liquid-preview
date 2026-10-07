@@ -147,6 +147,7 @@ While a template does not parse, the preview keeps showing the last version that
 - **Colouring** for Liquid and HTML, Liquid inside attributes, `<style>` and `<script>` included. Reporter's tags (`optional`, `editor`, `choice`, `or`) are coloured as such.
 - **Completions** inside Liquid:
   - After `{%`, the tags. Choosing a block tag inserts its end tag too: `if` gives `{%- if … %}{%- endif %}`.
+  - Where you are in the template decides what comes first. Inside an `if`, the list starts with `endif`, then `else` and `elsif`; inside a loop, `endfor`, then `else`, `break` and `continue`; inside a `case`, `endcase`, `when` and `else`; inside a `choice`, `endchoice` and `or`. Nested blocks offer the innermost first, then the ends of the blocks around it. Typing `{%- end` leaves just those end tags, each saying which tag it ends and the line that started. A block already closed further down is told apart from one that isn't, so its end tag comes after what goes inside it. Outside any block, no end tags are offered. Inside a `comment` or `raw` block the one tag offered is the one that ends it.
   - Reporter's tags go in over several lines, as in a formatted template: what's inside on its own indented line, and each `choice` option on its own. `choice` gives two options, and `or` inside a choice adds the next. Liquid's own tags stay on one line.
 
     ```liquid
