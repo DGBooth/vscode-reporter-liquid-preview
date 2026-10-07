@@ -298,7 +298,7 @@ See [`examples/template-tests`](examples/template-tests) for a working suite.
 Tests that only run when someone remembers to open the editor get skipped. `liquid-test` runs the same suites from the command line, through the same engine and the same checks as the editor, so a case passes in CI exactly when it passes in VS Code. The only difference: the editor includes unsaved edits, and `liquid-test` reads files as saved on disk.
 
 ```
-npx github:DGBooth/vscode-reporter-liquid-preview#v1.12.0 [options] [paths...]
+npx github:DGBooth/vscode-reporter-liquid-preview#v1.13.0 [options] [paths...]
 ```
 
 With no paths it searches the current folder recursively for `*.liquidtest.json`, skipping `node_modules` and hidden folders. It needs Node 20 or newer.
@@ -318,7 +318,7 @@ In a GitHub Actions workflow in your templates repository:
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.12.0 --report liquid-test-report.html --junit liquid-tests.xml
+- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.13.0 --report liquid-test-report.html --junit liquid-tests.xml
 - uses: actions/upload-artifact@v4
   if: always()
   with:

@@ -12,7 +12,7 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
-## [Unreleased]
+## [1.13.0] - 2026-10-07
 
 ### Added
 - End tags in completions, ranked by where you are in the template. Inside an `if` the list starts with `endif`, then `else` and `elsif`; inside a loop, `endfor`, `else`, `break` and `continue`; inside a `case`, `endcase`, `when` and `else`; inside a `choice`, `endchoice` and `or`. Nested blocks offer the innermost first. Typing `{%- end` offers only the ends of the blocks you're in, each saying which tag it ends and its line. Inside a `comment` or `raw` block, the one tag offered ends it. Before this, no end tag was offered at all, and `else`, `elsif`, `when` and `or` sat in the same list as the tags that start something.
