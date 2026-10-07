@@ -140,22 +140,24 @@ const FORLOOP = {
 // ---- where the cursor is ------------------------------------------------------------
 
 // The Liquid tag or object the cursor is inside, as the text from its `{%`
-// or `{{` up to the cursor; or null when it is in HTML. Comments and raw
-// blocks count as HTML: nothing in them is Liquid.
+// or `{{` up to the cursor; or null when it is in HTML. Inside a comment or
+// raw block nothing is Liquid, bar the tag that ends it, so `inside` says which
+// block that is (its opening tag).
 function liquidBefore(text, offset) {
     const before = text.slice(0, offset);
     const open = Math.max(before.lastIndexOf('{%'), before.lastIndexOf('{{'));
     if (open < 0) return null;
     const close = Math.max(before.lastIndexOf('%}'), before.lastIndexOf('}}'));
     if (close > open) return null;
+    let inside = null;
     for (const t of liquidTags(text)) {
         if (t.start > open) break;
         if ((t.name === 'comment' || t.name === 'raw') && t.end <= open) {
             const end = text.indexOf(`end${t.name}`, t.end);
-            if (end < 0 || end > open) return null;
+            if (end < 0 || end > open) { inside = t; break; }
         }
     }
-    return { start: open, kind: before[open + 1] === '%' ? 'tag' : 'object', text: before.slice(open) };
+    return { start: open, kind: before[open + 1] === '%' ? 'tag' : 'object', text: before.slice(open), inside };
 }
 
 // Blocks open at `offset` (for loops, captures, Reporter's tags...), outermost first.
@@ -171,6 +173,47 @@ function openBlocks(text, offset) {
         }
     }
     return stack;
+}
+
+// The blocks that have an end tag, and the tags that go between a block's
+// start and its end.
+const END_TAGS_OF = ['if', 'unless', 'case', 'for', 'tablerow', 'capture', 'comment', 'raw', 'optional', 'editor', 'choice', 'block'];
+const MIDDLE = { if: ['else', 'elsif'], unless: ['else'], for: ['else'], case: ['when', 'else'], choice: ['or'] };
+const MIDDLE_TAGS = new Set(['else', 'elsif', 'when', 'or', 'break', 'continue']);
+
+// Every block in the template, with the end tag that closes it or null. Blocks
+// are matched by nesting across the whole text, so one closed further down is
+// told from one that never is.
+function blockRecords(text) {
+    const records = [];
+    const stack = [];
+    for (const t of liquidTags(text)) {
+        if (END_TAGS_OF.includes(t.name)) {
+            const record = { tag: t, closer: null };
+            records.push(record);
+            stack.push(record);
+        } else if (t.name.startsWith('end') && END_TAGS_OF.includes(t.name.slice(3))) {
+            const i = stack.map(r => r.tag.name).lastIndexOf(t.name.slice(3));
+            if (i >= 0) {
+                stack[i].closer = t;
+                stack.splice(i);
+            }
+        }
+    }
+    return records;
+}
+
+// The blocks `offset` is inside, outermost first: opened before it and not
+// closed before it. The tag being typed, which runs from `from` to `offset`,
+// is blanked out first: it names nothing yet, and without its `%}` it would
+// run into the next tag and swallow it.
+function enclosing(text, from, offset) {
+    const masked = text.slice(0, from) + text.slice(from, offset).replace(/[^\n]/g, ' ') + text.slice(offset);
+    return blockRecords(masked).filter(r => r.tag.end <= offset && (!r.closer || r.closer.start >= offset));
+}
+
+function lineOf(text, offset) {
+    return text.slice(0, offset).split('\n').length;
 }
 
 // ---- completions -------------------------------------------------------------------
@@ -193,19 +236,55 @@ function completionsAt(text, offset, datasets = []) {
         // the `}` the editor paired with `{`.
         const rest = /^\w*(?:\s*-?%\}|\}(?!\}))?/.exec(after)[0];
         const replace = [offset - word.length, offset + rest.length];
-        return [...new Set(known().tags.concat(['elsif', 'else', 'when', 'or']))].filter(n => TAGS[n]).map(name => {
-            const reporter = /^(optional|editor|choice|or)$/.test(name);
+        const reporter = name => /^(optional|editor|choice|or)$/.test(name);
+        const item = name => ({
+            label: name,
+            kind: reporter(name) ? 'reporter' : 'keyword',
+            // End tags in the house style, whatever the opening tag has.
+            insert: TAGS[name][0].replace(/DASH/g, '-'),
+            detail: reporter(name) ? 'Reporter tag' : 'Liquid tag',
+            documentation: TAGS[name][1],
+            replace
+        });
+        // The end tag of a block, saying which one it ends and where that starts.
+        const endItem = r => {
+            const opener = `{% ${r.tag.markup.length > 50 ? r.tag.markup.slice(0, 49) + '\u2026' : r.tag.markup} %}`;
             return {
-                label: name,
-                kind: reporter ? 'reporter' : 'keyword',
-                // End tags in the house style, whatever the opening tag has.
-                insert: TAGS[name][0].replace(/DASH/g, '-'),
-                detail: reporter ? 'Reporter tag' : 'Liquid tag',
-                documentation: TAGS[name][1],
+                label: 'end' + r.tag.name,
+                kind: reporter(r.tag.name) ? 'reporter' : 'keyword',
+                insert: `end${r.tag.name} %}`,
+                detail: `Ends ${opener} from line ${lineOf(text, r.tag.start)}`,
+                documentation: `Closes the ${r.tag.name} block that ${opener} opens, on line ${lineOf(text, r.tag.start)}.`,
                 replace
             };
-        });
+        };
+
+        // Inside a comment or raw block the one tag there is ends it.
+        if (at.inside) return [endItem({ tag: at.inside })];
+
+        // What belongs where the cursor is comes first: the end of the block
+        // it's in if that block is still open, the tags that go inside that
+        // kind of block (else and elsif in an if, or in a choice), the ends of
+        // the blocks around that, then the tags that start something, and last
+        // the ones that mean nothing here (an else outside any if).
+        const around = enclosing(text, at.start, offset).reverse(); // innermost first
+        const innermost = around[0];
+        const open = innermost && !innermost.closer ? [innermost] : [];
+        const middle = (innermost && MIDDLE[innermost.tag.name]) || [];
+        const contextual = middle.concat(around.some(r => r.tag.name === 'for') ? ['break', 'continue'] : []);
+        const ends = around.filter(r => !r.closer).concat(around.filter(r => r.closer)).filter(r => !open.includes(r));
+        const all = [...new Set(known().tags.concat(['elsif', 'else', 'when', 'or']))].filter(n => TAGS[n]);
+        return [
+            ...open.map(endItem),
+            ...contextual.map(item),
+            ...ends.map(endItem),
+            ...all.filter(n => !MIDDLE_TAGS.has(n)).map(item),
+            ...all.filter(n => MIDDLE_TAGS.has(n) && !contextual.includes(n)).map(item)
+        ];
     }
+
+    // Inside a comment or raw block, only that tag.
+    if (at.inside) return [];
 
     // A filter.
     m = /\|\s*(\w*)$/.exec(inside);

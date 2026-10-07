@@ -147,6 +147,7 @@ While a template does not parse, the preview keeps showing the last version that
 - **Colouring** for Liquid and HTML, Liquid inside attributes, `<style>` and `<script>` included. Reporter's tags (`optional`, `editor`, `choice`, `or`) are coloured as such.
 - **Completions** inside Liquid:
   - After `{%`, the tags. Choosing a block tag inserts its end tag too: `if` gives `{%- if … %}{%- endif %}`.
+  - Where you are in the template decides what comes first. Inside an `if`, the list starts with `endif`, then `else` and `elsif`; inside a loop, `endfor`, then `else`, `break` and `continue`; inside a `case`, `endcase`, `when` and `else`; inside a `choice`, `endchoice` and `or`. Nested blocks offer the innermost first, then the ends of the blocks around it. Typing `{%- end` leaves just those end tags, each saying which tag it ends and the line that started. A block already closed further down is told apart from one that isn't, so its end tag comes after what goes inside it. Outside any block, no end tags are offered. Inside a `comment` or `raw` block the one tag offered is the one that ends it.
   - Reporter's tags go in over several lines, as in a formatted template: what's inside on its own indented line, and each `choice` option on its own. `choice` gives two options, and `or` inside a choice adds the next. Liquid's own tags stay on one line.
 
     ```liquid
@@ -297,7 +298,7 @@ See [`examples/template-tests`](examples/template-tests) for a working suite.
 Tests that only run when someone remembers to open the editor get skipped. `liquid-test` runs the same suites from the command line, through the same engine and the same checks as the editor, so a case passes in CI exactly when it passes in VS Code. The only difference: the editor includes unsaved edits, and `liquid-test` reads files as saved on disk.
 
 ```
-npx github:DGBooth/vscode-reporter-liquid-preview#v1.12.0 [options] [paths...]
+npx github:DGBooth/vscode-reporter-liquid-preview#v1.13.0 [options] [paths...]
 ```
 
 With no paths it searches the current folder recursively for `*.liquidtest.json`, skipping `node_modules` and hidden folders. It needs Node 20 or newer.
@@ -317,7 +318,7 @@ In a GitHub Actions workflow in your templates repository:
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.12.0 --report liquid-test-report.html --junit liquid-tests.xml
+- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.13.0 --report liquid-test-report.html --junit liquid-tests.xml
 - uses: actions/upload-artifact@v4
   if: always()
   with:
