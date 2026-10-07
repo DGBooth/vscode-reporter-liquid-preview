@@ -138,113 +138,159 @@ test('end tags say what they end, and take the end of the tag with them', () => 
 
 // ---- typing -------------------------------------------------------------------------------
 
-// Type `keys` one at a time at the end of `start`, as an editor would with
-// this extension: `{` pairs with `}` (VS Code's own bracket pairing, one edit
-// the extension ignores), \t moves to a snippet's final tab stop, and every
-// other key goes through afterTyping. A snippet goes in as VS Code puts it in:
-// each later line takes the cursor line's indentation, and a leading tab
-// becomes the editor's indent (two spaces here). The document, with \u2038 at
-// the cursor.
-function typeKeys(keys, start = '', rest = '') {
+// Type `keys` one at a time into `start` + `rest` (the cursor between them), as
+// VS Code does with this extension, and give the document with ‸ at the
+// cursor.
+//
+// VS Code pairs at once, on each keystroke, as the language configuration says:
+// `{` with `}`, `{%` with ` %}`, `{{` with ` }}`, a quote with a quote (typed
+// over if its pair comes next). It does not type over a pair's several
+// characters: `%}` typed before a pair's ` %}` leaves both. That, and a block
+// tag's end tag, are the extension's, done once typing has settled and from
+// the line as it is then. `pace` is when it settles: after every key, as slow
+// typing gives it time to, or only after the last, as fast typing doesn't.
+// \t goes to a snippet's final tab stop.
+function typeKeys(keys, { start = '', rest = '', pace = 'slow' } = {}) {
     let doc = start + rest;
     let cursor = start.length;
     let finalStop = null; // The snippet's $0, as a distance from the document's end.
+    let intents = new Set();
     const lineAround = () => {
         const from = doc.lastIndexOf('\n', cursor - 1) + 1;
         const end = doc.indexOf('\n', cursor);
         return { from, before: doc.slice(from, cursor), after: doc.slice(cursor, end < 0 ? doc.length : end) };
     };
+    const put = (text, replace = 0) => { doc = doc.slice(0, cursor) + text + doc.slice(cursor + replace); };
+
+    const settle = () => {
+        if (!intents.size) return;
+        const { before, after } = lineAround();
+        const edit = editing.settleEdit(before, after, doc, [...intents]);
+        if (edit && edit.wait) return; // Not ready: look again after more typing.
+        intents = new Set();
+        if (!edit) return;
+        if (!edit.snippet) { put('', edit.replace); return; }
+        // A snippet goes in as VS Code puts it in: each later line takes the
+        // cursor line's indentation, and a leading tab becomes two spaces.
+        const indent = /^\s*/.exec(before)[0];
+        const text = edit.snippet.split('\n').map((l, n) => n ? indent + l.replace(/^\t/, '  ') : l).join('\n');
+        const inserted = doc.slice(0, cursor) + text + doc.slice(cursor + edit.replace);
+        const first = inserted.indexOf(text.includes('$1') ? '$1' : '$0');
+        const plain = inserted.replace(/\$[01]/g, '');
+        finalStop = text.includes('$1') ? plain.length - inserted.replace(/\$1/, '').indexOf('$0') : null;
+        doc = plain;
+        cursor = first;
+    };
+
     for (const key of keys) {
         if (key === '\t') {
             if (finalStop !== null) cursor = doc.length - finalStop;
             finalStop = null;
             continue;
         }
-        if (key === '{' && /^(\s|\}|$)/.test(lineAround().after)) {
-            doc = doc.slice(0, cursor) + '{}' + doc.slice(cursor);
-            cursor += 1;
-            continue;
-        }
-        doc = doc.slice(0, cursor) + key + doc.slice(cursor);
-        cursor += 1;
-        const { from, before, after } = lineAround();
-        const edit = editing.afterTyping(before, after, key, doc);
-        if (!edit) continue;
-        const indent = /^\s*/.exec(before)[0];
-        const snippet = edit.snippet.split('\n').map((line, n) => n ? indent + line.replace(/^\t/, '  ') : line).join('\n');
-        const inserted = doc.slice(0, from + edit.start) + snippet + doc.slice(from + edit.end);
-        // The cursor goes to $1 if there is one, else $0; Tab later goes to $0.
-        const first = inserted.indexOf(snippet.includes('$1') ? '$1' : '$0');
-        const plain = inserted.replace(/\$[01]/g, '');
-        finalStop = snippet.includes('$1') ? plain.length - inserted.replace(/\$1/, '').indexOf('$0') : null;
-        doc = plain;
-        cursor = first;
+        const { before, after } = lineAround();
+        const closable = /^(\s*$|[\s}\])>`<;:.,=])/.test(after);
+        if (key === '{' && /\{$/.test(before) && after.startsWith('}')) { put('{ }}', 1); cursor += 1; }
+        else if (key === '{' && closable) { put('{}'); cursor += 1; }
+        else if (key === '%' && /\{$/.test(before) && after.startsWith('}')) { put('% %}', 1); cursor += 1; }
+        else if (key === '"' && after.startsWith('"')) cursor += 1;
+        else if (key === '"' && /(^|[\s=(])$/.test(before) && closable) { put('""'); cursor += 1; }
+        else { put(key); cursor += 1; }
+        for (const intent of editing.intentsOf(lineAround().before, key)) intents.add(intent);
+        if (pace === 'slow') settle();
     }
-    return doc.slice(0, cursor) + '\u2038' + doc.slice(cursor);
+    settle();
+    return doc.slice(0, cursor) + '‸' + doc.slice(cursor);
 }
 
-test('typing {%- or {% gives the tag\u2019s %}, and typing %} yourself types over it', () => {
-    assert.strictEqual(typeKeys('{%-'), '{%-\u2038 %}');
-    assert.strictEqual(typeKeys('{% '), '{% \u2038 %}');
-    assert.strictEqual(typeKeys('{%- assign a = 1 %}'), '{%- assign a = 1 %}\u2038');
-    assert.strictEqual(typeKeys('{%- assign a = 1%}'), '{%- assign a = 1 %}\u2038', 'the space before %} kept');
-    assert.strictEqual(typeKeys('{%- assign a = 1 -%}'), '{%- assign a = 1 -%}\u2038');
-    assert.strictEqual(typeKeys('<p>{%- assign a = 1 %}', '', '</p>'), '<p>{%- assign a = 1 %}\u2038</p>');
+// Slow and fast must come to the same document.
+function typed(keys, options = {}) {
+    const slow = typeKeys(keys, Object.assign({}, options, { pace: 'slow' }));
+    const fast = typeKeys(keys, Object.assign({}, options, { pace: 'fast' }));
+    // The text must agree. The cursor may not: typed through quickly, a block tag's end
+    // tag arrives as the cursor passes its %}, which puts the cursor in the body.
+    assert.strictEqual(fast.replace('\u2038', ''), slow.replace('\u2038', ''), `typing ${JSON.stringify(keys)} fast, not as slowly, gives something else`);
+    return slow;
+}
+
+test('a tag opens as VS Code pairs it, and typed through gives what was typed, however fast', () => {
+    assert.strictEqual(typed('{%- else'), '{%- else‸ %}');
+    assert.strictEqual(typed('{%- else %}'), '{%- else %}‸');
+    assert.strictEqual(typed('{{ name'), '{{ name‸ }}');
+    assert.strictEqual(typed('{{ name }}'), '{{ name }}‸');
+    assert.strictEqual(typed('{% assign a = 1 %}'), '{% assign a = 1 %}‸');
+    assert.strictEqual(typed('{%- assign a = 1 -%}'), '{%- assign a = 1 -%}‸', 'a dash before the %}');
+    assert.strictEqual(typed('{%- assign a = 1%}'), '{%- assign a = 1%}‸', 'no space before it');
+    for (const tag of ['endif', 'elsif a', 'endfor', 'endchoice', 'or', 'when 1', 'break']) {
+        assert.strictEqual(typed(`{%- ${tag}`), `{%- ${tag}‸ %}`, tag);
+        assert.strictEqual(typed(`{%- ${tag} %}`), `{%- ${tag} %}‸`, `${tag}, closed by hand`);
+    }
+    assert.strictEqual(typed('<p>{%- else', { rest: '</p>' }), '<p>{%- else‸ %}</p>', 'before a tag');
+    assert.strictEqual(typed('{%- a %} {%- b %}'), '{%- a %} {%- b %}‸', 'one after another');
+    assert.strictEqual(typed('{%- endif', { start: '  <p>x</p>\n' }), '  <p>x</p>\n{%- endif‸ %}', 'on a line of its own');
 });
 
-test('starting a block tag adds its end tag at once, and Tab goes between them', () => {
-    assert.strictEqual(typeKeys('{%- if a'), '{%- if a\u2038 %}{%- endif %}');
-    assert.strictEqual(typeKeys('{%- if a\t'), '{%- if a %}\u2038{%- endif %}');
-    assert.strictEqual(typeKeys('{%- for item in items\tx'), '{%- for item in items %}x\u2038{%- endfor %}');
-    assert.strictEqual(typeKeys('{% unless a'), '{% unless a\u2038 %}{% endunless %}', 'with the dash it opens with');
-    assert.strictEqual(typeKeys('{%- capture x\t'), '{%- capture x %}\u2038{%- endcapture %}');
+test('starting a block tag adds its end tag, however fast, and Tab goes between them', () => {
+    assert.strictEqual(typed('{%- if a'), '{%- if a‸ %}{%- endif %}');
+    assert.strictEqual(typed('{%- for item in items'), '{%- for item in items‸ %}{%- endfor %}');
+    assert.strictEqual(typed('{% unless b'), '{% unless b‸ %}{% endunless %}', 'with the dash it opens with');
+    assert.strictEqual(typed('{%- capture x -%}'), '{%- capture x -%}‸{%- endcapture %}');
+    assert.strictEqual(typeKeys('{%- if a\tX'), '{%- if a %}X‸{%- endif %}');
+    // Typed through, with the %} by hand: one %}, one end tag, the cursor past the tag.
+    assert.strictEqual(typed('{%- if a %}'), '{%- if a %}‸{%- endif %}');
+    assert.strictEqual(typed('{%- for i in items %}'), '{%- for i in items %}‸{%- endfor %}');
 });
 
-test('Reporter\u2019s tags go in over several lines, as a formatted template has them', () => {
-    // From the completion list: what's inside on its own indented line, and each choice option on its own.
+test('Reporter’s tags go in over several lines, as a formatted template has them', () => {
+    assert.strictEqual(typed('{%- optional "x"'), '{%- optional "x"‸ %}\n  \n{%- endoptional %}');
+    assert.strictEqual(typed('{%- optional "x" %}'), '{%- optional "x" %}‸\n  \n{%- endoptional %}');
+    assert.strictEqual(typed('{%- choice "d"'), '{%- choice "d"‸ %}\n  \n{%- endchoice %}');
+    assert.strictEqual(typed('{%- editor "r"'), '{%- editor "r"‸ %}\n  \n{%- endeditor %}');
+    assert.strictEqual(typed('{% optional "x"'), '{% optional "x"‸ %}\n  \n{% endoptional %}', 'with the dash it opens with');
+    // Tab goes to the line between them.
+    assert.strictEqual(typeKeys('{%- optional "x"\tHello'), '{%- optional "x" %}\n  Hello‸\n{%- endoptional %}');
+    assert.strictEqual(typeKeys('{%- choice "d"\tFirst'), '{%- choice "d" %}\n  First‸\n{%- endchoice %}');
+    // Inside something else, each line takes the one the tag is on.
+    assert.strictEqual(typed('{%- optional "x"', { start: '    ' }), '    {%- optional "x"‸ %}\n      \n    {%- endoptional %}');
+});
+
+test('the completion list gives Reporter’s tags in the same layout', () => {
     assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}" %}\n\t$0\n{%- endoptional %}');
     assert.strictEqual(item('{%- ‸', 'editor').insert, 'editor "${1:name}"${2:, placeholder: "${3}"} %}\n\t$0\n{%- endeditor %}');
     assert.strictEqual(item('{%- ‸', 'choice').insert, 'choice "${1:name}", title: "${2:Title}" %}\n\t${3:First option}\n{%- or %}\n\t${4:Second option}\n{%- endchoice %}');
     assert.strictEqual(item('{%- ‸', 'or').insert, 'or %}\n\t$0');
-    assert.strictEqual(item('{%- ‸', 'if').insert, 'if ${1:condition} %}$0{%- endif %}', 'Liquid\u2019s own tags stay on one line');
-
-    // As typed: the end tag comes at once, with the content line between; Tab goes to it.
-    assert.strictEqual(typeKeys('{%- optional "x"'), '{%- optional "x"\u2038 %}\n  \n{%- endoptional %}');
-    assert.strictEqual(typeKeys('{%- optional "x"\tHello'), '{%- optional "x" %}\n  Hello\u2038\n{%- endoptional %}');
-    assert.strictEqual(typeKeys('{%- choice "d"\tFirst'), '{%- choice "d" %}\n  First\u2038\n{%- endchoice %}');
-    assert.strictEqual(typeKeys('{%- editor "r"\t'), '{%- editor "r" %}\n  \u2038\n{%- endeditor %}');
-    assert.strictEqual(typeKeys('{% optional "x"\t'), '{% optional "x" %}\n  \u2038\n{% endoptional %}', 'with the dash it opens with');
-    // Inside something else, each line takes the one the tag is on.
-    assert.strictEqual(typeKeys('{%- optional "x"\t', '    '), '    {%- optional "x" %}\n      \u2038\n    {%- endoptional %}');
-    // Typing the %} yourself: the same layout, once, with the cursor left on the tag's line.
-    assert.strictEqual(typeKeys('{%- optional "x" %}'), '{%- optional "x" %}\u2038\n  \n{%- endoptional %}');
-    assert.strictEqual(typeKeys('{%- optional "x" %}', '', '\n  Hello\n{%- endoptional %}'), '{%- optional "x" %}\u2038\n  Hello\n{%- endoptional %}', 'not when it\u2019s already closed');
+    assert.strictEqual(item('{%- ‸', 'if').insert, 'if ${1:condition} %}$0{%- endif %}', 'Liquid’s own tags stay on one line');
 });
 
-test('typing the whole block tag yourself gives one %} and one end tag', () => {
-    assert.strictEqual(typeKeys('{%- if a %}'), '{%- if a %}\u2038{%- endif %}');
-    assert.strictEqual(typeKeys('{% for i in items %}'), '{% for i in items %}\u2038{% endfor %}');
-    assert.strictEqual(typeKeys('{%- capture x -%}'), '{%- capture x -%}\u2038{%- endcapture %}');
-    assert.strictEqual(typeKeys('{%- if a %}', '', '<p>x</p>'), '{%- if a %}\u2038<p>x</p>', 'not with something after it');
-    // Typed without the editor\u2019s help, with no %} already there.
-    assert.deepStrictEqual(editing.afterTyping('  {%- for i in items %}', '', '}'), { start: 23, end: 23, snippet: '$0{%- endfor %}' });
+test('a closed block, or a tag with something after it, gets no end tag', () => {
+    assert.strictEqual(typed('{%- if a', { rest: '\n{%- endif %}' }), '{%- if a‸ %}\n{%- endif %}', 'closed below');
+    assert.strictEqual(typed('{%- if a %}', { rest: '\n{%- endif %}' }), '{%- if a %}‸\n{%- endif %}', 'typed through, closed below: just the duplicate goes');
+    assert.strictEqual(typed('{%- if b', { rest: '\n{%- if a %}{%- endif %}' }), '{%- if b‸ %}\n{%- if a %}{%- endif %}'.replace('%}\n', '%}{%- endif %}\n'), 'a block closed elsewhere does not close this one');
+    assert.strictEqual(typed('{%- if a', { rest: '<p>x</p>' }), '{%- if a‸ %}<p>x</p>', 'something after: the editor’s pair is left alone');
 });
 
-test('typing an end or middle tag gives it its %}, and leaves the cursor before it', () => {
-    for (const tag of ['endif', 'else', 'elsif a', 'endfor', 'endchoice', 'or', 'when 1', 'break']) {
-        assert.strictEqual(typeKeys(`{%- ${tag}`), `{%- ${tag}\u2038 %}`, tag);
-        assert.strictEqual(typeKeys(`{%- ${tag} %}`), `{%- ${tag} %}\u2038`, `${tag}, closed by hand`);
-    }
-    assert.strictEqual(typeKeys('{%- endif', '  <p>x</p>\n'), '  <p>x</p>\n{%- endif\u2038 %}', 'on a line of its own');
-});
-
-test('an existing tag is left alone, and a closed block gets no second end tag', () => {
-    assert.strictEqual(editing.afterTyping('{%-', ' if a %}', '-'), null, 'adding a dash to a tag already there');
-    assert.strictEqual(editing.afterTyping('{%- if a %}', '', '}', '{%- if a %}\n<p>x</p>\n{%- endif %}'), null);
-    assert.ok(editing.afterTyping('{%- if b %}', '', '}', '{%- if a %}{%- endif %}\n{%- if b %}'), 'but this one isn\u2019t closed');
-    assert.strictEqual(editing.afterTyping('{%- if ', ' %}', ' ', '{%- if  %}\n<p>x</p>\n{%- endif %}'), null, 'retyping the start of a closed block');
-    assert.strictEqual(typeKeys(' ', '{%- if', ' a %}'), '{%- if \u2038 a %}', 'a space typed inside a tag already there');
-    assert.strictEqual(editing.afterTyping('{{ a ', '}}', '%'), null, '% elsewhere is just a %');
+test('what settling does, from the line as it is', () => {
+    const doc = text => text;
+    // A tag typed closed by hand: the pair’s own closer goes.
+    assert.deepStrictEqual(editing.settleEdit('{%- else %}', ' %}', doc('{%- else %} %}'), ['closer']), { replace: 3, snippet: '' });
+    assert.deepStrictEqual(editing.settleEdit('{{ a }}', ' }}', doc('{{ a }} }}'), ['closer']), { replace: 3, snippet: '' });
+    assert.strictEqual(editing.settleEdit('{%- a %}', '{%- b %}', doc('{%- a %}{%- b %}'), ['closer']), null, 'another tag next is not a duplicate');
+    // A block’s header, or just past its %}.
+    assert.deepStrictEqual(editing.settleEdit('{%- if a', ' %}', doc('{%- if a %}'), ['block']), { replace: 3, snippet: '$1 %}$0{%- endif %}' });
+    assert.deepStrictEqual(editing.settleEdit('{%- if a -%}', '', doc('{%- if a -%}'), ['block']), { replace: 0, snippet: '$0{%- endif %}' });
+    assert.deepStrictEqual(editing.settleEdit('{%- if a %}', ' %}', doc('{%- if a %} %}'), ['block', 'closer']), { replace: 3, snippet: '$0{%- endif %}' }, 'the duplicate goes, and the end tag is added');
+    // Not ready: the editor has paired a quote not yet typed over.
+    assert.deepStrictEqual(editing.settleEdit('{%- optional "', '" %}', doc('{%- optional "" %}'), ['block']), { wait: true });
+    // Nothing to do.
+    assert.strictEqual(editing.settleEdit('{%- if a', ' %}', doc('{%- if a %}'), []), null, 'nothing asked');
+    assert.strictEqual(editing.settleEdit('{%- if a', ' %}', doc('{%- if a %}{%- endif %}'), ['block']), null, 'already closed');
+    assert.strictEqual(editing.settleEdit('<p>hi', '</p>', doc('<p>hi</p>'), ['block']), null, 'not a tag');
+    // What a keystroke asks.
+    assert.deepStrictEqual(editing.intentsOf('{%- if ', ' '), ['block']);
+    assert.deepStrictEqual(editing.intentsOf('{%- if a %}', '}'), ['closer', 'block']);
+    assert.deepStrictEqual(editing.intentsOf('{{ a }}', '}'), ['closer']);
+    assert.deepStrictEqual(editing.intentsOf('{%- else ', ' '), []);
+    assert.deepStrictEqual(editing.intentsOf('<p>', 'a'), []);
 });
 
 test('Liquid is blanked out for the HTML service, keeping every position', () => {
@@ -313,69 +359,153 @@ test('Format Document leaves a template it can’t check, and says why', async (
     assert.match(stub.shownMessages[0], /couldn’t be read for formatting|doesn’t render/);
 });
 
-test('typing > closes the HTML element; typing %} closes the block', async () => {
-    const snippets = [];
-    const editorFor = (doc, cursor) => ({
-        document: doc,
-        selections: [{}],
-        selection: { active: cursor },
-        insertSnippet: async (snippet, where) => { snippets.push([snippet.value, String(where)]); return true; }
-    });
-    // `text` as it is after typing `typed`, its last character.
-    const type = async (text, typed) => {
-        const doc = documentOf(text);
-        const line = 0;
-        const character = text.length - 1;
-        stub.vscode.window.activeTextEditor = editorFor(doc, new Position(line, character + 1));
-        await authoring.closeAsYouType({ document: doc, contentChanges: [{ text: typed, range: { start: new Position(line, character) } }] });
-    };
-    await type('<section class="{{ c }}">', '>');
-    await type('{%- for i in items %}', '}');
-    await type('<br>', '>');
-    stub.vscode.window.activeTextEditor = undefined;
-    assert.deepStrictEqual(snippets.map(([snippet]) => snippet), ['$0</section>', '$0{%- endfor %}'], 'nothing after <br>, which has no end tag');
-});
-
 // A document whose text can change under a pending keystroke, as another
-// extension's edit would.
+// extension's edit would, and an editor on it that records what it's asked to do.
 function editableDocument(text) {
     const doc = documentOf(text);
-    doc.version = 1;
     doc.setText = next => {
         doc.getText = () => next;
         doc.lineAt = n => ({ text: next.split('\n')[n] });
-        doc.version++;
     };
+    doc.setText(text);
     return doc;
 }
 
-test('the cursor is read once the editor has moved it; only a change on the line itself cancels', async () => {
-    // `{%-}` on line 1: the "-" has just been typed, the cursor not yet after it.
-    const typeDash = async during => {
-        const snippets = [];
-        const doc = editableDocument('<p>x</p>\n{%-}');
-        // As in VS Code: when the change is told of, the cursor is still before
-        // the typed "-"; it moves just after.
-        const editor = { document: doc, selections: [{}], selection: { active: new Position(1, 2) }, insertSnippet: async snippet => { snippets.push(snippet.value); } };
-        stub.vscode.window.activeTextEditor = editor;
-        const pending = authoring.closeAsYouType({ document: doc, contentChanges: [{ text: '-', range: { start: new Position(1, 2) } }] });
-        setImmediate(() => {
-            editor.selection = { active: new Position(1, 3) };
-            if (during) during(doc, editor);
-        });
-        await pending;
-        stub.vscode.window.activeTextEditor = undefined;
-        return snippets;
-    };
+const at = w => w.start ? `${w.start.line}:${w.start.character}-${w.end.line}:${w.end.character}` : `${w.line}:${w.character}`;
 
-    assert.deepStrictEqual(await typeDash(), ['$0 %}'], 'the tag gets its %}');
-    assert.deepStrictEqual(await typeDash(doc => doc.setText('<h1>x</h1>\n{%-}')), ['$0 %}'], 'an edit on another line meanwhile does not stop it');
-    assert.deepStrictEqual(await typeDash(doc => doc.setText('<p>x</p>\n{%- %}')), [], 'a %} added meanwhile by something else is not doubled');
-    assert.deepStrictEqual(await typeDash((doc, editor) => {
-        doc.setText('<p>x</p>\n{%-a}');
-        editor.selection = { active: new Position(1, 4) };
-    }), [], 'another keystroke came first');
-    assert.deepStrictEqual(await typeDash(doc => doc.setText('{%-}')), [], 'the line it was on is gone');
+function fakeEditor(doc, line, col, answers = []) {
+    const editor = {
+        document: doc,
+        selections: [{}],
+        selection: { active: new Position(line, col), isEmpty: true },
+        calls: [],
+        insertSnippet: async (snippet, where) => { editor.calls.push(['snippet', snippet.value, at(where)]); return answers.length ? answers.shift() : true; },
+        edit: async build => { build({ delete: range => editor.calls.push(['delete', at(range)]) }); return answers.length ? answers.shift() : true; }
+    };
+    stub.vscode.window.activeTextEditor = editor;
+    return editor;
+}
+const typedChar = (doc, char, line, col) => ({ document: doc, contentChanges: [{ text: char, range: { start: new Position(line, col) } }] });
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test.afterEach(() => { stub.vscode.window.activeTextEditor = undefined; });
+
+test('a block tag’s end tag is added once typing settles, to the line as it is then', async () => {
+    // The space after "for" is what asked, and the typist is well past it.
+    const doc = editableDocument('{%- for i in items %}');
+    const editor = fakeEditor(doc, 0, 18);
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    assert.deepStrictEqual(editor.calls, [['snippet', '$1 %}$0{%- endfor %}', '0:18-0:21']]);
+});
+
+test('keys still arriving put the wait off, and it is done once', async () => {
+    const doc = editableDocument('{%- for i in items %}');
+    const editor = fakeEditor(doc, 0, 18);
+    const asking = [authoring.closeAsYouType(typedChar(doc, ' ', 0, 7))];
+    for (const [char, col] of [['i', 8], [' ', 9], ['i', 10]]) {
+        await sleep(10);
+        asking.push(authoring.closeAsYouType(typedChar(doc, char, 0, col)));
+    }
+    await Promise.all(asking);
+    assert.strictEqual(editor.calls.length, 1);
+});
+
+test('a tag typed closed by hand loses the pair’s duplicate', async () => {
+    const doc = editableDocument('{%- else %} %}');
+    const editor = fakeEditor(doc, 0, 11);
+    await authoring.closeAsYouType(typedChar(doc, '}', 0, 10));
+    assert.deepStrictEqual(editor.calls, [['delete', '0:11-0:14']]);
+});
+
+test('nothing is done where the cursor has gone elsewhere, or the line is not as it was', async () => {
+    let doc = editableDocument('{%- for i in items %}\n');
+    let editor = fakeEditor(doc, 1, 0);
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    assert.deepStrictEqual(editor.calls, [], 'the cursor is on another line');
+
+    doc = editableDocument('{%- for i in items %}');
+    editor = fakeEditor(doc, 0, 20);
+    const asking = authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    doc.setText('{%- while i in items %}'); // Before typing settles.
+    await asking;
+    assert.deepStrictEqual(editor.calls, [], 'the line says something else now');
+
+    doc = editableDocument('{%- for i in items %}');
+    editor = fakeEditor(doc, 0, 18);
+    editor.selection.isEmpty = false;
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    assert.deepStrictEqual(editor.calls, [], 'something is selected');
+});
+
+test('an edit the editor turns down is tried again against the line as it is', async () => {
+    const doc = editableDocument('{%- for i in items %}');
+    const editor = fakeEditor(doc, 0, 18, [false, true]);
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    assert.strictEqual(editor.calls.length, 2);
+    assert.deepStrictEqual(editor.calls[1], editor.calls[0]);
+});
+
+test('edits turned down while keys keep coming don’t use up the tries', async t => {
+    // Fast typing: each attempt lands as another key changes the line, and is turned down.
+    // Only attempts with no key in between count towards giving up.
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+    const doc = editableDocument('{%- for i in items %}');
+    const editor = fakeEditor(doc, 0, 18, [false, false, false, false, false, false, true]);
+    authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    for (let i = 0; i < 3; i++) { t.mock.timers.tick(authoring.SETTLE_MS); await flush(); }
+    authoring.closeAsYouType(typedChar(doc, 'i', 0, 8)); // A key arrives: the count starts again.
+    for (let i = 0; i < 4; i++) { t.mock.timers.tick(authoring.SETTLE_MS); await flush(); }
+    assert.strictEqual(editor.calls.length, 7, 'still trying, and done on the seventh');
+});
+
+test('a line that isn’t ready is waited for, and done when typing goes on', async () => {
+    // The editor has paired the quote, and the cursor is between the pair.
+    const doc = editableDocument('{%- optional "" %}');
+    const editor = fakeEditor(doc, 0, 14);
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 12));
+    assert.deepStrictEqual(editor.calls, [], 'not ready');
+    // The name goes in and the quote is typed over.
+    doc.setText('{%- optional "x" %}');
+    editor.selection.active = new Position(0, 16);
+    await authoring.closeAsYouType(typedChar(doc, '"', 0, 15));
+    assert.deepStrictEqual(editor.calls, [['snippet', '$1 %}\n\t$0\n{%- endoptional %}', '0:16-0:19']]);
+});
+
+test('an element’s closing tag goes where the cursor is, after text but not after more tags', async () => {
+    let doc = editableDocument('<section class="{{ c }}">');
+    let editor = fakeEditor(doc, 0, 25);
+    await authoring.closeAsYouType(typedChar(doc, '>', 0, 24));
+    assert.deepStrictEqual(editor.calls, [['snippet', '$0</section>', '0:25']]);
+
+    doc = editableDocument('<p>hello');
+    editor = fakeEditor(doc, 0, 8);
+    await authoring.closeAsYouType(typedChar(doc, '>', 0, 2));
+    assert.deepStrictEqual(editor.calls, [['snippet', '$0</p>', '0:8']], 'after text');
+
+    doc = editableDocument('<div><p');
+    editor = fakeEditor(doc, 0, 7);
+    await authoring.closeAsYouType(typedChar(doc, '>', 0, 4));
+    assert.deepStrictEqual(editor.calls, [], 'after another tag it would be wrong');
+
+    doc = editableDocument('<br>');
+    editor = fakeEditor(doc, 0, 4);
+    await authoring.closeAsYouType(typedChar(doc, '>', 0, 3));
+    assert.deepStrictEqual(editor.calls, [], '<br> has no end tag');
+});
+
+test('nothing is done with auto-closing off, or in another language', async () => {
+    stub.settings.set('reporterLiquidPreview.autoClose', false);
+    let doc = editableDocument('{%- for i in items %}');
+    let editor = fakeEditor(doc, 0, 18);
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    assert.deepStrictEqual(editor.calls, []);
+
+    stub.settings.delete('reporterLiquidPreview.autoClose');
+    doc = Object.assign(editableDocument('{%- for i in items %}'), { languageId: 'html' });
+    editor = fakeEditor(doc, 0, 18);
+    await authoring.closeAsYouType(typedChar(doc, ' ', 0, 7));
+    assert.deepStrictEqual(editor.calls, []);
 });
 
 // ---- the grammar ---------------------------------------------------------------------------

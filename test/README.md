@@ -110,15 +110,20 @@ files are separate processes, so state never leaks across a file.
   can't see doesn't count, a lost space between words does.
 - **`authoring.test.js`** — writing templates: completions (every filter and
   tag the engine has is described; tags bring end tags; data fields by path,
-  through loops and assigns; `fields.` names from Reporter's tags); typing,
-  simulated key by key with the editor's own brace pairing: `{%-` gets its
-  `%}`, typing `%}` types over it, starting a block tag adds its end tag with
-  Tab going between them, `>` closes an
-  element, and the cursor is read only once the editor has moved it; the
-  providers as VS Code calls them (data from tests and previews, Format
-  Document's edit and its refusal); and the
-  grammar, tokenised with vscode-textmate against a stand-in HTML grammar:
-  Liquid in attributes is coloured, in comments it isn't.
+  through loops and assigns; `fields.` names from Reporter's tags; end tags and
+  what goes inside a block ranked by where the cursor is, a block closed below
+  told from one that isn't, comments and raw blocks ended); typing, simulated
+  key by key the way VS Code pairs it (`{` with `}`, `{%` with ` %}`, `{{` with
+  ` }}`, quotes), with the extension settling after every key and after the
+  last only, which must agree; what settling does (the extra `%}`, a block's end
+  tag, waiting for a line that isn't ready); the editor-side handler against a
+  fake editor (keys still arriving, an edit turned down, the cursor elsewhere,
+  HTML closing tags); the providers as VS Code calls them (data from tests and
+  previews, Format Document's edit and its refusal); and the grammar, tokenised
+  with vscode-textmate against a stand-in HTML grammar.
+- **`real-editor/`** — not run by `npm test`: types into a real VS Code
+  (code-server) at several speeds. See its README. The unit tests can't show
+  what typing speed does to an extension.
 - **`unbalanced-html.test.js`** — output with a stray closing tag, loaded as
   a whole page in jsdom as a browser would: the rest of the document stays in
   the preview's container and its section, first load matches an edit, the

@@ -12,6 +12,15 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [Unreleased]
+
+### Fixed
+- Typing `{%- else` (or any tag) quickly left `{%- else}`, with no ` %`. The extension added the closing ` %}` after a short wait and gave up if you had typed anything more in that time, which at normal typing speed you almost always had: 1.13.0 made this worse, by also giving up on any further keystroke. Tags now open with VS Code's own auto-closing (`{%` gives `{% %}`, `{{` gives `{{ }}`), which happens as you type, at any speed. What the extension still does, it does once you stop typing and from the line as it is then, not from the keystroke that asked: removing the extra `%}` left by typing one yourself, adding a block tag's end tag, and adding an HTML element's closing tag. A tag typed before other text on the line now opens too (`<` joins the characters VS Code closes before).
+- A block tag whose line was mid-typing, such as `{%- optional "x"` with the quote just paired, could miss its end tag. It now waits and tries again.
+
+### Added
+- `test/real-editor`: a check that types into a real VS Code (code-server) at several speeds, run by hand. The unit tests can't show what typing speed does.
+
 ## [1.13.0] - 2026-10-07
 
 ### Added

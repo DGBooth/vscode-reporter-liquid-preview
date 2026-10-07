@@ -122,7 +122,7 @@
                 "reporterLiquidPreview.autoClose": {
                     "type": "boolean",
                     "default": true,
-                    "description": "In .liquid files: typing {%- adds the tag's %} (typing %} yourself types over it), starting a block tag adds its end tag (Tab goes between them), and typing an HTML tag's > adds its closing tag."
+                    "description": "In .liquid files: starting a block tag adds its end tag (Tab goes between them), typing a tag's %} yourself removes the extra one VS Code had added, and typing an HTML tag's > adds its closing tag. Opening a tag ({% or {{ gives its closer) is VS Code's own editor.autoClosingBrackets."
                 },
                 "reporterLiquidPreview.format.printWidth": {
                     "type": "integer",
