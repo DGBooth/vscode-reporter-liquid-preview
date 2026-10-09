@@ -170,56 +170,135 @@ function toRange(r) {
 
 // ---- as you type ----------------------------------------------------------------------
 
-// After a single keystroke in the active template: a tag's `%}` after `{%-`,
-// typing over it, the end tag after a block tag's `%}` (see
-// editing.afterTyping), and an HTML element's closing tag after its `>` (or
-// after `</`).
-async function closeAsYouType(event) {
+// Opening a tag is VS Code's own (the language configuration's auto-closing
+// pairs); see editing.js. What's left is cleaning up a tag typed closed by
+// hand, adding a block tag's end tag, and an HTML element's closing tag.
+//
+// Each is worked out once typing has settled, from the line as it is then, not
+// from the keystroke that asked: a fast typist is several characters on by
+// the time anything the extension does could run, and waiting for the line to
+// be as it was left it to never act at all.
+const SETTLE_MS = 30;
+const TRIES = 4;
+// How long an intent that isn't ready (the line mid-typing) is kept for.
+const PATIENCE_MS = 5000;
+
+// What each open document is waiting to do: { intents, line, before, html,
+// timer, waiters, tries, expires }.
+const pending = new Map();
+
+// Called on every change to a document. Returns a promise for when typing has
+// settled and been dealt with, which nothing in the editor waits for; the tests do.
+function closeAsYouType(event) {
+    const document = event.document;
+    const key = document.uri.toString();
+    let entry = pending.get(key);
+    const wait = () => entry ? new Promise(resolve => entry.waiters.push(resolve)) : Promise.resolve();
+    // Anything typed means typing has not settled, and an edit turned down
+    // because of it says nothing about the next: only turned down with no keys
+    // in between is a conflict worth giving up on.
+    if (entry) { entry.tries = 0; restart(entry, key); }
+
     const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document !== event.document || event.document.languageId !== 'liquid') return;
-    if (!vscode.workspace.getConfiguration('reporterLiquidPreview').get('autoClose', true)) return;
+    if (!editor || editor.document !== document || document.languageId !== 'liquid') return wait();
+    if (!vscode.workspace.getConfiguration('reporterLiquidPreview').get('autoClose', true)) return wait();
     // Not on undo or redo, which would otherwise put back what was undone.
-    if (vscode.TextDocumentChangeReason && event.reason) return;
-    if (event.contentChanges.length !== 1) return;
+    if ((vscode.TextDocumentChangeReason && event.reason) || event.contentChanges.length !== 1) return wait();
     const change = event.contentChanges[0];
     const typed = change.text;
-    if (typed.length !== 1) return;
-    const cursor = change.range.start.translate(0, 1);
-    const lineNow = () => {
-        try {
-            const text = event.document.lineAt(cursor.line).text;
-            return typeof text === 'string' ? text : null;
-        } catch (err) {
-            return null; // The line is gone.
-        }
-    };
-    // The editor moves its cursor after telling of the change, so look once
-    // it has (as VS Code's own HTML tag closing does). What was typed is what
-    // the line says before the cursor now; if that is still so, the keystroke
-    // is the last thing that happened there, whatever else changed elsewhere in
-    // the meantime (another extension's edit, say: stopping for any change in
-    // the document at all would leave the editor's own `}` and nothing more).
-    const before = (lineNow() || '').slice(0, cursor.character);
-    await new Promise(resolve => setTimeout(resolve, 10));
-    if (vscode.window.activeTextEditor !== editor) return;
-    if (editor.selections.length !== 1 || !editor.selection.active.isEqual(cursor)) return;
-    const line = lineNow();
-    // Typed over, or something else typed first.
-    if (line === null || line.slice(0, cursor.character) !== before) return;
+    if (typed.length !== 1) return wait();
 
-    // What follows the cursor is read now, so anything another extension has
-    // added since (a `%}` of its own) is seen and not doubled.
-    const edit = editing.afterTyping(before, line.slice(cursor.character), typed, event.document.getText());
+    // A single character typed leaves the cursor just after it, and the line
+    // up to there is what the keystroke saw.
+    const line = change.range.start.line;
+    const col = change.range.start.character + 1;
+    let text;
+    try { text = document.lineAt(line).text; } catch (err) { return wait(); }
+    const before = text.slice(0, col);
+    const intents = editing.intentsOf(before, typed);
+    const html = typed === '>' || typed === '/';
+    if (!intents.length && !html) return wait();
+
+    if (!entry) {
+        entry = { waiters: [], tries: 0, intents: new Set(), line };
+        pending.set(key, entry);
+    }
+    // One thing at a time, on one line: a keystroke on another line starts over.
+    if (entry.line !== line) { entry.intents = new Set(); entry.html = null; entry.line = line; }
+    entry.before = before;
+    entry.expires = Date.now() + PATIENCE_MS;
+    for (const intent of intents) entry.intents.add(intent);
+    if (html) entry.html = { col, typed };
+    restart(entry, key);
+    return wait();
+}
+
+function restart(entry, key) {
+    clearTimeout(entry.timer);
+    entry.timer = setTimeout(() => settle(entry, key), SETTLE_MS);
+}
+
+// Done with this entry, or just with this pass: whoever waited can go on.
+function release(entry) {
+    const waiters = entry.waiters.splice(0);
+    for (const resolve of waiters) resolve();
+}
+
+function finish(entry, key) {
+    clearTimeout(entry.timer);
+    pending.delete(key);
+    release(entry);
+}
+
+// Typing has stopped: do what it asked, on the line as it is.
+async function settle(entry, key) {
+    try {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || editor.document.uri.toString() !== key) return finish(entry, key);
+        const document = editor.document;
+        const cursor = editor.selection.active;
+        // Only where the cursor still is on the line it was typed on, past what was typed.
+        if (editor.selections.length !== 1 || !editor.selection.isEmpty || cursor.line !== entry.line) return finish(entry, key);
+        let text;
+        try { text = document.lineAt(cursor.line).text; } catch (err) { return finish(entry, key); }
+        if (!text.startsWith(entry.before) || cursor.character < entry.before.length) return finish(entry, key);
+
+        const applied = await apply(editor, document, entry, text, cursor);
+        // Not ready (the editor has paired a quote the cursor hasn't typed over
+        // yet, say): keep the intent, with no timer, for the next keystroke to
+        // wake, for a while.
+        if (applied === 'wait' && Date.now() < entry.expires) return release(entry);
+        // An edit the editor turned down (something else changed the document
+        // between): look again at how the line is now, a few times.
+        if (applied === false && ++entry.tries < TRIES) return restart(entry, key);
+    } catch (err) {
+        // Nothing here is worth interrupting typing for.
+    }
+    finish(entry, key);
+}
+
+// Returns false if an edit was turned down, 'wait' if the line isn't ready,
+// true or undefined otherwise.
+async function apply(editor, document, entry, text, cursor) {
+    const before = text.slice(0, cursor.character);
+    const after = text.slice(cursor.character);
+    const edit = editing.settleEdit(before, after, document.getText(), [...entry.intents]);
+    if (edit && edit.wait) return 'wait';
     if (edit) {
-        const range = new vscode.Range(cursor.line, edit.start, cursor.line, edit.end);
-        await editor.insertSnippet(new vscode.SnippetString(edit.snippet), range, { undoStopBefore: false, undoStopAfter: false });
-        return;
+        const range = new vscode.Range(cursor.line, cursor.character, cursor.line, cursor.character + edit.replace);
+        if (!edit.snippet) return editor.edit(builder => builder.delete(range), { undoStopBefore: false, undoStopAfter: false });
+        return editor.insertSnippet(new vscode.SnippetString(edit.snippet), range, { undoStopBefore: false, undoStopAfter: false });
     }
-    if (typed === '>' || typed === '/') {
-        const { service, doc, parsed } = htmlDocumentFor(event.document);
-        const close = service.doTagComplete(doc, { line: cursor.line, character: cursor.character }, parsed);
-        if (close) await editor.insertSnippet(new vscode.SnippetString(close), cursor, { undoStopBefore: false, undoStopAfter: false });
+    if (entry.html) {
+        // The closing tag goes where the cursor is now, if what's been typed
+        // since is text: `<div>hello│</div>`. After more tags it would be wrong.
+        const tail = before.slice(entry.html.col);
+        if (entry.html.typed === '/' ? tail : /[<>]/.test(tail)) return undefined;
+        const { service, doc, parsed } = htmlDocumentFor(document);
+        const close = service.doTagComplete(doc, { line: cursor.line, character: entry.html.col }, parsed);
+        if (close) return editor.insertSnippet(new vscode.SnippetString(close), cursor, { undoStopBefore: false, undoStopAfter: false });
     }
+    return undefined;
 }
 
 // ---- Shopify Liquid -------------------------------------------------------------------
@@ -239,4 +318,4 @@ async function offerToSwitchFromShopify(context) {
     if (choice === 'Show Shopify Liquid') await vscode.commands.executeCommand('extension.open', SHOPIFY_LIQUID);
 }
 
-module.exports = { registerAuthoring, datasetsFor, formatDocument, completeAt, closeAsYouType, offerToSwitchFromShopify };
+module.exports = { registerAuthoring, datasetsFor, formatDocument, completeAt, closeAsYouType, offerToSwitchFromShopify, SETTLE_MS };

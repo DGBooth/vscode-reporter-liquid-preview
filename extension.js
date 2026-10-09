@@ -4,6 +4,7 @@ const liquid = require('liquidjs');
 const templateTests = require('./template-tests');
 const updates = require('./updates');
 const { registerAuthoring } = require('./authoring');
+const dataFiles = require('./data-files');
 const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck, relocateCheck } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
@@ -1535,21 +1536,77 @@ function getDocumentPreviews(previewContentProvider, document) {
 }
 
 async function updatePreviewDataFile(preview) {
-    let jsonUris = await vscode.workspace.findFiles('**/*.json');
-    let jsonPickItems = jsonUris.map(jsonUri => {
-        return {
-            label: jsonUri.fsPath && path.basename(jsonUri.fsPath),
-            description: jsonUri.fsPath,
-            value: jsonUri.fsPath
-        };
-    });
-    let pickedItem = await vscode.window.showQuickPick(jsonPickItems, {
-        canPickMany: false,
-        placeHolder: 'Choose a file to use as fake data for your template.'
-    });
-    if (pickedItem) {
-        preview.dataUri = pickedItem.value;
+    const picked = await pickDataFiles(preview.templateUri, { placeHolder: 'Choose a file to use as fake data for your template.' });
+    if (picked) {
+        preview.dataUri = picked.value;
         preview.dataDirty = true;
+    }
+}
+
+// The data files that can be offered for a template: every .json in the
+// workspace that could be data, narrowed by the dataFolders setting (where
+// data lives) and, for a template with a dataLinks entry, the files that entry
+// names. { all, linked, ... } with each file as { fsPath, rel }, rel being its
+// path from its workspace folder.
+async function findDataFiles(templateFile) {
+    const settings = vscode.workspace.getConfiguration('reporterLiquidPreview');
+    const folders = settings.get('dataFolders', []);
+    const links = settings.get('dataLinks', []);
+    const relative = file => slashes(vscode.workspace.asRelativePath ? vscode.workspace.asRelativePath(file, false) : file);
+    const uris = await vscode.workspace.findFiles('**/*.json', '**/node_modules/**');
+    const files = uris.map(u => ({ fsPath: u.fsPath, rel: relative(u.fsPath) })).sort((a, b) => a.rel.localeCompare(b.rel));
+    const found = dataFiles.dataFor(relative(templateFile), files.map(f => f.rel), { folders, links });
+    const byRel = new Map(files.map(f => [f.rel, f]));
+    return {
+        all: found.all.map(rel => byRel.get(rel)),
+        linked: found.linked.map(rel => byRel.get(rel)),
+        linkPatterns: found.linkPatterns,
+        folders: dataFiles.strings(folders)
+    };
+}
+
+function slashes(file) {
+    return String(file).replace(/\\/g, '/');
+}
+
+// Pick data for `templateFile`: { label, description, value } for one file, or
+// the picks for several with `many`. A template that has a dataLinks entry is
+// offered the files it names, and a way to see all of them: a pattern that's a
+// letter out would otherwise hide the file you want with nothing to say why.
+async function pickDataFiles(templateFile, { many = false, placeHolder, nothing = 'No .json data files found in the workspace.' } = {}) {
+    const found = await findDataFiles(templateFile);
+    if (!found.all.length) {
+        if (!found.folders.length) {
+            vscode.window.showWarningMessage(nothing);
+            return null;
+        }
+        const choice = await vscode.window.showWarningMessage(
+            `No .json data files found in the folders set in reporterLiquidPreview.dataFolders (${found.folders.join(', ')}). Check the setting.`,
+            'Open setting'
+        );
+        if (choice === 'Open setting') await vscode.commands.executeCommand('workbench.action.openSettings', 'reporterLiquidPreview.dataFolders');
+        return null;
+    }
+    const item = (file, picked) => ({ label: path.basename(file.fsPath), description: file.rel, value: file.fsPath, picked });
+    const name = path.basename(templateFile || '');
+    let showAll = !found.linked.length;
+    let carried = new Set();
+    for (;;) {
+        const items = (showAll ? found.all : found.linked).map(f => item(f, carried.has(f.fsPath)));
+        if (!showAll) items.push({ label: `$(list-flat) Show all ${found.all.length} data files\u2026`, description: 'not just those linked to this template', alwaysShow: true, showAll: true });
+        const hint = showAll && found.linkPatterns.length && !found.linked.length
+            ? `No file matches the dataLinks for ${name} (${found.linkPatterns.join(', ')}), so all are shown. ${placeHolder || ''}`
+            : !showAll ? `Data files linked to ${name} (${found.linkPatterns.join(', ')}). ${placeHolder || ''}` : placeHolder;
+        const picked = await vscode.window.showQuickPick(items, { canPickMany: many, placeHolder: hint });
+        if (!picked) return null;
+        const chosen = many ? picked : [picked];
+        if (chosen.some(p => p.showAll)) {
+            // Look again at every file, with what was already ticked still ticked.
+            showAll = true;
+            carried = new Set(chosen.filter(p => !p.showAll).map(p => p.value));
+            continue;
+        }
+        return many ? chosen : chosen[0];
     }
 }
 
@@ -2331,18 +2388,10 @@ async function createTestsFromDataFiles(uri) {
     }
 
     const suiteFile = templateTests.defaultSuiteFile(templateFile);
-    const jsonFiles = (await vscode.workspace.findFiles('**/*.json', '**/node_modules/**'))
-        .map(u => u.fsPath)
-        .filter(f => !f.endsWith('.liquidtest.json') && !/(^|[\\/])(package|package-lock|tsconfig|jsconfig)\.json$/.test(f))
-        .sort();
-    if (jsonFiles.length === 0) {
-        vscode.window.showWarningMessage('No .json data files found in the workspace.');
-        return null;
-    }
-    const picked = await vscode.window.showQuickPick(
-        jsonFiles.map(f => ({ label: path.basename(f), description: relativePath(f), value: f })),
-        { canPickMany: true, placeHolder: `Choose the data files whose output from ${path.basename(templateFile)} you know is right — one test case each` }
-    );
+    const picked = await pickDataFiles(templateFile, {
+        many: true,
+        placeHolder: `Choose the data files whose output from ${path.basename(templateFile)} you know is right \u2014 one test case each`
+    });
     if (!picked || picked.length === 0) return null;
 
     const sources = picked.map(p => ({ name: path.basename(p.value, path.extname(p.value)), dataFile: p.value }));
@@ -2530,6 +2579,8 @@ Object.assign(module.exports, {
     editTestInBuilder,
     builtTestsFor,
     listBuiltTests,
+    findDataFiles,
+    pickDataFiles,
     showTestReport,
     snippetOf,
     strayTagDiagnostics,

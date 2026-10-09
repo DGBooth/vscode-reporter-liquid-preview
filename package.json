@@ -2,7 +2,7 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Preview, edit, format and test Reporter Liquid templates",
-    "version": "1.13.0",
+    "version": "1.14.0",
     "publisher": "DGBooth",
     "license": "MIT",
     "engines": {
@@ -119,10 +119,40 @@
                     "default": true,
                     "description": "Once a day, when the extension starts, check GitHub for a newer release and offer to install it. \"Reporter Liquid: Check for Updates\" checks on demand either way."
                 },
+                "reporterLiquidPreview.dataFolders": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "default": [],
+                    "description": "Where data files (the .json crawl results) are kept, so other .json files aren't offered. Folders or globs, from the workspace folder: crawl-results, data/**/crawl-*.json. Empty looks everywhere.",
+                    "markdownDescription": "Where data files (the `.json` crawl results) are kept, so other `.json` files aren't offered when you pick data for a preview or create tests. Folders or globs, from the workspace folder: `crawl-results`, `**/crawls`, `data/**/crawl-*.json`. A folder name is that folder at the workspace folder; `**/` goes to any depth. Empty looks everywhere."
+                },
+                "reporterLiquidPreview.dataLinks": {
+                    "type": "array",
+                    "default": [],
+                    "items": {
+                        "type": "object",
+                        "required": ["template", "data"],
+                        "properties": {
+                            "template": {
+                                "type": "string",
+                                "description": "The template, by name or glob: non-advised-letter.liquid, letters/*.liquid. A name on its own matches in any folder."
+                            },
+                            "data": {
+                                "description": "The data files it's used with, by name or glob, or a list of them: NAL-*.json.",
+                                "oneOf": [
+                                    { "type": "string" },
+                                    { "type": "array", "items": { "type": "string" } }
+                                ]
+                            }
+                        }
+                    },
+                    "description": "Which data files go with which template. A template listed here is offered only those data files (with a way to see them all) when you pick data for a preview or create tests.",
+                    "markdownDescription": "Which data files go with which template. A template listed here is offered only those data files, with a way to see all of them, when you pick data for a preview or create tests.\n\n```json\n[{ \"template\": \"non-advised-letter.liquid\", \"data\": \"NAL-*.json\" }]\n```\n\nPatterns are globs on the path from the workspace folder, capitals not mattering. A name on its own (`NAL-*.json`) matches in any folder; one with a `/` starts at the workspace folder."
+                },
                 "reporterLiquidPreview.autoClose": {
                     "type": "boolean",
                     "default": true,
-                    "description": "In .liquid files: typing {%- adds the tag's %} (typing %} yourself types over it), starting a block tag adds its end tag (Tab goes between them), and typing an HTML tag's > adds its closing tag."
+                    "description": "In .liquid files: starting a block tag adds its end tag (Tab goes between them), typing a tag's %} yourself removes the extra one VS Code had added, and typing an HTML tag's > adds its closing tag. Opening a tag ({% or {{ gives its closer) is VS Code's own editor.autoClosingBrackets."
                 },
                 "reporterLiquidPreview.format.printWidth": {
                     "type": "integer",

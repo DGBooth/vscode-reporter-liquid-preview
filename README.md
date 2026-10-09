@@ -13,7 +13,7 @@ Everything for writing and checking Reporter's Liquid templates in VS Code:
 Install the `.vsix` from the [latest release](https://github.com/DGBooth/vscode-reporter-liquid-preview/releases/latest) with **Extensions: Install from VSIX…**. It updates itself from then on (see [Updates](#updates)). If you have Shopify Liquid installed, disable it for Reporter templates: this extension does its job, and the two would compete.
 
 1. Open a `.liquid` file.
-2. Press `ctrl+k h` for the HTML preview, and pick a `.json` data file when asked. (`ctrl+k v` gives a plain-text preview, and `ctrl+k f` the Document Options view, which needs no data.)
+2. Press `ctrl+k h` for the HTML preview, and pick a `.json` data file when asked (to narrow that list to your crawl results, see [Data files](#data-files)). (`ctrl+k v` gives a plain-text preview, and `ctrl+k f` the Document Options view, which needs no data.)
 3. Edit the template or the data: the preview updates as you type.
 4. To keep a render you've checked, press **Create test…** in the HTML preview and click the parts that matter. Run **Reporter Liquid: Run Template Tests** whenever you change the template.
 
@@ -79,6 +79,37 @@ A toolbar pinned to the top of the viewport offers:
 
 - **Show author notes** — untick to hide the `{% comment %}` boxes (and their legend entry) when the notes are only relevant to template developers. Only shown when the template contains notes.
 - **Show HTML source** — swaps the view for a complete, standalone HTML document ready to publish elsewhere (e.g. paste into SharePoint or save as an `.html` file). The preview's styles and the contents of any external CSS the preview loads are inlined, so the document works entirely on its own; the toggle controls themselves are excluded. Click the code once to select all of it for copying.
+
+### Data files
+
+A preview, and **Create Tests from Data Files…**, ask which `.json` file is the data. In a repository with a lot of `.json`, most of what's offered isn't crawl results, so two settings narrow the list. Neither is needed: with neither set, every `.json` that could be data is offered, as before. `package.json`, `tsconfig.json`, test suites (`*.liquidtest.json`), `node_modules` and `.vscode` are never offered.
+
+**Where data lives**, `reporterLiquidPreview.dataFolders`: a list of folders or globs, from the workspace folder.
+
+```json
+{
+  "reporterLiquidPreview.dataFolders": ["crawl-results", "samples/**/crawl-*.json"]
+}
+```
+
+A folder is everything in it, at that path from the workspace folder; `**/crawl-results` finds it at any depth. Anything ending `.json` is a glob for files. Nothing outside these is offered. If they match nothing, you're told, with a link to the setting.
+
+**Which data goes with which template**, `reporterLiquidPreview.dataLinks`: a list of templates and the data files they're used with.
+
+```json
+{
+  "reporterLiquidPreview.dataLinks": [
+    { "template": "non-advised-letter.liquid", "data": "NAL-*.json" },
+    { "template": "letters/*.liquid", "data": ["AL-*.json", "NAS-*.json"] }
+  ]
+}
+```
+
+A template with a link is offered only the data files it names, and a last entry, **Show all data files…**, for when you want something else. That way a pattern that's a letter out can't hide the file you want with nothing to say why. A template matched by several entries is offered all of them. A template with no link, or whose link matches no file (the pick says so), is offered everything the folders allow. Linked files are always among those the folders allow.
+
+Patterns are globs on a path from the workspace folder, using `/` whatever the system, and capitals don't matter: `*` is anything but a `/`, `**` anything including one, `?` one character, `{a,b}` either. **A pattern with no `/` is a name and matches in any folder**: `NAL-*.json` is every file so named, wherever it is, and `non-advised-letter.liquid` is that template wherever it is. One with a `/` starts at the workspace folder.
+
+To share these with the people you work with, put them in the repository's `.vscode/settings.json`, so everyone has them. Both can also be set in your own user settings.
 
 ### CSS Loading
 
@@ -161,7 +192,7 @@ While a template does not parse, the preview keeps showing the last version that
   - Field names from the data the template is used with: the data file of each HTML preview open on it, and the data of each test case for it. `{{ customer.` offers `name` and `address`. In `{% for item in items %}`, `item.` offers the fields of the list's items; `forloop.` its position.
   - `fields.` offers the names this template's `editor`, `optional` and `choice` tags give their fields. After `{% editor "name", ` you're offered the tag's options.
 - **HTML completions** outside Liquid: tags, attributes and their values, as in an `.html` file.
-- **Closing as you type**: typing `{%-` (or `{% `) adds the tag's ` %}` after the cursor. Starting a block tag (`{%- if `) adds its end tag at once, unless the template already closes it: type the condition, then press Tab to go between the tags. For `optional`, `editor` and `choice` that's the indented line between them. Typing the `%}` yourself types over the one already there rather than doubling it, so you still get one `%}` and one end tag; the cursor then stays on the tag's line, with the content line already below it. Typing an element's `>` adds its closing tag. Turn all of this off with `reporterLiquidPreview.autoClose`.
+- **Closing as you type**: VS Code closes a tag as you open it, so `{%-` gives `{%- %}` and `{{` gives `{{ }}` (it's VS Code's own auto-closing, the `editor.autoClosingBrackets` setting, so it works at any typing speed). Typing the closing `%}` yourself works too: the extra one VS Code added is removed a moment after you stop typing. Starting a block tag (`{%- if `) adds its end tag then, unless the template already closes it: type the condition, then press Tab to go between the tags. For `optional`, `editor` and `choice` that's the indented line between them. Typing an element's `>` adds its closing tag. `reporterLiquidPreview.autoClose` turns off what the extension adds: end tags, removing the extra `%}`, and closing HTML tags. Backspace right after `{%` removes only the `%`, as VS Code does with a pair of several characters.
 - **Indentation**: Enter after an opening tag or block tag indents; a closing tag or `{%- end… %}` lines up with what it closes.
 - **Format Document** (`Shift+Alt+F`) lays out the whole template: HTML, Liquid and Reporter's tags indented by nesting, `<style>` and `<script>` tidied. It uses Shopify's Liquid formatter for Prettier, taught Reporter's tags. Double quotes are kept, and a Liquid tag on its own line gets the house `{%-`, so the layout's line breaks don't reach the page.
   - **It checks it hasn't changed the page.** Before applying anything, it renders the template before and after formatting with every set of data the template is used with (its previews' and its tests'), and with no data. If the page would show anything differently, it leaves the template alone and says where. Whitespace a reader can't see, such as between blocks, doesn't count. A missing space between words does. Where `{%-` would remove a space the page needs (`<span>a</span> {% if x %}<span>b</span>`), that tag keeps its space.
@@ -298,7 +329,7 @@ See [`examples/template-tests`](examples/template-tests) for a working suite.
 Tests that only run when someone remembers to open the editor get skipped. `liquid-test` runs the same suites from the command line, through the same engine and the same checks as the editor, so a case passes in CI exactly when it passes in VS Code. The only difference: the editor includes unsaved edits, and `liquid-test` reads files as saved on disk.
 
 ```
-npx github:DGBooth/vscode-reporter-liquid-preview#v1.13.0 [options] [paths...]
+npx github:DGBooth/vscode-reporter-liquid-preview#v1.14.0 [options] [paths...]
 ```
 
 With no paths it searches the current folder recursively for `*.liquidtest.json`, skipping `node_modules` and hidden folders. It needs Node 20 or newer.
@@ -318,7 +349,7 @@ In a GitHub Actions workflow in your templates repository:
 - uses: actions/setup-node@v4
   with:
     node-version: 22
-- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.13.0 --report liquid-test-report.html --junit liquid-tests.xml
+- run: npx --yes github:DGBooth/vscode-reporter-liquid-preview#v1.14.0 --report liquid-test-report.html --junit liquid-tests.xml
 - uses: actions/upload-artifact@v4
   if: always()
   with:
@@ -332,6 +363,8 @@ Pin the tag to the version of the extension you have installed (see [Releases](h
 
 | Setting | Default | |
 |---------|---------|--|
+| `reporterLiquidPreview.dataFolders` | none | Where data files are kept: the only places [data files](#data-files) are looked for. |
+| `reporterLiquidPreview.dataLinks` | none | Which data files go with which template, by name. |
 | `reporterLiquidPreview.autoClose` | on | Closing as you type in `.liquid` files: the `%}` after `{%-`, block end tags, HTML closing tags. |
 | `reporterLiquidPreview.format.printWidth` | 120 | Where Format Document wraps lines. |
 | `reporterLiquidPreview.checkForUpdates` | on | The daily check for a new release. |
@@ -369,6 +402,7 @@ use them.
 | `editing.js` | Completions and closing as you type. |
 | `authoring.js` | Both of those as VS Code providers, and the HTML language service. |
 | `syntaxes/`, `language-configuration.json` | Colouring, brackets and indentation for `.liquid` files. |
+| `data-files.js` | Which `.json` files are offered as data: the `dataFolders` and `dataLinks` matching. |
 | `updates.js` | Checking for and verifying a new release. |
 | `bin/liquid-test.js` | The command-line runner. `npm run test:templates` runs it on the example suite. |
 

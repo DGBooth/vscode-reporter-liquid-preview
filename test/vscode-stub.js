@@ -255,9 +255,9 @@ const vscode = {
         showInformationMessage: message => { shownMessages.push(message); return Promise.resolve(infoAnswers.shift()); },
         showWarningMessage: message => { shownMessages.push(message); return Promise.resolve(warningAnswers.shift()); },
         withProgress: (options, task) => task({ report() { } }, { isCancellationRequested: false }),
-        showQuickPick: async items => {
+        showQuickPick: async (items, options) => {
             const answer = quickPickAnswers.shift();
-            return typeof answer === 'function' ? answer(await items) : answer;
+            return typeof answer === 'function' ? answer(await items, options) : answer;
         },
         showInputBox: async () => inputBoxAnswers.shift(),
         showTextDocument: async (document, options) => {

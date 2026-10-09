@@ -425,71 +425,83 @@ function reporterFields(text) {
 }
 
 // ---- as you type -------------------------------------------------------------------
-
-// After a keystroke: a snippet to put in place of [start, end) of the line,
-// or null. `before` and `after` are the line's text either side of the cursor,
-// after the keystroke; `whole` the template's text.
 //
-//   `{%-` or `{% ` → the tag's `%}` after the cursor, taking in the `}` the
-//   editor paired with `{`.
-//   Typing the `%}` yourself types over one already there, rather than
-//   doubling it, whoever put it there: in Liquid, `%` before `%}` or `}`
-//   between `%}` and `}` is never meant.
-//   The space after a block tag's name (`{%- if `), with nothing after the
-//   tag on the line → its end tag, as a snippet: the condition first, then Tab
-//   to between the tags. The same `{%` or `{%-` as the tag opens with.
-//   The `%}` of a block tag typed or typed over, where that didn't happen →
-//   its end tag after the cursor.
-function afterTyping(before, after, typed, whole = null) {
-    // The space after a block tag's name: the tag becomes a snippet, with the
-    // cursor where its condition goes and Tab taking it on to between the
-    // tag and its end tag.
-    const block = typed === ' ' && new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\s$`).exec(before);
-    if (block) {
-        const closer = /^\s*-?%\}/.exec(after);
-        const rest = closer ? after.slice(closer[0].length) : after;
-        if (/^\s*$/.test(rest) && !closedAlready(block[2], whole)) {
-            return {
-                start: before.length,
-                end: before.length + (closer ? closer[0].length : 0),
-                snippet: `$1${closer ? ' ' + closer[0].trim() : ' %}'}${inside(block[2])}{%${block[1]} end${block[2]} %}`
-            };
-        }
-    }
-    if ((typed === '-' && /\{%-$/.test(before)) || (typed === ' ' && /\{% $/.test(before))) {
-        const paired = /^\}(?!\})/.test(after) ? 1 : 0;
-        // A `%}` further on, before another tag starts, closes a tag already there.
-        if (/^[^{]*%\}/.test(after.slice(paired))) return null;
-        return { start: before.length, end: before.length + paired, snippet: '$0 %}' };
-    }
-    if (typed === '%') {
-        const closer = /^(\s*)%\}/.exec(after);
-        if (!closer) return null;
-        // `x %` typed before ` %}` gives `x %}`, not `x  %}`; `x -%` keeps its dash.
-        const typedBefore = before.slice(0, -1);
-        const spaces = /\s*$/.exec(typedBefore)[0];
-        const dash = /-$/.test(typedBefore);
-        return { start: typedBefore.length - spaces.length, end: before.length + closer[1].length + 1, snippet: (dash ? '' : ' ') + '%$0' };
-    }
-    if (typed === '}' && /%\}$/.test(before)) {
-        if (/^\}/.test(after)) {
-            return { start: before.length - 1, end: before.length + 1, snippet: '}' + (endTag(before, after.slice(1), whole) || '$0') };
-        }
-        const tail = endTag(before, after, whole);
-        return tail ? { start: before.length, end: before.length, snippet: tail } : null;
-    }
-    return null;
+// Opening a tag is VS Code's own work: the language configuration pairs `{%`
+// with ` %}` and `{{` with ` }}`, in the same step as the keystroke, so typing
+// as fast as you like can't get ahead of it. What's left for the extension
+// is what a pair can't do, and it works from how the line is once typing has
+// settled, not from the keystroke it saw: by then a fast typist is several
+// characters on, and anything that waited for "the line as it was" gave up.
+//
+//   Typing the `%}` of a tag yourself leaves the pair's ` %}` after it, as
+//   `{%- else %} %}`: pairs type over only a single character. That
+//   duplicate goes.
+//   A block tag (`{%- if a %}`) gets its end tag, whether the cursor is still
+//   in its header or just past its `%}`.
+
+// What a keystroke asks for once typing settles: a list of 'closer' (a tag
+// closed by hand), 'block' (a block tag's header, whose end tag may be needed).
+// `before` is the line's text up to and including the typed character.
+function intentsOf(before, typed) {
+    const out = [];
+    if (typed === '}' && /(?:%|\})\}$/.test(before)) out.push('closer');
+    if ((typed === ' ' || typed === '}') && blockHeader(before)) out.push('block');
+    return out;
 }
 
-// The end tag for the block tag `before` ends with, as a snippet to follow
-// it; null if it isn't one, something follows it on the line, or the template
-// already closes every such block (retyping the end of a tag that has its end
-// tag shouldn't add another).
-function endTag(before, after, whole) {
-    if (!/^\s*$/.test(after)) return null;
-    const m = new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\b[^%]*-?%\\}$`).exec(before);
-    if (!m || closedAlready(m[2], whole)) return null;
-    return `${inside(m[2])}{%${m[1]} end${m[2]} %}`;
+// The block tag `before` (a line's text up to the cursor) is the header of,
+// with its dash: the cursor in it, past the name (`{%- if a`), or just past
+// its `%}`.
+function blockHeader(before) {
+    const ended = new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\b[^%{}]*-?%\\}$`).exec(before);
+    if (ended) return { dash: ended[1], name: ended[2], ended: true };
+    const open = new RegExp(`\\{%(-?)\\s*(${BLOCK_TAGS})\\s[^%{}]*$`).exec(before);
+    return open ? { dash: open[1], name: open[2], ended: false } : null;
+}
+
+// How many characters after the cursor are second `%}` or `}}`s for the tag
+// the cursor has just closed.
+function duplicateCloser(before, after) {
+    // One for each tag typed closed by hand since the last time typing settled.
+    const m = (/\{%[^%{}]*%\}$/.test(before) && /^(?:\s*%\})+/.exec(after))
+        || (/\{\{[^{}]*\}\}$/.test(before) && /^(?:\s*\}\})+/.exec(after));
+    return m ? m[0].length : 0;
+}
+
+// The end tag for the block `before` is the header of, as a snippet for the
+// cursor (`$1`) to stay in the header and Tab to go between the tags; or, past
+// the `%}`, for the cursor to go between them. { replace, snippet }: the snippet
+// goes in place of `replace` characters after the cursor (the tag's ` %}`, which
+// it supplies again). Null if it isn't a block or the template already closes
+// every block of that name; 'wait' if the header isn't ready for it yet.
+function blockEnd(before, after, whole) {
+    const header = blockHeader(before);
+    if (!header || closedAlready(header.name, whole)) return null;
+    const end = `{%${header.dash} end${header.name} %}`;
+    if (header.ended) {
+        return /^\s*$/.test(after) ? { replace: 0, snippet: inside(header.name) + end } : null;
+    }
+    const closer = /^\s*-?%\}/.exec(after);
+    // Something else after the cursor: most likely a quote the editor paired
+    // and the cursor hasn't yet typed over. 'wait' says to look again.
+    if (!/^\s*$/.test(closer ? after.slice(closer[0].length) : after)) return 'wait';
+    return {
+        replace: closer ? closer[0].length : 0,
+        snippet: `$1${closer ? ' ' + closer[0].trim() : ' %}'}${inside(header.name)}${end}`
+    };
+}
+
+// What to do at the cursor once typing has settled, given what the keystrokes
+// asked for: { replace, snippet } — `snippet` goes in place of `replace`
+// characters after the cursor, or is empty to just delete them — or
+// { wait: true } to look again after more typing, or null.
+function settleEdit(before, after, whole, intents) {
+    if (!intents.length) return null;
+    const duplicate = duplicateCloser(before, after);
+    const block = intents.includes('block') ? blockEnd(before, after.slice(duplicate), whole) : null;
+    if (block === 'wait') return { wait: true };
+    if (block) return { replace: duplicate + block.replace, snippet: block.snippet };
+    return duplicate ? { replace: duplicate, snippet: '' } : null;
 }
 
 // What goes between a block tag and its end tag, with the cursor ($0) in it:
@@ -516,4 +528,4 @@ function blankLiquid(text) {
     return text.replace(/\{%[\s\S]*?%\}|\{\{[\s\S]*?\}\}/g, m => m.replace(/[^\n]/g, ' '));
 }
 
-module.exports = { completionsAt, afterTyping, blankLiquid, known, FILTERS, TAGS, liquidBefore };
+module.exports = { completionsAt, intentsOf, settleEdit, blankLiquid, known, FILTERS, TAGS, liquidBefore };
