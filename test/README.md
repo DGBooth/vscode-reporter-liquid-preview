@@ -121,6 +121,14 @@ files are separate processes, so state never leaks across a file.
   HTML closing tags); the providers as VS Code calls them (data from tests and
   previews, Format Document's edit and its refusal); and the grammar, tokenised
   with vscode-textmate against a stand-in HTML grammar.
+- **`data-files.test.js`** — which `.json` files are offered as data: the glob
+  matching (a name anywhere, a path from the workspace folder, capitals, `**`,
+  braces, Windows paths), folders and what is never data, links (several
+  entries and patterns adding up, the folders still limiting), settings written
+  wrongly ignored; and the picks as the extension shows them (the preview's and
+  create-tests', which share one): narrowed by folders, a linked template
+  offered its data and "Show all", what was ticked kept when showing all, a link
+  that matches nothing, folders that match nothing with a way to the setting.
 - **`real-editor/`** — not run by `npm test`: types into a real VS Code
   (code-server) at several speeds. See its README. The unit tests can't show
   what typing speed does to an extension.
