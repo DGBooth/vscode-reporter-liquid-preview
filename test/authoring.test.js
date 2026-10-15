@@ -533,6 +533,7 @@ test('the grammar colours Liquid between tags, in attributes, and not in comment
     assert.ok(scopesOf('{%- if a == "x" %}', '"x"').includes('string.quoted.double.liquid'));
     assert.ok(scopesOf('{{ total | money }}', 'money').includes('support.function.filter.liquid'));
     assert.ok(scopesOf('{%- optional "notes" %}', 'optional').includes('entity.name.tag.reporter.liquid'));
+    assert.ok(scopesOf('{%- echo name %}', 'echo').includes('storage.type.liquid'));
     assert.ok(scopesOf('{%- editor "r", placeholder: "x" %}', 'placeholder').includes('variable.parameter.liquid'));
     const inAttribute = scopesOf('<div class="{{ kind }}">', 'kind');
     assert.ok(inAttribute.includes('string.quoted.double.html') && inAttribute.includes('variable.other.liquid'), inAttribute.join(' '));

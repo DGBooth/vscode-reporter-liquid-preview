@@ -369,6 +369,28 @@ function registerCustomFilters(engine) {
 registerCustomFilters(liquidEngine);
 
 function registerCustomTags(engine) {
+    // echo tag: `{% echo value | filter %}` is `{{ value | filter }}`. Reporter
+    // accepts it, as Liquid does, but LiquidJS only gained the tag in version 10
+    // and this runs 8. It's parsed as the output tag it stands for, so values,
+    // filters and the null-tolerant warnings behave exactly as they do in
+    // {{ }}, and the pieces are given the tag's own position, so a problem in
+    // one is located at the echo and not on line 1 of a template of one tag.
+    engine.registerTag('echo', {
+        parse(tagToken) {
+            if (!String(tagToken.args || '').trim()) throw new Error('echo needs a value, as in {% echo name %}');
+            this.output = this.liquid.parse(`{{ ${tagToken.args} }}`);
+            for (const piece of this.output) {
+                if (!piece.token) continue;
+                piece.token.line = tagToken.line;
+                piece.token.col = tagToken.col;
+                piece.token.raw = tagToken.raw;
+            }
+        },
+        render(ctx) {
+            return this.liquid.renderer.renderTemplates(this.output, ctx);
+        }
+    });
+
     // optional tag: renders a checkbox wrapper with inner content
     engine.registerTag('optional', {
         parse(tagToken, remainTokens) {
@@ -635,7 +657,22 @@ function diagnostic(severity, title, message, file, location) {
 // A diagnostic from a LiquidJS error. Parse, tokenization and render errors all
 // carry the token they failed on, which is the position the reader wants.
 function liquidDiagnostic(title, err, file) {
-    return diagnostic('error', title, cleanLiquidMessage(err.message), file, tokenLocation(err.token));
+    const real = innermostLocated(err);
+    return diagnostic('error', title, cleanLiquidMessage(real.message), file, tokenLocation(real.token));
+}
+
+// LiquidJS wraps an error from inside a block tag (an `if`, a `for`, an
+// `optional`...) in one that points at the block's opening tag, keeping the real
+// one as `originalError`; a block inside a block wraps it again. The real
+// error's position is the one worth showing: for a mistake two hundred lines
+// into an `if`, the `if` is somewhere else entirely. An error with no
+// position of its own further in (a plain JavaScript error, say) is left as it was.
+function innermostLocated(err) {
+    let found = err;
+    for (let inner = err.originalError; inner; inner = inner.originalError) {
+        if (inner.token && typeof inner.token.line === 'number') found = inner;
+    }
+    return found;
 }
 
 // LiquidJS appends ", file:…, line:N, col:M" to its messages. The pane shows
