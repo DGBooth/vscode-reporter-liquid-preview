@@ -12,6 +12,11 @@ Their tags were added then too: each marks the commit that built the final
 build. Early versions were sometimes rebuilt with new changes after the
 version bump, so a version can include work committed before its bump.
 
+## [Unreleased]
+
+### Fixed
+- An error inside a block tag (`if`, `for`, `optional`, `choice`, `editor`) was reported at the block's opening tag, which could be hundreds of lines from the mistake, with the real position left in the message as text: `tag echo not found, line:245, col:202` under a link to line 244. LiquidJS wraps an error from inside a block in one that points at the block, keeping the real one inside. The Problems pane, the editor squiggle and the link now point at the real position, whatever depth of blocks it's in, and the message no longer carries the position as text.
+
 ## [1.14.0] - 2026-10-09
 
 ### Fixed

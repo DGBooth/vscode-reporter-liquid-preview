@@ -159,6 +159,7 @@ Every entry says **where** the problem is, not just what it is:
 
 - **A file, line and column**, shown as a button — click it and the file opens with the caret on that spot. A file already open keeps its editor column, so clicking a problem doesn't rearrange your layout.
 - **The offending source**, quoted underneath, so you can recognise the construct without leaving the preview.
+- **An error inside a block** (an `if`, a `for`, an `optional`...) is located at the error itself, not at the block's opening tag, however many blocks deep it is.
 - Warnings raised inside a filter are traced back to the `{{ ... }}` or `{% ... %}` that ran it — including filters called from inside a loop or a nested tag, which have no way to name their own position otherwise.
 - **Duplicate field names** point at the repeat and name the line it collides with, rather than just listing the names.
 - **Unbalanced HTML** — a closing tag like a stray `</div>` that closes nothing the output opened — is flagged with the text that follows it, so you can find it. Put into a whole page, such a tag can close an element around the document and push everything after it out of its section. The preview displays the output without it, as the template tests read it, so what you see, what you click in the test builder and what the checks test are always the same structure.

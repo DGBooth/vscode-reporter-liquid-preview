@@ -6,6 +6,8 @@
 const test = require('node:test');
 const assert = require('node:assert');
 
+const engine = require('../engine');
+
 const {
     extension, stub, harnessReset, makePreview, makePanel, paneOf, renderPreview,
     settle, positionsIn, messagesIn
@@ -69,6 +71,34 @@ test('a template that does not parse is located at the tag left open', async () 
     assert.ok(pane.includes('tag {% if x %} not closed'));
     assert.ok(!/line:\d+/.test(pane), 'the position is shown as a link, not repeated in the prose');
     assert.deepStrictEqual(positionsIn(pane), [{ file: TEMPLATE, line: 3, col: 1 }]);
+});
+
+test('an error inside a block is located where it is, not at the block\u2019s opening tag', async () => {
+    // Three lines into an `if`, far along its line. Any block tag wraps what is inside it.
+    const inside = '<p>' + ' '.repeat(40) + '{% nonsense %}</p>';
+    for (const [open, close] of [['{% if x %}', '{% endif %}'], ['{% for i in x %}', '{% endfor %}'], ['{% optional "o" %}', '{% endoptional %}'], ['{% choice "c" %}', '{% endchoice %}'], ['{% editor "e" %}', '{% endeditor %}']]) {
+        const { pane } = await renderPreview({ template: `a\n${open}\nb\n${inside}\n${close}\n`, data: '{}' });
+        assert.ok(pane.includes('tag nonsense not found'), open);
+        assert.ok(!/line:\d+|col:\d+/.test(pane), `${open}: the position is the link, not text`);
+        assert.deepStrictEqual(positionsIn(pane), [{ file: TEMPLATE, line: 4, col: 44 }], open);
+    }
+});
+
+test('an error in a block inside a block is located at the innermost', async () => {
+    const { pane } = await renderPreview({ template: '{% if a %}\n{% for i in b %}\n{% optional "o" %}\n  {% nonsense %}\n{% endoptional %}\n{% endfor %}\n{% endif %}\n', data: '{}' });
+    assert.ok(pane.includes('tag nonsense not found'));
+    assert.deepStrictEqual(positionsIn(pane), [{ file: TEMPLATE, line: 4, col: 3 }]);
+});
+
+test('an error that is the block\u2019s own, or has no position further in, keeps the block\u2019s', () => {
+    const outer = { message: 'wrong, line:3, col:1', token: { line: 3, col: 1, raw: '{% if x %}' } };
+    const plain = { message: 'oops, line:3, col:1', token: { line: 3, col: 1, raw: '{% if x %}' }, originalError: new TypeError('not a function') };
+    for (const err of [outer, plain]) {
+        const d = engine.liquidDiagnostic('Template error', err, TEMPLATE);
+        assert.strictEqual(d.line, 3);
+        assert.strictEqual(d.col, 1);
+    }
+    assert.strictEqual(engine.liquidDiagnostic('Template error', plain, TEMPLATE).message, 'oops', 'and its message, without the position');
 });
 
 test('warnings from a stale template are dropped rather than mislocated', async () => {
