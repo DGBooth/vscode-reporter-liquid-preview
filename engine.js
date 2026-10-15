@@ -369,6 +369,28 @@ function registerCustomFilters(engine) {
 registerCustomFilters(liquidEngine);
 
 function registerCustomTags(engine) {
+    // echo tag: `{% echo value | filter %}` is `{{ value | filter }}`. Reporter
+    // accepts it, as Liquid does, but LiquidJS only gained the tag in version 10
+    // and this runs 8. It's parsed as the output tag it stands for, so values,
+    // filters and the null-tolerant warnings behave exactly as they do in
+    // {{ }}, and the pieces are given the tag's own position, so a problem in
+    // one is located at the echo and not on line 1 of a template of one tag.
+    engine.registerTag('echo', {
+        parse(tagToken) {
+            if (!String(tagToken.args || '').trim()) throw new Error('echo needs a value, as in {% echo name %}');
+            this.output = this.liquid.parse(`{{ ${tagToken.args} }}`);
+            for (const piece of this.output) {
+                if (!piece.token) continue;
+                piece.token.line = tagToken.line;
+                piece.token.col = tagToken.col;
+                piece.token.raw = tagToken.raw;
+            }
+        },
+        render(ctx) {
+            return this.liquid.renderer.renderTemplates(this.output, ctx);
+        }
+    });
+
     // optional tag: renders a checkbox wrapper with inner content
     engine.registerTag('optional', {
         parse(tagToken, remainTokens) {

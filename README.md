@@ -132,6 +132,8 @@ Reporter's own tags, rendered as Reporter renders them. Each takes a field name,
 
 Each field name should be used once per template; the [Problems panel](#problems-panel) flags a repeat.
 
+Beyond those, `{% echo value | filter %}` is accepted as `{{ value | filter }}`. Reporter accepts it, but the engine behind the preview only gained the tag in a later version, so the extension supplies it. Values, filters and their warnings behave as they do in `{{ }}`, and the Full HTML Preview shows it as a data value.
+
 ### Custom Liquid Filters
 
 | Filter | Description |

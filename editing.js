@@ -107,6 +107,7 @@ const TAGS = {
     cycle: ['cycle ${1:"odd", "even"} %}', 'Each time it runs, the next of its values.'],
     tablerow: ['tablerow ${1:item} in ${2:list} %}$0{%DASH endtablerow %}', 'Table rows and cells, one cell per item.'],
     assign: ['assign ${1:name} = ${2:value} %}', 'Gives a value a name.'],
+    echo: ['echo ${1:value} %}', 'Shows a value, as {{ value }} does. Filters work the same way: {% echo name | upcase %}.'],
     capture: ['capture ${1:name} %}$0{%DASH endcapture %}', 'Gives what its contents render a name.'],
     increment: ['increment ${1:counter} %}', 'Shows a counter, then adds one to it.'],
     decrement: ['decrement ${1:counter} %}', 'Takes one from a counter, then shows it.'],

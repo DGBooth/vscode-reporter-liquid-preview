@@ -44,7 +44,7 @@
         },
         "tag": {
             "name": "meta.tag.liquid",
-            "begin": "(\\{%-?)\\s*(?:(if|elsif|else|endif|unless|endunless|case|when|endcase|for|endfor|break|continue|tablerow|endtablerow|cycle)|(optional|endoptional|editor|endeditor|choice|endchoice|or)|(assign|capture|endcapture|increment|decrement|include|layout|block|endblock)|([A-Za-z_]\\w*))?\\b",
+            "begin": "(\\{%-?)\\s*(?:(if|elsif|else|endif|unless|endunless|case|when|endcase|for|endfor|break|continue|tablerow|endtablerow|cycle)|(optional|endoptional|editor|endeditor|choice|endchoice|or)|(assign|echo|capture|endcapture|increment|decrement|include|layout|block|endblock)|([A-Za-z_]\\w*))?\\b",
             "beginCaptures": {
                 "1": { "name": "punctuation.definition.tag.begin.liquid" },
                 "2": { "name": "keyword.control.liquid" },

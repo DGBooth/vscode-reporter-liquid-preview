@@ -360,6 +360,9 @@ function annotateLiquid(text) {
     // Protect literal text so it is not mistaken for live Liquid constructs below.
     const neutralizeBraces = s => s.replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
 
+    // `{% echo x %}` is `{{ x }}`, and is shown as the value it gives.
+    text = text.replace(/\{%(-?)\s*echo\s+([\s\S]*?)\s*(-?)%\}/g, '{{$1 $2 $3}}');
+
     // Step 1: remove liquid embedded within HTML element tags (attribute-level logic).
     // These modify HTML structure rather than producing standalone output.
     text = stripLiquidFromHtmlTags(text);
