@@ -14,6 +14,8 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-10-15
+
 ### Added
 - `{% echo value | filter %}`, which is `{{ value | filter }}`. Reporter accepts it, but a template using it failed to preview with `tag echo not found`, because the rendering engine (LiquidJS 8) only gained the tag in version 10. Values, filters and their warnings behave as they do in `{{ }}`, and a problem in one is located at the `echo`. The Full HTML Preview shows it as a data value, where before it vanished. It's offered in completions and coloured as a tag. The multi-line `{% liquid %}` tag, which came in the same LiquidJS version, is not supported yet.
 
