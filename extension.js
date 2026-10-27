@@ -804,6 +804,7 @@ ${rendered}
         }
         const legend = document.querySelector('.lp-legend');
         const legendOpen = legend ? legend.open : null;
+        const openNotes = [...document.querySelectorAll('details.sp-notes')].map(d => d.open);
         const x = window.scrollX, y = window.scrollY;
         document.getElementById('lp-chrome').innerHTML = msg.chrome;
         document.getElementById('lp-rendered-root').innerHTML = msg.rendered;
@@ -811,6 +812,7 @@ ${rendered}
             const input = document.getElementById(id);
             if (input) input.checked = toggles[id];
         }
+        document.querySelectorAll('details.sp-notes').forEach((d, i) => { if (openNotes[i]) d.open = true; });
         const newLegend = document.querySelector('.lp-legend');
         if (newLegend && legendOpen !== null) newLegend.open = legendOpen;
         window.scrollTo(x, y);

@@ -572,8 +572,28 @@ const INLINE_PARENTS = new Set(['p', 'span', 'a', 'b', 'strong', 'i', 'em', 'u',
 const TABLE_PARENTS = new Set(['table', 'thead', 'tbody', 'tfoot']);
 const BLOCK_CONTENT = new RegExp(`<(${[...HTML_BLOCK_TAGS].join('|')})\\b`, 'i');
 
+// An author note as the spec writes it, and its text.
+const NOTE = /<div class="sp-note"><span class="sp-note-label">Author note<\/span> ([\s\S]*?)<\/div>/g;
+
+// Whether some of the HTML is seen by the document's reader. Author notes are
+// not: a block holding only notes and assigns works out values, and showing it
+// for its notes would put a rail in the margin around nothing.
 function hasVisible(html) {
-    return /\S/.test(html);
+    return /\S/.test(html.replace(NOTE, ''));
+}
+
+function notesIn(html) {
+    return [...html.matchAll(NOTE)].map(m => m[1]);
+}
+
+// Two or more notes in a row, with nothing the reader sees between them, as
+// one line that opens to show them. Notes gather like this where a template
+// works out values for a while, as before a table.
+function collapseNotes(html) {
+    return html.replace(/(?:<div class="sp-note">[\s\S]*?<\/div>\s*){2,}/g, run => {
+        const count = notesIn(run).length;
+        return `<details class="sp-notes"><summary>${count} author notes</summary>${run}</details>`;
+    });
 }
 
 // Build the spec for a template. Options:
@@ -663,7 +683,6 @@ function buildSpec(text, options = {}) {
                 return `<span class="sp-data" title="${escapeHtml(node.expr)}">${escapeHtml(label)}</span>${vref}`;
             }
             case 'note':
-                stats.notes++;
                 return `<div class="sp-note"><span class="sp-note-label">Author note</span> ${escapeHtml(node.text)}</div>`;
             case 'include':
                 return node.raw ? '' : `<span class="sp-data">contents of ${escapeHtml(node.args.split(/[\s,]/)[0].replace(/['"]/g, ''))}</span>`;
@@ -711,7 +730,7 @@ function buildSpec(text, options = {}) {
             title: node.type === 'choice' ? (node.args.title || humanizeName(node.args.name || node.args.nameVar)) : '',
             name: node.args ? (node.args.name || node.args.nameVar || '') : '',
             unclosed: !!node.unclosed,
-            parts: parts.map(p => ({ id: p.id, line: p.line, source: p.branch ? p.branch.source : '', words: p.words, shown: p.shown, text: plainText(p.html) }))
+            parts: parts.map(p => ({ id: p.id, line: p.line, source: p.branch ? p.branch.source : '', words: p.words, shown: p.shown, text: plainText(p.html.replace(NOTE, '')), notes: notesIn(p.html) }))
         };
         items.push(item);
         // An editor shows a box to type in even with nothing inside it.
@@ -777,7 +796,8 @@ function buildSpec(text, options = {}) {
         return 'block';
     };
 
-    let documentHtml = render(root.children, new OpenElements());
+    let documentHtml = collapseNotes(render(root.children, new OpenElements()));
+    stats.notes = notesIn(documentHtml).length;
     items.sort((a, b) => a.line - b.line || a.id.localeCompare(b.id));
 
     // Headings for the contents, each given an anchor to link to.
@@ -874,7 +894,8 @@ function checklist(items, nameHtml, ref) {
                 ? '<div class="sp-ck-text sp-quiet">Changes how the page looks (in its styles), so it isn’t marked in the document</div>'
                 : part.shown
                 ? (part.text ? `<div class="sp-ck-text">“${escapeHtml(part.text)}”</div>` : '')
-                : `<div class="sp-ck-text sp-quiet">${item.kind === 'rule' || item.kind === 'loop' ? 'Shows nothing; only works out values' : 'Shows nothing'}</div>`;
+                : `<div class="sp-ck-text sp-quiet">${item.kind === 'rule' || item.kind === 'loop' ? 'Shows nothing; only works out values' : 'Shows nothing'}</div>`
+                    + part.notes.map(note => `<div class="sp-ck-note">Author note: ${note}</div>`).join('');
             const src = many ? (part.source ? `<code>${escapeHtml(sourceOf(part.source))}</code>` : '') : `<code>${escapeHtml(sourceOf(item.source))}</code>`;
             rows.push(`<tr class="${many ? 'sp-ck-part' : ''}"${many ? ` id="sp-i-${part.id}"` : ` id="sp-i-${item.id}"`}><td class="sp-ck-id">${ref(part.id, part.line)}</td><td>${many ? '' : kind}</td><td>${what}${many ? '' : state}${shows}</td><td class="sp-ck-src">${src}<span class="sp-ck-line">line ${part.line}</span></td><td class="sp-ck-tick"></td></tr>`);
         }
@@ -971,7 +992,12 @@ const SPEC_STYLES = `
   .sp-fillbox { display: inline-block; min-width: 14em; min-height: 1.4em; border: 1px dashed #c25e00; background: #fff4e5; color: #8a5a2b; font-style: italic; padding: 1px 6px; border-radius: 3px; }
   .sp-note { font-size: 12px; color: #555; background: #f5f5f5; border-left: 3px solid #9e9e9e; padding: 3px 8px; margin: 6px 0; font-style: italic; }
   .sp-note-label { font-style: normal; font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .05em; color: #777; }
-  body:has(#sp-hide-notes:checked) .sp-note { display: none; }
+  .sp-notes { margin: 6px 0; font: 12px system-ui, sans-serif; color: #666; }
+  .sp-notes > summary { cursor: pointer; display: inline-block; background: #f5f5f5; border-left: 3px solid #9e9e9e; padding: 2px 8px; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #777; }
+  .sp-notes[open] > summary { margin-bottom: 2px; }
+  .sp-ck-note { color: #666; font-style: italic; margin-top: 2px; }
+  body:has(#sp-hide-notes:checked) .sp-note,
+  body:has(#sp-hide-notes:checked) .sp-notes { display: none; }
 
   .sp-appendix { color: #222; margin-top: 32px; border-top: 1px solid #ddd; padding-top: 12px; }
   .sp-appendix h2.sp-h { font-size: 20px; margin: 0 0 4px; color: #111; }

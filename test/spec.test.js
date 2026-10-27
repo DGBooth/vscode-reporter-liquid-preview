@@ -252,3 +252,31 @@ test('a template the size of the largest reports is quick', () => {
     assert.strictEqual(built.items.length, 1200 * 5);
     assert.ok(took < 3000, `took ${took}ms`);
 });
+
+test('notes alone don\u2019t make a block shown: they go with it to the checklist', () => {
+    const built = build('{% for p in ps %}{% comment %}Count the rows{% endcomment %}{% assign rows = rows | plus: 1 %}{% endfor %}<p>Text</p>');
+    const dom = new JSDOM(`<body>${built.body}</body>`).window.document;
+    assert.strictEqual(dom.querySelectorAll('#sp-document .sp-blk').length, 0, 'no rail around a block that only works out values');
+    assert.strictEqual(dom.querySelectorAll('#sp-document .sp-note').length, 0);
+    assert.strictEqual(dom.querySelector('#sp-checklist .sp-ck-note').textContent, 'Author note: Count the rows');
+    assert.strictEqual(built.stats.notes, 0, 'and the toolbar doesn\u2019t offer to hide notes that aren\u2019t there');
+});
+
+test('notes in a row, with nothing shown between them, collapse into one line', () => {
+    const built = build([
+        '{% comment %}One{% endcomment %}',
+        '{% if a %}{% assign x = 1 %}{% endif %}',
+        '{% comment %}Two{% endcomment %}',
+        '{% comment %}Three{% endcomment %}',
+        '<p>Shown</p>',
+        '{% comment %}Alone{% endcomment %}'
+    ].join('\n'));
+    const dom = new JSDOM(`<body>${built.body}</body>`).window.document;
+    const groups = dom.querySelectorAll('#sp-document details.sp-notes');
+    assert.strictEqual(groups.length, 1);
+    assert.strictEqual(groups[0].open, false, 'closed until opened');
+    assert.strictEqual(groups[0].querySelector('summary').textContent, '3 author notes');
+    assert.deepStrictEqual([...groups[0].querySelectorAll('.sp-note')].map(n => n.textContent), ['Author note One', 'Author note Two', 'Author note Three']);
+    assert.strictEqual(dom.querySelector('#sp-document > .sp-note').textContent, 'Author note Alone', 'a note on its own stays as it is');
+    assert.strictEqual(built.stats.notes, 4);
+});

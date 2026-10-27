@@ -23,6 +23,7 @@ version bump, so a version can include work committed before its bump.
   - **how values are worked out**: every value set with `assign` or `capture` that decides something or is shown, with each place it's set and the conditions around it, so logic spread over loops and assigns can be followed;
   - **Export to share or print…** saves it as one `.html` file with the template's stylesheets, to print or save as a PDF from a browser. It replaces Show HTML source;
   - clicking a reference in the panel goes to its line in the template.
+  - author notes don't count as something the reader sees, so a block holding only notes and logic is left out of the document, and its notes are shown against it in the checklist. Two or more notes in a row with nothing shown between them collapse into one line, "3 author notes", that opens to show them.
 
 ## [1.15.0] - 2026-10-15
 
