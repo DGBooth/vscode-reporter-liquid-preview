@@ -256,7 +256,7 @@ test('the Full HTML Preview locates a missing end tag', async () => {
 
     assert.ok(paneOf(chrome).includes('tag {% if x %} not closed'));
     assert.deepStrictEqual(positionsIn(paneOf(chrome)), [{ file: TEMPLATE, line: 2, col: 1 }]);
-    assert.ok(chrome.includes('Not closed'), 'and the annotated document still marks the section');
+    assert.ok(panel.webview.html.includes('Not closed'), 'and the spec still marks the section');
 });
 
 test('the Full HTML Preview reports nothing for a template that parses', async () => {

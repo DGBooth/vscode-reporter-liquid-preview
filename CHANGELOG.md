@@ -14,6 +14,16 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+### Changed
+- The Full HTML Preview is now a **template spec**: the template written out for document owners to check and to ask for changes against, and laid out to print to PDF. The old view nested a coloured box inside a box for every block, which on a large report became unreadable, broke sentences in two wherever a word depended on a condition, and pushed conditional table rows out of their tables. Now:
+  - every part that can vary has a **reference** (R4.2 for a rule's branch, L2 a repeat, C1.1 a choice's option, O3 optional, E1 a fill-in), shown in the margin with its condition in plain words;
+  - a word or phrase that varies inside a sentence is bracketed in place, "[R3.1 her / R3.2 him]", and table rows and cells are marked without leaving their table;
+  - a **cover** with a version stamp taken from the template's text, a summary, a key and contents from the document's headings;
+  - a **checklist** of every reference with its condition, the text it shows, its Liquid and line, and a column to tick and comment in;
+  - **how values are worked out**: every value set with `assign` or `capture` that decides something or is shown, with each place it's set and the conditions around it, so logic spread over loops and assigns can be followed;
+  - **Export to share or print…** saves it as one `.html` file with the template's stylesheets, to print or save as a PDF from a browser. It replaces Show HTML source;
+  - clicking a reference in the panel goes to its line in the template.
+
 ## [1.15.0] - 2026-10-15
 
 ### Added

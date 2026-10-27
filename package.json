@@ -35,6 +35,7 @@
         "onCommand:reporterLiquidPreview.preview",
         "onCommand:reporterLiquidPreview.htmlPreview",
         "onCommand:reporterLiquidPreview.fullHtmlPreview",
+        "onCommand:reporterLiquidPreview.exportSpec",
         "onCommand:reporterLiquidPreview.runTemplateTests",
         "onCommand:reporterLiquidPreview.showTemplateTestReport",
         "onCommand:reporterLiquidPreview.acceptTemplateTestOutput",
@@ -88,7 +89,11 @@
             },
             {
                 "command": "reporterLiquidPreview.fullHtmlPreview",
-                "title": "Reporter Liquid: Open Full HTML Preview to the Side"
+                "title": "Reporter Liquid: Open Template Spec (Full HTML Preview) to the Side"
+            },
+            {
+                "command": "reporterLiquidPreview.exportSpec",
+                "title": "Reporter Liquid: Export Template Spec to Share or Print"
             },
             {
                 "command": "reporterLiquidPreview.runTemplateTests",
@@ -173,6 +178,11 @@
             "editor/context": [
                 {
                     "command": "reporterLiquidPreview.createTemplateTests",
+                    "when": "editorLangId == liquid",
+                    "group": "reporterLiquid"
+                },
+                {
+                    "command": "reporterLiquidPreview.exportSpec",
                     "when": "editorLangId == liquid",
                     "group": "reporterLiquid"
                 }

@@ -142,14 +142,14 @@ test('the rendered output survives a template that stops parsing', async () => {
     assert.ok(paneOf(panel.messages[0].chrome).includes('not closed'));
 });
 
-test('the Full HTML Preview keeps its toolbar and header alongside the pane', async () => {
+test('the Full HTML Preview keeps its toolbar alongside the pane', async () => {
     stub.workspaceFiles.set(TEMPLATE, '{% choice "c" %}A{% or %}B{% endchoice %}\n{% if x %}\n');
     const panel = makePanel();
 
     await extension.refreshHtmlFullPanel(makePreview({ templateUri: TEMPLATE }), panel);
     const chrome = chromeOf(panel.webview.html);
 
-    assert.ok(chrome.includes('Show HTML source'));
-    assert.ok(chrome.includes('Document options'));
+    assert.ok(chrome.includes('data-lp-action="exportSpec"'), 'the export button');
     assert.ok(paneOf(chrome).includes('Template error'));
+    assert.ok(panel.webview.html.includes('Template specification'), 'and the spec beside it');
 });

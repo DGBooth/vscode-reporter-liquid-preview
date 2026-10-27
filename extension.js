@@ -5,6 +5,7 @@ const templateTests = require('./template-tests');
 const updates = require('./updates');
 const { registerAuthoring } = require('./authoring');
 const dataFiles = require('./data-files');
+const { buildSpec, standaloneSpec, SPEC_STYLES } = require('./spec');
 const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck, relocateCheck } = require('./output-checks');
 
 // The HTML preview's test builder (see webview/test-builder.js), read once and
@@ -136,7 +137,7 @@ function activate(context) {
             );
 
             htmlFullPreviews[preview.id] = { preview, panel };
-            wirePreviewMessages(panel);
+            wirePreviewMessages(panel, { exportSpec: () => exportSpec(preview.templateUri) });
 
             await queueRefresh(preview, () => refreshHtmlFullPanel(preview, panel));
 
@@ -145,6 +146,11 @@ function activate(context) {
                 clearPreviewDiagnostics(preview);
             });
         }
+    }));
+
+    context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.exportSpec', async () => {
+        let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
+        if (document) await exportSpec(document.fileName);
     }));
 
     context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async (textDocumentChangeEvent) => {
@@ -202,461 +208,9 @@ function activate(context) {
     });
 }
 
-// Index just past the Liquid tag or expression starting at `i`, or the end of
-// the text when it is never closed.
-function skipLiquid(text, i) {
-    const closeSeq = text[i + 1] === '%' ? '%}' : '}}';
-    i += 2;
-    while (i < text.length) {
-        if (text[i] === closeSeq[0] && text[i + 1] === closeSeq[1]) return i + 2;
-        i++;
-    }
-    return text.length;
-}
-
-// Locate the HTML element tag opening at `start` (where text[start] is '<') and
-// return the index of its closing '>', or -1 when this '<' does not in fact open
-// a tag. Quoted attribute values and whole Liquid regions are skipped, so a '>'
-// inside either (e.g. {% if x > 3 %}) does not end the tag early.
-//
-// Rejecting non-tags matters as much as finding real ones: a '<' that is a
-// comparison ({% if a<b %}), prose ("a<b"), or an element whose '>' has not been
-// typed yet must not put the scanner into attribute mode, or every Liquid tag up
-// to the next '>' — or to the end of the file — is discarded as attribute-level
-// logic. Losing an {% endfor %} or {% endif %} that way leaves the block open, so
-// it swallows the rest of the document.
-function matchHtmlTag(text, start) {
-    let j = start + 1;
-    if (text[j] === '/') j++;
-    if (!/[a-zA-Z!]/.test(text[j] || '')) return -1;
-
-    let quote = null;
-    while (j < text.length) {
-        const ch = text[j];
-        if (quote !== null) {
-            if (ch === quote) quote = null;
-            j++;
-        } else if (ch === '"' || ch === "'") {
-            quote = ch;
-            j++;
-        } else if (ch === '{' && (text[j + 1] === '%' || text[j + 1] === '{')) {
-            j = skipLiquid(text, j);
-        } else if (ch === '<') {
-            return -1; // an unquoted '<' cannot appear inside a tag
-        } else if (ch === '>') {
-            return j;
-        } else {
-            j++;
-        }
-    }
-    return -1; // no closing '>' — not a tag
-}
-
-// Drop the Liquid tags and expressions from within a single HTML element tag,
-// keeping everything else — including quoted attribute values — verbatim.
-function stripLiquidInsideHtmlTag(tag) {
-    let result = '';
-    let i = 0;
-    while (i < tag.length) {
-        if (tag[i] === '{' && (tag[i + 1] === '%' || tag[i + 1] === '{')) {
-            i = skipLiquid(tag, i);
-        } else {
-            result += tag[i];
-            i++;
-        }
-    }
-    return result;
-}
-
-function stripLiquidFromHtmlTags(text) {
-    // Remove liquid tags/expressions that appear inside HTML element open/close tags
-    // (attribute-level liquid). These modify HTML structure rather than producing
-    // standalone output. Everything else — Liquid between elements above all — is
-    // passed through untouched.
-    let result = '';
-    let i = 0;
-
-    while (i < text.length) {
-        const ch = text[i];
-
-        // Liquid outside an element tag is kept, and skipped as a unit so a '<'
-        // inside it is never read as markup.
-        if (ch === '{' && (text[i + 1] === '%' || text[i + 1] === '{')) {
-            const end = skipLiquid(text, i);
-            result += text.slice(i, end);
-            i = end;
-            continue;
-        }
-
-        // HTML comments are copied verbatim: their body is not an element tag, so
-        // any Liquid inside it is left for the caller to interpret.
-        if (ch === '<' && text.startsWith('<!--', i)) {
-            const end = text.indexOf('-->', i);
-            const close = end === -1 ? text.length : end + 3;
-            result += text.slice(i, close);
-            i = close;
-            continue;
-        }
-
-        if (ch === '<') {
-            const end = matchHtmlTag(text, i);
-            if (end !== -1) {
-                result += stripLiquidInsideHtmlTag(text.slice(i, end + 1));
-                i = end + 1;
-                continue;
-            }
-        }
-
-        result += ch;
-        i++;
-    }
-
-    return result;
-}
-
-// Turn an identifier like 'patient.first_name' or 'ownerName' into readable words.
-function humanizeName(name) {
-    if (!name) return '';
-    return String(name)
-        .replace(/\[["']?/g, '.')
-        .replace(/["']?\]/g, '')
-        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-        .replace(/[._-]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .toLowerCase()
-        .trim();
-}
-
-// Translate a Liquid condition into plain English, e.g.
-// "patient.sex == 'male' and age > 8" → 'patient sex is “male” and age is more than 8'
-function humanizeCondition(cond) {
-    let c = String(cond).trim();
-    c = c.replace(/'([^']*)'/g, '“$1”').replace(/"([^"]*)"/g, '“$1”');
-    c = c.replace(/>=/g, ' is at least ')
-        .replace(/<=/g, ' is at most ')
-        .replace(/!=/g, ' is not ')
-        .replace(/==/g, ' is ')
-        .replace(/>/g, ' is more than ')
-        .replace(/</g, ' is less than ');
-    // dotted / underscored / camelCase identifiers → spaced words
-    c = c.replace(/\b\w+(?:[._]\w+)+\b/g, m => humanizeName(m));
-    c = c.replace(/\b[a-z]+[A-Z]\w*\b/g, m => humanizeName(m));
-    return c.replace(/\s+/g, ' ').trim();
-}
-
-// Build a colour-coded pill label, optionally followed by an explanatory detail.
-function annotationLabel(labelText, detailText) {
-    const detail = detailText ? `<span class="lp-detail">${escapeHtml(detailText)}</span>` : '';
-    return `<span class="lp-label">${escapeHtml(labelText)}</span>${detail}`;
-}
-
-// Rewrite a Liquid template into an annotated, layman-readable HTML document:
-// every choice, optional section, fill-in field and automatic rule is shown as a
-// labelled box, and data placeholders appear inline as chips. Returns the HTML
-// plus counts of each construct for the summary header.
-function annotateLiquid(text) {
-    const stats = { choices: 0, options: 0, optionals: 0, editors: 0, conditionals: 0, loops: 0, notes: 0, variables: 0, unclosed: 0 };
-
-    // Protect literal text so it is not mistaken for live Liquid constructs below.
-    const neutralizeBraces = s => s.replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
-
-    // `{% echo x %}` is `{{ x }}`, and is shown as the value it gives.
-    text = text.replace(/\{%(-?)\s*echo\s+([\s\S]*?)\s*(-?)%\}/g, '{{$1 $2 $3}}');
-
-    // Step 1: remove liquid embedded within HTML element tags (attribute-level logic).
-    // These modify HTML structure rather than producing standalone output.
-    text = stripLiquidFromHtmlTags(text);
-
-    // Step 2: capture blocks store output in a variable and render nothing here.
-    text = text.replace(/\{%-?\s*capture\b[\s\S]*?\{%-?\s*endcapture\s*-?%\}/g, '');
-
-    // Step 3: comments → author-note box (processed before the tag scan so their
-    // bodies are not mistaken for live Liquid constructs).
-    text = text.replace(/\{%-?\s*comment\s*-?%\}([\s\S]*?)\{%-?\s*endcomment\s*-?%\}/g, (_, body) => {
-        stats.notes++;
-        return `<div class="lp-note">${annotationLabel('Author note')}${neutralizeBraces(escapeHtml(body.trim()))}</div>`;
-    });
-
-    // raw blocks output their body as literal text.
-    text = text.replace(/\{%-?\s*raw\s*-?%\}([\s\S]*?)\{%-?\s*endraw\s*-?%\}/g, (_, body) => neutralizeBraces(body));
-
-    // Step 4: single pass over all {% ... %} tags with a stack of frames, so
-    // labels and option numbering stay correct even when constructs are nested.
-    // Each frame buffers its body rather than emitting markup immediately, so
-    // logic-only blocks — loops and conditionals whose bodies produce nothing
-    // visible (e.g. they only set up variables) — are dropped entirely instead
-    // of cluttering the document as empty boxes. Stats therefore count only
-    // the constructs that remain visible.
-    const root = { html: '' };
-    const stack = [];
-    const peek = () => stack[stack.length - 1];
-    const append = s => { (peek() || root).html += s; };
-    const hasVisibleContent = html => /\S/.test(html);
-
-    // The end tag each block type expects, for the unclosed-block notice.
-    const END_TAGS = { choice: 'endchoice', optional: 'endoptional', editor: 'endeditor', if: 'endif', case: 'endcase', for: 'endfor', tablerow: 'endtablerow' };
-
-    // Render a completed frame to HTML. Returns '' for hidden logic-only blocks.
-    // A frame still open at the end of the template has absorbed everything after
-    // it — the usual cause of a section that appears to run on past the end of the
-    // document — so it is labelled rather than rendered as if it were intentional.
-    const closeFrame = frame => {
-        const html = renderFrame(frame);
-        if (!frame.unclosed || !html) return html;
-        stats.unclosed++;
-        const detail = `no {% ${END_TAGS[frame.type] || 'end'} %} was found, so the rest of the document is inside it`;
-        return `<div class="lp-unclosed">${annotationLabel('Not closed', detail)}${html}</div>`;
-    };
-
-    const renderFrame = frame => {
-        switch (frame.type) {
-            case 'choice': {
-                frame.options.push(frame.html);
-                stats.choices++;
-                stats.options += frame.options.length;
-                const optionsHtml = frame.options
-                    .map((body, i) => `<div class="lp-option"><span class="lp-opt-label">Option ${i + 1}</span>${body}</div>`)
-                    .join('');
-                return `<div class="lp-choice"><div class="lp-choice-head">${frame.head}</div>${optionsHtml}</div>`;
-            }
-            case 'optional':
-                stats.optionals++;
-                return `<div class="lp-optional">${frame.label}${frame.html}</div>`;
-            case 'editor':
-                stats.editors++;
-                return `<div class="lp-editor">${frame.label}${frame.html}</div>`;
-            case 'if':
-            case 'case': {
-                if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
-                const kept = frame.branches.filter(b => hasVisibleContent(b.html));
-                if (kept.length === 0) return '';
-                stats.conditionals++;
-                return `<div class="lp-cond">${kept.map(b => `<div class="lp-branch">${b.label}${b.html}</div>`).join('')}</div>`;
-            }
-            case 'for':
-            case 'tablerow': {
-                // With {% else %}, the buffered html is the empty-collection body
-                // and the repeated body was set aside when the else was reached.
-                const body = frame.emptyLabel ? frame.body : frame.html;
-                const empty = frame.emptyLabel ? frame.html : '';
-                let out = '';
-                if (hasVisibleContent(body)) {
-                    stats.loops++;
-                    out += `<div class="lp-loop">${frame.label}${body}</div>`;
-                }
-                if (hasVisibleContent(empty)) {
-                    stats.conditionals++;
-                    out += `<div class="lp-cond"><div class="lp-branch">${frame.emptyLabel}${empty}</div></div>`;
-                }
-                return out;
-            }
-        }
-        return frame.html;
-    };
-
-    // Close the nearest open frame of `type`, rendering any frames left open
-    // inside it on the way out. An end tag with no matching frame open is a
-    // stray and is ignored. Closing only an exactly-matching top frame is not
-    // enough: a single mismatched end tag then left its block open, so the
-    // block ran on and swallowed everything after it — a loop, for instance,
-    // appearing to repeat well past the end of the document.
-    const closeBlock = type => {
-        if (!stack.some(frame => frame.type === type)) return;
-        for (;;) {
-            const frame = stack.pop();
-            append(closeFrame(frame));
-            if (frame.type === type) return;
-        }
-    };
-
-    const tagRegex = /\{%-?\s*(\w+)([\s\S]*?)-?%\}/g;
-    let lastIndex = 0;
-    let match;
-    while ((match = tagRegex.exec(text)) !== null) {
-        append(text.slice(lastIndex, match.index));
-        lastIndex = tagRegex.lastIndex;
-        const tag = match[1];
-        const rest = match[2].trim();
-        switch (tag) {
-            case 'choice': {
-                const args = parseTagArgs(rest);
-                const what = args.title || humanizeName(args.name || args.nameVar);
-                stack.push({ type: 'choice', head: annotationLabel('Choose one', what), options: [], html: '' });
-                break;
-            }
-            case 'or': {
-                const frame = peek();
-                if (frame && frame.type === 'choice') {
-                    frame.options.push(frame.html);
-                    frame.html = '';
-                }
-                break;
-            }
-            case 'endchoice':
-                closeBlock('choice');
-                break;
-            case 'optional': {
-                const args = parseTagArgs(rest);
-                stack.push({ type: 'optional', label: annotationLabel('Optional', humanizeName(args.name || args.nameVar)), html: '' });
-                break;
-            }
-            case 'endoptional':
-                closeBlock('optional');
-                break;
-            case 'editor': {
-                const args = parseTagArgs(rest);
-                const what = args.placeholder || humanizeName(args.name || args.nameVar);
-                stack.push({ type: 'editor', label: annotationLabel('Fill in', what), html: '' });
-                break;
-            }
-            case 'endeditor':
-                closeBlock('editor');
-                break;
-            case 'if':
-                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown when', humanizeCondition(rest)), html: '' });
-                break;
-            case 'unless':
-                stack.push({ type: 'if', branches: [], label: annotationLabel('Shown unless', humanizeCondition(rest)), html: '' });
-                break;
-            case 'elsif': {
-                const frame = peek();
-                if (frame && frame.type === 'if') {
-                    frame.branches.push({ label: frame.label, html: frame.html });
-                    frame.label = annotationLabel('Otherwise, when', humanizeCondition(rest));
-                    frame.html = '';
-                }
-                break;
-            }
-            case 'else': {
-                const frame = peek();
-                if (frame && (frame.type === 'if' || frame.type === 'case')) {
-                    if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
-                    frame.label = annotationLabel('Otherwise');
-                    frame.html = '';
-                } else if (frame && (frame.type === 'for' || frame.type === 'tablerow') && !frame.emptyLabel) {
-                    // A loop's else body shows when there is nothing to repeat over,
-                    // so it is a separate section rather than part of the repeated body.
-                    frame.emptyLabel = annotationLabel('If there are none');
-                    frame.body = frame.html;
-                    frame.html = '';
-                }
-                break;
-            }
-            case 'endif':
-            case 'endunless':
-                closeBlock('if');
-                break;
-            case 'case':
-                // label stays null (and the buffered text is discarded) until the
-                // first 'when' — Liquid ignores content between case and when.
-                stack.push({ type: 'case', subject: humanizeCondition(rest), branches: [], label: null, html: '' });
-                break;
-            case 'when': {
-                const frame = peek();
-                if (frame && frame.type === 'case') {
-                    if (frame.label !== null) frame.branches.push({ label: frame.label, html: frame.html });
-                    frame.label = annotationLabel('When', `${frame.subject} is ${humanizeCondition(rest)}`);
-                    frame.html = '';
-                }
-                break;
-            }
-            case 'endcase':
-                closeBlock('case');
-                break;
-            case 'for':
-            case 'tablerow': {
-                const m = rest.match(/^(\S+)\s+in\s+([\s\S]+)$/);
-                const detail = m
-                    ? `once for each ${humanizeName(m[1])} in ${humanizeCondition(m[2].split('|')[0])}`
-                    : humanizeCondition(rest);
-                stack.push({ type: tag, label: annotationLabel('Repeats', detail), html: '' });
-                break;
-            }
-            case 'endfor':
-                closeBlock('for');
-                break;
-            case 'endtablerow':
-                closeBlock('tablerow');
-                break;
-            default:
-                // assign, increment, decrement, render, include, cycle, break, … – no visible output
-                break;
-        }
-    }
-    append(text.slice(lastIndex));
-
-    // Close any blocks left open (e.g. while the template is being edited).
-    while (stack.length) {
-        const frame = stack.pop();
-        frame.unclosed = true;
-        append(closeFrame(frame));
-    }
-    text = root.html;
-
-    // Step 5: output expressions → inline data chips, so sentences stay readable
-    // instead of having invisible holes where values would go.
-    text = text.replace(/\{\{-?([\s\S]*?)-?\}\}/g, (_, expr) => {
-        expr = expr.split('|')[0].trim();
-        const literal = expr.match(/^'([^']*)'$|^"([^"]*)"$/);
-        if (literal) return escapeHtml(literal[1] !== undefined ? literal[1] : literal[2]);
-        if (!expr) return '';
-        stats.variables++;
-        return `<span class="lp-var">${escapeHtml(humanizeName(expr))}</span>`;
-    });
-
-    return { html: text, stats };
-}
-
 function joinWithAnd(parts) {
     if (parts.length <= 1) return parts.join('');
     return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
-}
-
-// Header shown above the annotated document: what it is, what it contains,
-// and a plain-English key to the colour-coded markers. Used both in the
-// webview and in the standalone export (which is why it carries no controls).
-function buildFullPreviewHeader(templateUri, stats) {
-    const fileName = templateUri ? path.basename(templateUri) : '';
-
-    const summaryParts = [];
-    if (stats.choices) summaryParts.push(`${pluralize(stats.choices, 'multiple-choice section')} (${pluralize(stats.options, 'option')} in total)`);
-    if (stats.optionals) summaryParts.push(pluralize(stats.optionals, 'optional section'));
-    if (stats.editors) summaryParts.push(pluralize(stats.editors, 'fill-in field'));
-    if (stats.conditionals) summaryParts.push(pluralize(stats.conditionals, 'automatic section'));
-    if (stats.loops) summaryParts.push(pluralize(stats.loops, 'repeating section'));
-    if (stats.variables) summaryParts.push(pluralize(stats.variables, 'data value', 'data values'));
-    const summary = summaryParts.length
-        ? `This document contains ${joinWithAnd(summaryParts)}.`
-        : 'This document has no options — it always reads exactly as shown below.';
-
-    // An unclosed block absorbs everything after it, which is why the document
-    // below can appear to run on past its end. Say so up front.
-    const unclosedNotice = stats.unclosed
-        ? `<div class="lp-warn">${pluralize(stats.unclosed, 'section is', 'sections are')} missing an end tag, so the content after ${stats.unclosed === 1 ? 'it' : 'them'} has been drawn inside. Look for the red “Not closed” markers below.</div>`
-        : '';
-
-    const legendRows = [];
-    const legendRow = (cls, label, description) =>
-        `<span class="lp-label ${cls}">${label}</span><span>${description}</span>`;
-    if (stats.choices) legendRows.push(legendRow('lg-choice', 'Choose one', 'The writer picks exactly one of the numbered options.'));
-    if (stats.optionals) legendRows.push(legendRow('lg-optional', 'Optional', 'The writer can include this content or leave it out.'));
-    if (stats.editors) legendRows.push(legendRow('lg-editor', 'Fill in', 'The writer types this in; any text shown is the starting suggestion.'));
-    if (stats.conditionals) legendRows.push(legendRow('lg-cond', 'Shown when…', 'Included automatically when the stated condition applies.'));
-    if (stats.loops) legendRows.push(legendRow('lg-loop', 'Repeats', 'This section appears once for each item in a list.'));
-    if (stats.variables) legendRows.push(`<span class="lp-var">example value</span><span>Filled in automatically from the case data.</span>`);
-    // The note legend row hides together with the notes themselves (see .lp-legend-note CSS).
-    if (stats.notes) legendRows.push(`<span class="lp-legend-note">${legendRow('lg-note', 'Author note', 'Guidance for template authors — never appears in the finished document.')}</span>`);
-
-    const legend = legendRows.length
-        ? `<details class="lp-legend" open><summary>What the markers mean</summary><div class="lp-legend-grid">${legendRows.join('')}</div></details>`
-        : '';
-
-    return `<div class="lp-header">
-<div class="lp-doc-title">Document options${fileName ? ' — ' + escapeHtml(fileName) : ''}</div>
-<div class="lp-summary">${summary}</div>
-${unclosedNotice}
-${legend}
-</div>`;
 }
 
 // "Show HTML source" toggle plumbing shared by both HTML previews. Webview
@@ -703,80 +257,6 @@ const htmlPreviewStyles = `
   .editor:has(input[type="radio"]) label { display: block; padding: 6px 10px; margin: 4px 0; border: 1px solid #90caf9; border-radius: 3px; background: white; }
   .editor-intro { display: block; font-size: 11px; font-weight: bold; font-family: sans-serif; margin-bottom: 4px; }`
     + viewSourceStyles;
-
-const fullPreviewStyles = `
-  .lp-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; line-height: 1.7; text-transform: uppercase; letter-spacing: 0.4px; color: white; padding: 0 8px; border-radius: 9px; margin-right: 8px; vertical-align: middle; }
-  .lp-detail { font-family: sans-serif; font-size: 12px; font-style: italic; color: #555; margin-right: 6px; vertical-align: middle; }
-
-  .lp-header { font-family: sans-serif; border: 1px solid #ddd; border-radius: 8px; background: #fafafa; padding: 12px 16px; margin: 0 0 18px 0; }
-  .lp-doc-title { font-size: 16px; font-weight: bold; color: #222; }
-  .lp-summary { font-size: 12.5px; color: #444; margin: 5px 0 4px 0; }
-  .lp-legend { margin-top: 6px; }
-  .lp-legend summary { font-size: 11.5px; font-weight: bold; color: #666; cursor: pointer; }
-  .lp-legend-grid { display: grid; grid-template-columns: max-content 1fr; gap: 6px 10px; align-items: center; font-size: 12px; color: #333; margin-top: 8px; }
-  .lg-choice { background: #1976d2; }
-  .lg-optional { background: #388e3c; }
-  .lg-editor { background: #ef6c00; }
-  .lg-cond { background: #7b1fa2; }
-  .lg-loop { background: #00796b; }
-  .lg-note { background: #9e9e9e; }
-
-  .lp-choice { border: 1px solid #90caf9; border-radius: 6px; margin: 10px 0; overflow: hidden; background: white; }
-  .lp-choice-head { background: #e3f2fd; border-bottom: 1px solid #bbdefb; padding: 5px 10px; }
-  .lp-choice .lp-label { background: #1976d2; }
-  .lp-option { padding: 6px 12px; }
-  .lp-option + .lp-option { border-top: 1px dashed #90caf9; }
-  .lp-opt-label { display: inline-block; font-family: sans-serif; font-size: 10px; font-weight: bold; color: #1565c0; background: #e3f2fd; border: 1px solid #90caf9; padding: 1px 8px; border-radius: 9px; margin: 2px 8px 2px 0; vertical-align: middle; }
-
-  .lp-optional { border: 1px dashed #81c784; border-left: 4px solid #43a047; border-radius: 0 6px 6px 0; background: #f1f8e9; padding: 6px 10px; margin: 10px 0; }
-  .lp-optional .lp-label { background: #388e3c; }
-
-  .lp-editor { border: 1px solid #ffcc80; border-left: 4px solid #ef6c00; border-radius: 0 6px 6px 0; background: #fff8e1; padding: 6px 10px; margin: 10px 0; }
-  .lp-editor .lp-label { background: #ef6c00; }
-
-  .lp-cond { border: 1px solid #ce93d8; border-radius: 6px; margin: 10px 0; overflow: hidden; background: #faf5fb; }
-  .lp-cond > .lp-branch { padding: 6px 12px; }
-  .lp-branch + .lp-branch { border-top: 1px dashed #ce93d8; }
-  .lp-cond .lp-label { background: #7b1fa2; }
-
-  .lp-loop { border: 1px solid #80cbc4; border-left: 4px solid #00796b; border-radius: 0 6px 6px 0; background: #e0f2f1; padding: 6px 10px; margin: 10px 0; }
-  .lp-loop .lp-label { background: #00796b; }
-
-  .lp-note { border: 1px dashed #bdbdbd; border-radius: 6px; background: #f5f5f5; color: #616161; font-style: italic; font-size: 12px; padding: 4px 10px; margin: 8px 0; }
-  .lp-note .lp-label { background: #9e9e9e; font-style: normal; }
-
-  .lp-legend-note { display: contents; }
-  body:has(#lp-show-notes:not(:checked)) .lp-note,
-  body:has(#lp-show-notes:not(:checked)) .lp-legend-note { display: none; }
-
-  .lp-warn { font-family: sans-serif; font-size: 12.5px; color: #b71c1c; background: #ffebee; border: 1px solid #ef9a9a; border-radius: 6px; padding: 5px 10px; margin: 6px 0 4px 0; }
-
-  .lp-unclosed { border: 1px solid #ef9a9a; border-radius: 6px; background: #fff5f5; padding: 6px 10px; margin: 10px 0; }
-  .lp-unclosed > .lp-label { background: #c62828; }
-
-  .lp-var { display: inline; background: #eceff1; border: 1px solid #cfd8dc; border-radius: 4px; padding: 0 5px; color: #37474f; font-style: italic; white-space: nowrap; }`
-    + viewSourceStyles + `
-  .lp-source pre { user-select: all; }`;
-
-// A complete standalone HTML document for the annotated view: preview styles
-// and any external CSS are inlined, so the file works on its own (e.g. pasted
-// into SharePoint or saved as an .html file).
-function buildStandaloneHtml(content, cssText) {
-    return `<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-  body { background-color: white; color: black; margin: 0; padding: 16px; box-sizing: border-box; }
-  h1, h2, h3, h4, h5, h6 { color: black; }${fullPreviewStyles}
-${cssText}
-</style>
-</head>
-<body>
-${content}
-</body>
-</html>`;
-}
 
 // Syntax-highlight a tag's markup: punctuation, tag name, attribute names and
 // quoted values each get a token span. All token text is escaped, and the
@@ -835,37 +315,40 @@ function highlightHtml(html) {
     return out;
 }
 
-// Content of the Full HTML Preview webview, split into two parts: 'chrome' is
-// the extension's own markup — header with view toggles and the hidden panel
-// holding the standalone HTML source — and 'rendered' is the annotated
-// document. They are kept in separate containers (chrome first) so malformed
-// HTML in the template — stray closing tags, unclosed elements — can never
-// swallow or break out into the extension's UI when the browser parses it.
+// Content of the Full HTML Preview, which shows the template spec (see
+// spec.js), in two parts: 'chrome' is the extension's own toolbar and
+// 'rendered' is the spec. They are kept in separate containers (chrome first)
+// so malformed HTML in the template can never swallow the toolbar.
 function buildFullPreviewContent(templateText, templateUri) {
-    const { html, stats } = annotateLiquid(templateText);
-    const cssText = readCssContents(templateUri);
+    const built = buildSpec(templateText, { fileName: templateUri ? path.basename(templateUri) : '', revealFile: templateUri });
+    const notes = built.stats.notes
+        ? `<label class="lp-toggle"><input type="checkbox" id="sp-hide-notes"> Hide ${pluralize(built.stats.notes, 'author note')}</label>`
+        : '';
+    const toolbar = `<div class="sp-toolbar">${notes}<span class="sp-quiet">Click a reference to go to its line.</span><button type="button" class="sp-push" data-lp-action="exportSpec">Export to share or print\u2026</button></div>`;
+    return { chrome: toolbar, rendered: built.body };
+}
 
-    const exportContent = buildFullPreviewHeader(templateUri, stats) + html;
-    const standalone = buildStandaloneHtml(exportContent, cssText);
-
-    // The toggles are plain checkboxes wired up purely with CSS
-    // (body:has(...) rules in fullPreviewStyles).
-    const toggles = [];
-    if (stats.notes) {
-        toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-notes" checked=""> Show ${pluralize(stats.notes, 'author note')}</label>`);
+// Save the spec as a file of its own, with the template's stylesheets inlined,
+// to open in a browser and print to PDF.
+async function exportSpec(templateUri) {
+    try {
+        const document = await vscode.workspace.openTextDocument(templateUri);
+        const fileName = path.basename(templateUri);
+        const built = buildSpec(document.getText(), { fileName });
+        const html = standaloneSpec(built, { fileName, css: readCssContents(templateUri) });
+        const target = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(templateUri.replace(/\.liquid$/i, '') + '.spec.html'),
+            filters: { HTML: ['html'] },
+            saveLabel: 'Export spec'
+        });
+        if (!target) return;
+        require('fs').writeFileSync(target.fsPath, html, 'utf8');
+        const open = 'Open in browser';
+        const picked = await vscode.window.showInformationMessage(`Saved the spec for ${fileName} (version ${built.stamp}) to ${path.basename(target.fsPath)}. Open it in a browser to print it or save it as a PDF.`, open);
+        if (picked === open) await vscode.env.openExternal(target);
+    } catch (err) {
+        vscode.window.showErrorMessage(`Reporter Liquid Preview: could not export the spec (${err.message})`);
     }
-    toggles.push(`<label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`);
-    const toolbar = `<div class="lp-toolbar">${toggles.join('')}</div>`;
-
-    const sourcePanel = `<div class="lp-source">
-<div class="lp-source-hint">Standalone HTML for this document — styles are included, so it works on its own. Click the code below to select it all, copy, and paste into SharePoint or save as an .html file.</div>
-<pre>${highlightHtml(formatHtml(standalone))}</pre>
-</div>`;
-
-    return {
-        chrome: toolbar + buildFullPreviewHeader(templateUri, stats) + sourcePanel,
-        rendered: html
-    };
 }
 
 async function refreshHtmlFullPanel(preview, panel) {
@@ -875,9 +358,9 @@ async function refreshHtmlFullPanel(preview, panel) {
     try {
         let templateDocument = await vscode.workspace.openTextDocument(preview.templateUri);
         let templateText = templateDocument.getText();
-        // The annotated view is built by its own scanner, which recovers from a
-        // missing end tag instead of failing on it — so it can say that a
-        // section is unclosed, but not which line to go and fix. Parse the
+        // The spec is built by its own scanner, which recovers from a missing
+        // end tag instead of failing on it, so it can say that a section is
+        // unclosed, but not which line to go and fix. Parse the
         // template as well, purely to borrow LiquidJS's exact position for the
         // first structural problem.
         try {
@@ -893,7 +376,7 @@ async function refreshHtmlFullPanel(preview, panel) {
     }
 
     publishDiagnostics(preview, diagnostics);
-    updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(diagnostics), content.rendered, fullPreviewStyles);
+    updatePreviewPanel(panel, preview, content.chrome + buildErrorPaneHtml(diagnostics), content.rendered, SPEC_STYLES);
 }
 
 // Run panel refreshes for one preview one at a time. The change handler is
@@ -2550,7 +2033,6 @@ module.exports = {
 // stubbed vscode module and checks the HTML they produce.
 Object.assign(module.exports, {
     acceptActualOutput,
-    annotateLiquid,
     buildErrorPaneHtml,
     buildFullPreviewContent,
     buildPreviewHtml,
@@ -2560,7 +2042,6 @@ Object.assign(module.exports, {
     clearPreviewDiagnostics,
     dedupeDiagnostics,
     formatHtml,
-    fullPreviewStyles,
     htmlPreviewStyles,
     jsonDiagnostic,
     liquidEngine,
@@ -2587,7 +2068,7 @@ Object.assign(module.exports, {
     showTestReport,
     snippetOf,
     strayTagDiagnostics,
-    stripLiquidFromHtmlTags,
+    exportSpec,
     tokenLocation,
     toTestMessages,
     wirePreviewMessages

@@ -53,32 +53,36 @@ A toolbar pinned to the top of the viewport offers a **Show HTML source** checkb
 - Switching views keeps your place: the view you enter is scrolled to the same content you were looking at in the view you left, in both directions.
 - Robust against imperfect template output — stray closing tags or unclosed elements in the rendered HTML cannot break the toggle or the preview's own UI.
 
-### Full HTML Preview (Document Options view)
+### Template Spec (Full HTML Preview)
 
-Renders your template as a layman-readable "document options" overview — designed to be shown to colleagues who don't know Liquid, so they can see every option, optional section and fill-in field a document offers.
+The template written out for the people who own the document, to check it does what it should and to ask for changes clearly. It needs no data: nothing is run. Every part of the document that can vary is shown once, in place, with a reference and what decides it in plain words, so an owner can write "R12.2 should also apply to DC pensions" and nobody has to guess what they meant.
 
-- Use `ctrl+k f` (or **Reporter Liquid: Open Full HTML Preview to the Side**) while a `.liquid` file is active.
-- No data file is required — Liquid logic is annotated rather than executed.
-- A header at the top names the document, summarises what it contains (e.g. "2 multiple-choice sections (5 options in total), 1 optional section, 3 fill-in fields…") and includes a collapsible plain-English key to the markers.
-- **Only actual outputs are shown**: loops and conditionals that exist purely to set up variables (`assign`, `capture`, etc.) and produce nothing visible are hidden entirely, as are empty branches of otherwise-visible conditionals — so readers see every possible output without the behind-the-scenes logic that makes it work.
-- Liquid constructs are shown as colour-coded, plainly worded boxes:
+- `ctrl+k f`, or **Reporter Liquid: Open Template Spec (Full HTML Preview) to the Side**, shows it beside the template and keeps it up to date as you type. Click a reference to go to its line.
+- **Export to share or print…** (in the panel, or **Reporter Liquid: Export Template Spec to Share or Print** from the command palette or the editor's right-click menu) saves it as a single `.html` file with the template's stylesheets included. Open it in a browser and print it or save it as a PDF, then mark the PDF up.
 
-| Construct | Colour | Shown as |
-|-----------|--------|----------|
-| `{% choice %}` / `{% or %}` | Blue | "Choose one" box (with the choice title) containing numbered Option 1, Option 2, … |
-| `{% optional %}` | Green | "Optional" box, with the field name in readable words |
-| `{% editor %}` | Amber | "Fill in" box, showing the placeholder text; inner content appears as the starting suggestion |
-| `{% if %}` / `{% elsif %}` / `{% else %}` / `{% unless %}` / `{% case %}` | Purple | "Shown when …" branches with the condition translated to plain English (e.g. `patient.age > 8` → "patient age is more than 8") |
-| `{% for %}` | Teal | "Repeats — once for each … " box |
-| `{% comment %}` | Grey (dashed) | "Author note" box |
-| `{{ variable }}` | Grey chip | Inline placeholder chip in readable words (e.g. `{{ owner.last_name }}` → "owner last name"), so sentences keep their flow |
+What it contains, in this order (each section starts a new page when printed):
 
-#### Toolbar toggles
+1. **A cover**: the template's name, a **version stamp** (from the template's text, so an owner's comments can be matched to the version they read), a summary of what varies, a key, and contents taken from the document's `h1`–`h3` headings.
+2. **The document**, as it looks with your stylesheets, with each part that varies marked:
 
-A toolbar pinned to the top of the viewport offers:
+| Reference | What it is | Comes from |
+|-----------|------------|------------|
+| **R**4, R4.1, R4.2 … | A rule: shown automatically when the case data meets the condition. Each branch has its own reference. | `if` / `elsif` / `else`, `unless`, `case` / `when` |
+| **L**2 | A repeat: shown once for each item in a list, and its "when there are none" part. | `for`, `tablerow` |
+| **C**1.1, C1.2 … | A choice: the adviser picks one option. | `choice` / `or` |
+| **O**3 | Optional: the adviser ticks to include it. | `optional` |
+| **E**1 | A fill-in: the adviser types it. | `editor` |
+| **V**5 | A worked-out value (see 4). | `assign`, `capture` |
 
-- **Show author notes** — untick to hide the `{% comment %}` boxes (and their legend entry) when the notes are only relevant to template developers. Only shown when the template contains notes.
-- **Show HTML source** — swaps the view for a complete, standalone HTML document ready to publish elsewhere (e.g. paste into SharePoint or save as an `.html` file). The preview's styles and the contents of any external CSS the preview loads are inlined, so the document works entirely on its own; the toggle controls themselves are excluded. Click the code once to select all of it for copying.
+   A part made of whole paragraphs is marked by a coloured rail in the margin with its reference and condition. Alternatives inside a sentence are bracketed in it, as in "meeting with [R3.1 her / R3.2 him]", so the sentence stays a sentence. Rows of a table that come and go are labelled by rows of their own, and cells by a mark in the cell, so nothing is pushed out of its table. Values from the case data are shown as grey chips in plain words (`{{ client.pensions.size }}` is "the number of client pensions").
+3. **A checklist of every reference**, in order, with what decides it, the text it shows, the Liquid and line it comes from, and a column to tick and comment in. Rules that only work out values, and show nothing themselves, are left out of the document but listed here.
+4. **How values are worked out**: each value the template sets with `assign` or `capture` and then uses to decide something, or shows, with every place it's set and the conditions it's set under. For example: *has DB* is "set to false: always", then "set to true when: L1 repeats for each pension in client pensions › R2 shown when pension type is "DB"". A condition that reads such a value links to it.
+
+Things to know:
+- **References are numbered in order** in each version. Adding a rule renumbers those after it, which is why the cover carries the version stamp.
+- **Liquid inside an HTML tag** (a class or style set by a condition) is left out: it changes how something looks, not what it says. A rule inside `<style>` is listed in the checklist as changing the styling.
+- **A missing end tag** is marked "Not closed" where the block starts, counted on the cover, and located in the problems pane.
+- Text inside HTML comments is left out, but Liquid inside them still counts, as it does in Reporter.
 
 ### Data files
 
@@ -118,7 +122,7 @@ The HTML preview automatically injects stylesheets so the output matches your in
 - **`universal.css`** — any file with this name found at the root of your workspace folders is injected into every preview.
 - **`css/` folder** — all `.css` files inside a `css/` directory that sits alongside the active template file are injected.
 
-The Full HTML Preview's standalone export inlines the contents of these same files.
+The template spec's export inlines the contents of these same files.
 
 ### Custom Liquid Tags
 
@@ -132,7 +136,7 @@ Reporter's own tags, rendered as Reporter renders them. Each takes a field name,
 
 Each field name should be used once per template; the [Problems panel](#problems-panel) flags a repeat.
 
-Beyond those, `{% echo value | filter %}` is accepted as `{{ value | filter }}`. Reporter accepts it, but the engine behind the preview only gained the tag in a later version, so the extension supplies it. Values, filters and their warnings behave as they do in `{{ }}`, and the Full HTML Preview shows it as a data value.
+Beyond those, `{% echo value | filter %}` is accepted as `{{ value | filter }}`. Reporter accepts it, but the engine behind the preview only gained the tag in a later version, so the extension supplies it. Values, filters and their warnings behave as they do in `{{ }}`, and the template spec shows it as a data value.
 
 ### Custom Liquid Filters
 
@@ -376,7 +380,7 @@ Pin the tag to the version of the extension you have installed (see [Releases](h
 |----------|--|
 | `ctrl+k h` | HTML preview |
 | `ctrl+k v` | Plain-text preview |
-| `ctrl+k f` | Document Options view (Full HTML Preview) |
+| `ctrl+k f` | Template spec (Full HTML Preview) |
 | `Shift+Alt+F` | Format Document (VS Code's own shortcut) |
 
 All commands are in the command palette under **Reporter Liquid:**. **Create Tests from Data Files…** is also on the right-click menu of a `.liquid` file.
@@ -397,6 +401,7 @@ use them.
 | File | |
 |------|--|
 | `engine.js` | The rendering engine: LiquidJS with Reporter's tags and filters, and where each problem is. Shared by the extension and the command-line runner, so the two can't drift apart. |
+| `spec.js` | The template spec: the template read into blocks, numbered, described in words, and written out as a page to print. |
 | `extension.js` | The previews, the problems panel, template tests in the editor (report, Testing view, creating and editing tests), updates. |
 | `template-tests.js` | Suites: reading them, running cases, the report, editing a suite in place. |
 | `output-checks.js` | Checks: parsing the output as a browser would, selectors and row labels, accepting and relocating. |

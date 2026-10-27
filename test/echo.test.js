@@ -64,10 +64,10 @@ test('echo is among the tags offered, and described', () => {
     assert.strictEqual(editing.TAGS.echo[0], 'echo ${1:value} %}');
 });
 
-test('the Full HTML Preview shows an echo as the value it gives, and counts it', () => {
-    const { rendered, chrome } = extension.buildFullPreviewContent('<p>Hi {% echo customer.name | upcase %}, plan {{ plan }} {%- echo x -%}!</p>');
-    assert.match(rendered, /Hi <span class="lp-var">customer name<\/span>, plan <span class="lp-var">plan<\/span> <span class="lp-var">x<\/span>!/);
-    assert.match(chrome, /contains 3 data values/);
+test('the template spec shows an echo as the value it gives, and counts it', () => {
+    const { rendered } = extension.buildFullPreviewContent('<p>Hi {% echo customer.name | upcase %}, plan {{ plan }} {%- echo x -%}!</p>');
+    assert.match(rendered, /Hi <span class="sp-data"[^>]*>customer name<\/span>, plan <span class="sp-data"[^>]*>plan<\/span> <span class="sp-data"[^>]*>x<\/span>!/);
+    assert.match(rendered, /3 values filled in from the case data/);
 });
 
 test('echo shows a date two weeks ahead, as the real letters use it', async () => {

@@ -1,0 +1,51 @@
+<style>
+  body { font-family: Georgia, serif; }
+  table.plans td { border: 1px solid #999; padding: 4px; }
+  {% if client.large_print %}body { font-size: 18px; }{% endif %}
+</style>
+{%- comment -%} Suitability report: main body. Owner: Advice team {%- endcomment -%}
+{%- assign hasDB = false -%}
+{%- assign totalValue = 0 -%}
+{%- for pension in client.pensions -%}
+  {%- if pension.type == 'DB' -%}{%- assign hasDB = true -%}{%- endif -%}
+  {%- assign totalValue = totalValue | plus: pension.value -%}
+{%- endfor -%}
+{%- capture greeting -%}Dear {{ client.title }} {{ client.surname }}{%- endcapture -%}
+<h1>Your pension recommendation</h1>
+<p>{{ greeting }},</p>
+<p>Thank you for meeting with {% if adviser.gender == 'F' %}her{% else %}him{% endif %} on {{ meeting.date | date: '%e %B %Y' }}. This report sets out our recommendation for your {{ client.pensions.size }} {% if client.pensions.size == 1 %}pension{% else %}pensions{% endif %}.</p>
+<h2>Your plans</h2>
+<table class="plans">
+  <tr><th>Provider</th><th>Value</th></tr>
+  {%- for pension in client.pensions %}
+  <tr><td>{{ pension.provider }}</td><td>{{ pension.value | money }}</td></tr>
+  {%- endfor %}
+  {%- if client.pensions.size > 1 %}
+  <tr><td>Total</td><td>{{ totalValue | money }}</td></tr>
+  {%- endif %}
+</table>
+{%- if hasDB %}
+<h2>Your defined benefit pension</h2>
+<p>Because you have a defined benefit pension, we have taken advice from a pension transfer specialist.</p>
+{%- endif %}
+<h2>Our recommendation</h2>
+{%- choice "recommendation", title: "Recommendation" %}
+<p>We recommend that you transfer your pensions into a single plan.</p>
+{%- or %}
+<p>We recommend that you keep your pensions where they are.</p>
+{%- endchoice %}
+{%- optional "survey9", title: "If tax residency declaration needed" %}
+<p>You told us you may be resident for tax outside the UK. Please complete the enclosed declaration.</p>
+{%- endoptional %}
+<h3>Attitude to risk</h3>
+{%- case client.risk %}
+{%- when 'low', 'cautious' %}
+<p>You told us you prefer to take little risk with your money.</p>
+{%- when 'high' %}
+<p>You told us you are comfortable with high risk.</p>
+{%- else %}
+<p>You told us you are comfortable with a moderate level of risk.</p>
+{%- endcase %}
+<p>Additional comments:</p>
+{%- editor "comments", placeholder: "Anything else the client should know", lines: 4 %}{%- endeditor %}
+<p>Yours sincerely,<br>{{ adviser.name }}</p>
