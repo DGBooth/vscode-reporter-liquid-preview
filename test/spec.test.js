@@ -305,3 +305,18 @@ test('a note in table logic that shows nothing goes to the checklist, not a late
     assert.strictEqual(dom.querySelector('#sp-document td').textContent, 'Row');
     assert.strictEqual(dom.querySelector('#sp-checklist .sp-ck-note').textContent, 'Author note: Count');
 });
+
+test('collapsing notes never takes in what is shown between them', () => {
+    const { built, doc } = documentOf([
+        '{% comment %}NAV:A{% endcomment %}',
+        '{% optional "extra", title: "Extra section" %}<p>Optional text</p>{% endoptional %}',
+        '<table><tr><td>Cell</td></tr></table>',
+        '{% comment %}NAV:B{% endcomment %}',
+        '<div><p>Para</p></div>',
+        '{% comment %}NAV:C{% endcomment %}'
+    ].join('\n'));
+    assert.strictEqual(doc.querySelectorAll('details.sp-notes').length, 0, 'no two of these notes are next to each other');
+    assert.ok(!doc.querySelector('details.sp-notes .sp-blk, details.sp-notes table, details.sp-notes p'));
+    assert.strictEqual(doc.querySelectorAll('.sp-note').length, 3);
+    assert.strictEqual(built.stats.optionals, 1);
+});

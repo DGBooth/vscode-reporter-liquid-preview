@@ -573,7 +573,12 @@ const TABLE_PARENTS = new Set(['table', 'thead', 'tbody', 'tfoot']);
 const BLOCK_CONTENT = new RegExp(`<(${[...HTML_BLOCK_TAGS].join('|')})\\b`, 'i');
 
 // An author note as the spec writes it, and its text.
-const NOTE = /<div class="sp-note"><span class="sp-note-label">Author note<\/span> ([\s\S]*?)<\/div>/g;
+// The text is escaped, so it has no '<': matching [^<]* keeps each match to
+// one note. A looser pattern can run on past a note's own </div> to the next
+// note further down, taking in whatever is shown between them.
+const NOTE_HTML = '<div class="sp-note(?: sp-note-cell)?"><span class="sp-note-label">Author note<\\/span> ([^<]*)<\\/div>';
+const NOTE = new RegExp(NOTE_HTML, 'g');
+const NOTE_RUN = new RegExp(`(?:${NOTE_HTML.replace('(?: sp-note-cell)?', '').replace('([^<]*)', '[^<]*')}\\s*){2,}`, 'g');
 
 // Whether some of the HTML is seen by the document's reader. Author notes are
 // not: a block holding only notes and assigns works out values, and showing it
@@ -590,7 +595,7 @@ function notesIn(html) {
 // one line that opens to show them. Notes gather like this where a template
 // works out values for a while, as before a table.
 function collapseNotes(html) {
-    return html.replace(/(?:<div class="sp-note">[\s\S]*?<\/div>\s*){2,}/g, run => {
+    return html.replace(NOTE_RUN, run => {
         const count = notesIn(run).length;
         return `<details class="sp-notes"><summary>${count} author notes</summary>${run}</details>`;
     });
