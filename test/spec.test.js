@@ -320,3 +320,13 @@ test('collapsing notes never takes in what is shown between them', () => {
     assert.strictEqual(doc.querySelectorAll('.sp-note').length, 3);
     assert.strictEqual(built.stats.optionals, 1);
 });
+
+test('the spec\u2019s code is dark on light whatever styles code around it', () => {
+    // As VS Code styles code in a webview in a dark theme.
+    const page = spec.standaloneSpec(build(FIXTURE), { css: 'code { color: #d7ba7d; background-color: #1e1e1e; }' });
+    const { window } = new JSDOM(page);
+    const code = window.document.querySelector('.sp-appendix code');
+    const style = window.getComputedStyle(code);
+    assert.strictEqual(style.color, 'rgb(36, 41, 47)');
+    assert.strictEqual(style.backgroundColor, 'rgb(243, 244, 246)');
+});

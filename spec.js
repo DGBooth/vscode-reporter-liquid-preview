@@ -1002,6 +1002,10 @@ const SPEC_STYLES = `
   .sp-toc-l2 { padding-left: 12px; } .sp-toc-l3 { padding-left: 24px; font-size: 12px; }
   .sp-toc a { color: #1a4f8b; text-decoration: none; }
   .sp-quiet { color: #666; font-size: 12px; }
+  /* The spec's own code: light, whatever the setting. VS Code gives code a dark
+     background in its panels in a dark theme, and a template's stylesheet may
+     style code too; either left grey text on a dark ground. */
+  .sp-cover code, .sp-appendix code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; color: #24292f; background: #f3f4f6; border: 1px solid #e1e4e8; border-radius: 3px; padding: 0 4px; white-space: pre-wrap; word-break: break-word; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 
   .sp-blk { border-left: 3px solid var(--sp); padding: 0 0 0 10px; margin: 8px 0 8px 0; }
   .sp-part + .sp-part { border-top: 1px dashed var(--sp); margin-top: 6px; padding-top: 4px; }
@@ -1047,7 +1051,7 @@ const SPEC_STYLES = `
   .sp-ck-id { white-space: nowrap; }
   .sp-ck-id .sp-id { --sp: #546e7a; }
   .sp-ck-src { width: 30%; color: #555; }
-  .sp-ck-src code { font-size: 10.5px; word-break: break-word; }
+  .sp-ck-src code { font-size: 10.5px; }
   .sp-ck-line { display: block; color: #888; font-size: 10.5px; }
   .sp-ck-text { color: #555; margin-top: 2px; }
   .sp-ck-tick { width: 18%; border-left: 1px solid #e3e3e3 !important; }
@@ -1055,7 +1059,7 @@ const SPEC_STYLES = `
   .sp-val { margin: 12px 0; break-inside: avoid; page-break-inside: avoid; font-size: 13px; }
   .sp-val ul { margin: 4px 0 0; padding-left: 20px; }
   .sp-val li { margin: 3px 0; }
-  .sp-val code { font-size: 11px; color: #555; }
+  .sp-val code { font-size: 11px; }
   .sp-when { color: #444; }
   .sp-step .sp-id-plain { font-size: 10px; margin-right: 3px; }
   .sp-then { color: #999; }
