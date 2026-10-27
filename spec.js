@@ -657,6 +657,21 @@ function buildSpec(text, options = {}) {
         ? `<span class="sp-id diag-goto" role="button" tabindex="0" title="Line ${line} of the template" data-diag-file="${escapeHtml(revealFile)}" data-diag-line="${line}" data-diag-col="1">${id}</span>`
         : `<a class="sp-id" href="#sp-i-${id}">${id}</a>`;
 
+    // Notes met between a table's rows or cells. Nothing but rows and cells can
+    // go there: a browser moves anything else out in front of the table, so a
+    // note per row ended up as a pile of notes above it. They wait here and go
+    // into the next cell, at its top, or after the table if no cell comes.
+    const waiting = [];
+    const placeWaiting = text => {
+        const cell = /<t[dh]\b[^>]*>/i.exec(text);
+        const end = /<\/table\s*>/i.exec(text);
+        const at = cell && (!end || cell.index < end.index) ? cell : end;
+        if (!at) return text;
+        const notes = waiting.splice(0).map(w => w.html.replace('class="sp-note"', 'class="sp-note sp-note-cell"')).join('');
+        const cut = at.index + at[0].length;
+        return text.slice(0, cut) + notes + text.slice(cut);
+    };
+
     const render = (nodes, where) => {
         let html = '';
         for (const node of nodes) html += renderNode(node, where);
@@ -665,9 +680,12 @@ function buildSpec(text, options = {}) {
 
     const renderNode = (node, where) => {
         switch (node.type) {
-            case 'text':
-                if (!node.raw) where.feed(node.text);
-                return node.text;
+            case 'text': {
+                if (node.raw) return node.text;
+                const text = waiting.length ? placeWaiting(node.text) : node.text;
+                where.feed(node.text);
+                return text;
+            }
             case 'output': {
                 if (node.raw) return '';
                 const tokens = lexExpression(node.expr.split('|')[0]);
@@ -683,6 +701,10 @@ function buildSpec(text, options = {}) {
                 return `<span class="sp-data" title="${escapeHtml(node.expr)}">${escapeHtml(label)}</span>${vref}`;
             }
             case 'note':
+                if (TABLE_PARENTS.has(where.top) || where.top === 'tr') {
+                    waiting.push({ html: `<div class="sp-note"><span class="sp-note-label">Author note</span> ${escapeHtml(node.text)}</div>` });
+                    return '';
+                }
                 return `<div class="sp-note"><span class="sp-note-label">Author note</span> ${escapeHtml(node.text)}</div>`;
             case 'include':
                 return node.raw ? '' : `<span class="sp-data">contents of ${escapeHtml(node.args.split(/[\s,]/)[0].replace(/['"]/g, ''))}</span>`;
@@ -699,9 +721,11 @@ function buildSpec(text, options = {}) {
         let after = before;
         const parts = partsOf(node).map(part => {
             const inner = before.copy();
+            const waitingBefore = waiting.slice();
             const html = render(part.children, inner);
             after = inner;
-            return Object.assign({}, part, { html, words: words(node, part), shown: hasVisible(html) });
+            const left = waiting.filter(w => !waitingBefore.includes(w));
+            return Object.assign({}, part, { html, left, words: words(node, part), shown: hasVisible(html) });
         });
         where.stack = after.stack;
 
@@ -730,7 +754,7 @@ function buildSpec(text, options = {}) {
             title: node.type === 'choice' ? (node.args.title || humanizeName(node.args.name || node.args.nameVar)) : '',
             name: node.args ? (node.args.name || node.args.nameVar || '') : '',
             unclosed: !!node.unclosed,
-            parts: parts.map(p => ({ id: p.id, line: p.line, source: p.branch ? p.branch.source : '', words: p.words, shown: p.shown, text: plainText(p.html.replace(NOTE, '')), notes: notesIn(p.html) }))
+            parts: parts.map(p => ({ id: p.id, line: p.line, source: p.branch ? p.branch.source : '', words: p.words, shown: p.shown, text: plainText(p.html.replace(NOTE, '')), notes: notesIn(p.html + p.left.map(w => w.html).join('')) }))
         };
         items.push(item);
         // An editor shows a box to type in even with nothing inside it.
@@ -739,6 +763,11 @@ function buildSpec(text, options = {}) {
             parts[0].shown = true;
             item.parts[0].shown = true;
             shown.push(parts[0]);
+        }
+        // Notes from a part that shows nothing go with it to the checklist,
+        // not into some later cell.
+        for (const p of parts) {
+            if (!p.shown) for (const w of p.left) waiting.splice(waiting.indexOf(w), 1);
         }
         if (!shown.length) return '';
         // Inside <style> or <script> it changes how the page looks or works,
@@ -796,7 +825,8 @@ function buildSpec(text, options = {}) {
         return 'block';
     };
 
-    let documentHtml = collapseNotes(render(root.children, new OpenElements()));
+    let documentHtml = render(root.children, new OpenElements());
+    documentHtml = collapseNotes(documentHtml + waiting.splice(0).map(w => w.html).join(''));
     stats.notes = notesIn(documentHtml).length;
     items.sort((a, b) => a.line - b.line || a.id.localeCompare(b.id));
 
@@ -995,6 +1025,7 @@ const SPEC_STYLES = `
   .sp-notes { margin: 6px 0; font: 12px system-ui, sans-serif; color: #666; }
   .sp-notes > summary { cursor: pointer; display: inline-block; background: #f5f5f5; border-left: 3px solid #9e9e9e; padding: 2px 8px; font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: #777; }
   .sp-notes[open] > summary { margin-bottom: 2px; }
+  .sp-note-cell { font-size: 10.5px; margin: 0 0 3px; padding: 1px 6px; }
   .sp-ck-note { color: #666; font-style: italic; margin-top: 2px; }
   body:has(#sp-hide-notes:checked) .sp-note,
   body:has(#sp-hide-notes:checked) .sp-notes { display: none; }

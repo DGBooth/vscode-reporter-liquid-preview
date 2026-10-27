@@ -280,3 +280,28 @@ test('notes in a row, with nothing shown between them, collapse into one line', 
     assert.strictEqual(dom.querySelector('#sp-document > .sp-note').textContent, 'Author note Alone', 'a note on its own stays as it is');
     assert.strictEqual(built.stats.notes, 4);
 });
+
+test('a note between table rows goes into the row it labels, not out in front of the table', () => {
+    const { doc } = documentOf([
+        '<p>Before</p><table>',
+        '<tr><th>Feature</th><th>Detail</th></tr>',
+        '{% comment %}NAV:OWNER{% endcomment %}',
+        '<tr><td>Owner</td><td>{{ owner }}</td></tr>',
+        '{% comment %}NAV:TERM{% endcomment %}',
+        '{% if term %}<tr><td>Term</td><td>{{ term }}</td></tr>{% endif %}',
+        '<tr>{% comment %}NAV:CELL{% endcomment %}<td>Last</td></tr>',
+        '{% comment %}NAV:END{% endcomment %}',
+        '</table><p>After</p>'
+    ].join('\n'));
+    assert.strictEqual(doc.querySelector('table').previousElementSibling.textContent, 'Before', 'nothing pushed out in front of the table');
+    const cellNotes = [...doc.querySelectorAll('td > .sp-note')].map(n => `${n.parentElement.textContent.replace(n.textContent, '').trim()}: ${n.textContent}`);
+    assert.deepStrictEqual(cellNotes, ['Owner: Author note NAV:OWNER', 'Term: Author note NAV:TERM', 'Last: Author note NAV:CELL']);
+    assert.strictEqual(doc.querySelector('table').nextElementSibling.textContent, 'Author note NAV:END', 'a note with no cell after it goes after the table');
+});
+
+test('a note in table logic that shows nothing goes to the checklist, not a later cell', () => {
+    const built = build('<table>{% for p in ps %}{% comment %}Count{% endcomment %}{% assign n = n | plus: 1 %}{% endfor %}<tr><td>Row</td></tr></table>');
+    const dom = new JSDOM(`<body>${built.body}</body>`).window.document;
+    assert.strictEqual(dom.querySelector('#sp-document td').textContent, 'Row');
+    assert.strictEqual(dom.querySelector('#sp-checklist .sp-ck-note').textContent, 'Author note: Count');
+});
