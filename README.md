@@ -62,7 +62,7 @@ The template written out for the people who own the document, to check it does w
 
 What it contains, in this order (each section starts a new page when printed):
 
-1. **A cover**: the template's name, a **version stamp** (from the template's text, so an owner's comments can be matched to the version they read), a summary of what varies, a key, and contents taken from the document's `h1`–`h3` headings.
+1. **A cover**: the template's name; its **version**, as the template sets it for itself (`{% assign SRVersion = "4.12" %}`, or `NALVersion`, `CTPVersion`: any document code in capitals followed by `Version`, set with `assign` or `capture`); a **fingerprint** of the template's text, which changes with any edit, so a spec of a template edited without a new version can still be told apart; a summary of what varies, a key, and contents taken from the document's `h1`–`h3` headings.
 2. **The document**, as it looks with your stylesheets, with each part that varies marked:
 
 | Reference | What it is | Comes from |
@@ -79,7 +79,7 @@ What it contains, in this order (each section starts a new page when printed):
 4. **How values are worked out**: each value the template sets with `assign` or `capture` and then uses to decide something, or shows, with every place it's set and the conditions it's set under. For example: *has DB* is "set to false: always", then "set to true when: L1 repeats for each pension in client pensions › R2 shown when pension type is "DB"". A condition that reads such a value links to it.
 
 Things to know:
-- **References are numbered in order** in each version. Adding a rule renumbers those after it, which is why the cover carries the version stamp.
+- **References are numbered in order** in each version. Adding a rule renumbers those after it, which is why the cover carries the version and fingerprint.
 - **Liquid inside an HTML tag** (a class or style set by a condition) is left out: it changes how something looks, not what it says. A rule inside `<style>` is listed in the checklist as changing the styling.
 - **A missing end tag** is marked "Not closed" where the block starts, counted on the cover, and located in the problems pane.
 - **Author notes** (`{% comment %}`) are shown where they are, but don't count as something the reader sees: a block that holds only notes and logic is left out of the document, and its notes are listed against it in the checklist. Two or more notes in a row, with nothing shown between them, collapse into one line ("3 author notes") that opens to show them. A note between a table's rows or cells is shown at the top of the next cell, since nothing else can go there. **Hide author notes** in the toolbar hides them all.

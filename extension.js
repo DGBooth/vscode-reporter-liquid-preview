@@ -344,7 +344,7 @@ async function exportSpec(templateUri) {
         if (!target) return;
         require('fs').writeFileSync(target.fsPath, html, 'utf8');
         const open = 'Open in browser';
-        const picked = await vscode.window.showInformationMessage(`Saved the spec for ${fileName} (version ${built.stamp}) to ${path.basename(target.fsPath)}. Open it in a browser to print it or save it as a PDF.`, open);
+        const picked = await vscode.window.showInformationMessage(`Saved the spec for ${fileName} (${built.version ? `${built.version.name} ${built.version.value}` : `fingerprint ${built.stamp}`}) to ${path.basename(target.fsPath)}. Open it in a browser to print it or save it as a PDF.`, open);
         if (picked === open) await vscode.env.openExternal(target);
     } catch (err) {
         vscode.window.showErrorMessage(`Reporter Liquid Preview: could not export the spec (${err.message})`);

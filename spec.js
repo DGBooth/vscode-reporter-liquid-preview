@@ -5,7 +5,8 @@
 // can check it and point at it: "R4.2 should also apply to DC pensions".
 //
 // It is laid out to print to PDF, which is how it gets shared and marked up:
-//   - a cover with the template's version stamp, a summary and contents;
+//   - a cover with the document's version (its SRVersion or the like), a
+//     fingerprint of the text, a summary and contents;
 //   - the document, with each variable part marked by a rail in the margin, or
 //     by a bracketed [a / b] inside a sentence, never by boxes in boxes;
 //   - a checklist of every reference, with the Liquid and line it came from and
@@ -541,6 +542,41 @@ function workOutValues(root, describeCondition) {
 }
 
 // ---------------------------------------------------------------------------
+// The document's version
+// ---------------------------------------------------------------------------
+
+// Templates name their own version: SRVersion, NALVersion, CTPVersion. Any
+// name that is a document code in capitals followed by Version counts.
+const VERSION_NAME = /^[A-Z]{2,}Version$/;
+
+// The first such value the template sets, as { name, value, line }, or null.
+// The value is its text when it's set to plain text or a number, and its
+// Liquid otherwise, since nothing is run to work it out.
+function documentVersion(root) {
+    let found = null;
+    const walk = nodes => {
+        for (const node of nodes) {
+            if (found) return;
+            if ((node.type === 'assign' || node.type === 'capture') && VERSION_NAME.test(node.name)) {
+                found = { name: node.name, line: node.line, value: versionText(node) };
+                return;
+            }
+            for (const list of childLists(node)) walk(list);
+        }
+    };
+    walk(root.children);
+    return found;
+}
+
+function versionText(node) {
+    if (node.type === 'capture') {
+        return node.children.map(c => (c.type === 'text' ? c.text : c.type === 'output' ? `{{ ${c.expr} }}` : '')).join('').replace(/<[^>]*>/g, '').trim();
+    }
+    const tokens = lexExpression(node.expr);
+    return tokens.length === 1 && (tokens[0].kind === 'string' || tokens[0].kind === 'number') ? tokens[0].text : node.expr;
+}
+
+// ---------------------------------------------------------------------------
 // Writing the spec
 // ---------------------------------------------------------------------------
 
@@ -605,8 +641,9 @@ function collapseNotes(html) {
 //   fileName     shown on the cover
 //   producedOn   date shown on the cover (a Date), default now
 //   revealFile   in VS Code: references become buttons that go to their line
-// Returns { body, stats, items, values, stamp }: the spec as HTML for inside a
-// page, the counts, every reference in order, and the template's version stamp.
+// Returns { body, stats, items, values, version, stamp }: the spec as HTML for
+// inside a page, the counts, every reference in order, the document's version
+// (see documentVersion) and a fingerprint of the template's text.
 function buildSpec(text, options = {}) {
     const root = parse(tokenize(text));
     number(root);
@@ -845,22 +882,23 @@ function buildSpec(text, options = {}) {
     });
 
     const stamp = crypto.createHash('sha1').update(text).digest('hex').slice(0, 8);
+    const version = documentVersion(root);
     const lines = text.split('\n').length;
     const producedOn = options.producedOn || new Date();
 
-    const body = cover({ fileName: options.fileName || '', stamp, lines, producedOn, stats, headings, items, values })
+    const body = cover({ fileName: options.fileName || '', version, stamp, lines, producedOn, stats, headings, items, values })
         + `<section class="sp-document" id="sp-document">${documentHtml}</section>`
         + checklist(items, nameHtml, ref)
         + workedOut(values, nameHtml);
 
-    return { body, stats: Object.assign({}, stats, { data: stats.data.size }), items, values: [...values.values()], stamp, headings };
+    return { body, stats: Object.assign({}, stats, { data: stats.data.size }), items, values: [...values.values()], version, stamp, headings };
 }
 
 function joinWithAnd(parts) {
     return parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
-function cover({ fileName, stamp, lines, producedOn, stats, headings, items, values }) {
+function cover({ fileName, version, stamp, lines, producedOn, stats, headings, items, values }) {
     const parts = [];
     if (stats.rules) parts.push(pluralize(stats.rules, 'rule that decides', 'rules that decide') + ' what is shown from the case data');
     if (stats.loops) parts.push(pluralize(stats.loops, 'repeating section'));
@@ -888,7 +926,11 @@ function cover({ fileName, stamp, lines, producedOn, stats, headings, items, val
     return `<section class="sp-cover">
 <div class="sp-kicker">Template specification</div>
 <h1 class="sp-title">${escapeHtml(fileName || 'Template')}</h1>
-<table class="sp-meta"><tr><th>Version</th><td><code>${stamp}</code> · ${lines.toLocaleString('en-GB')} lines</td></tr><tr><th>Produced</th><td>${escapeHtml(date)}</td></tr></table>
+<table class="sp-meta">
+<tr><th>Version</th><td>${version ? `<b>${escapeHtml(version.value)}</b> <span class="sp-quiet">(${escapeHtml(version.name)}, line ${version.line})</span>` : '<span class="sp-quiet">Not set: the template has no SRVersion, NALVersion, CTPVersion or other such value</span>'}</td></tr>
+<tr><th>Fingerprint</th><td><code>${stamp}</code> <span class="sp-quiet">\u00b7 ${lines.toLocaleString('en-GB')} lines \u00b7 changes with any edit, so two specs with the same version and fingerprint are of the same text</span></td></tr>
+<tr><th>Produced</th><td>${escapeHtml(date)}</td></tr>
+</table>
 <p class="sp-summary">${summary}${hidden ? ` ${pluralize(hidden, 'more rule or repeat', 'more rules and repeats')} only work${hidden === 1 ? 's' : ''} out values and show${hidden === 1 ? 's' : ''} nothing ${hidden === 1 ? 'itself; it is' : 'themselves; they are'} in the checklist.` : ''}</p>
 ${unclosed}
 <div class="sp-key">
@@ -904,7 +946,7 @@ ${unclosed}
 <span><span class="sp-data">client name</span></span><span>Filled in from the case data.</span>
 <span><span class="sp-inl sp-k-rule"><span class="sp-br">[</span><span class="sp-alt"><sup class="sp-mk">R2.1</sup>his</span><span class="sp-sep"> / </span><span class="sp-alt"><sup class="sp-mk">R2.2</sup>her</span><span class="sp-br">]</span></span></span><span>Alternatives inside a sentence.</span>
 </div>
-<p class="sp-quiet">References are numbered in the order they appear in this version. Adding a rule renumbers those after it, so quote the version above with them.</p>
+<p class="sp-quiet">References are numbered in the order they appear in this version. Adding a rule renumbers those after it, so quote the version and fingerprint above with them.</p>
 </div>
 <nav class="sp-toc"><div class="sp-key-head">Contents</div><ol>${toc.join('')}</ol></nav>
 </section>`;
@@ -1090,7 +1132,7 @@ function standaloneSpec(spec, { fileName = '', css = '' } = {}) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Spec: ${escapeHtml(fileName)} (${spec.stamp})</title>
+<title>Spec: ${escapeHtml(fileName)} (${escapeHtml(spec.version ? spec.version.value : spec.stamp)})</title>
 <style>
 ${css}
 </style>

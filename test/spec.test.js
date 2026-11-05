@@ -189,10 +189,38 @@ test('every reference in the document is in the checklist, and links to it', () 
     assert.deepStrictEqual(listed.slice(0, 4), ['R1', 'L1', 'R2', 'R3']);
 });
 
-test('the version stamp follows the template text', () => {
+test('the fingerprint follows the template text', () => {
     assert.strictEqual(build('A').stamp, build('A').stamp);
     assert.notStrictEqual(build('A').stamp, build('B').stamp);
     assert.match(build('A').body, /Produced<\/th><td>27 October 2026/);
+});
+
+// The cover's rows, as "Heading: text".
+function coverRows(text) {
+    const dom = new JSDOM(`<body>${build(text).body}</body>`).window.document;
+    return [...dom.querySelectorAll('.sp-meta tr')].map(tr => `${tr.querySelector('th').textContent}: ${tr.querySelector('td').textContent.replace(/\s+/g, ' ').trim()}`);
+}
+
+test('the cover\u2019s version is the one the template sets for itself', () => {
+    assert.strictEqual(coverRows('{%- assign SRVersion = "4.12" -%}<p>Report</p>')[0], 'Version: 4.12 (SRVersion, line 1)');
+    assert.strictEqual(coverRows("<p>x</p>\n{% assign NALVersion = '2.0.3' %}")[0], 'Version: 2.0.3 (NALVersion, line 2)');
+    assert.strictEqual(coverRows('{% assign CTPVersion = 7 %}')[0], 'Version: 7 (CTPVersion, line 1)');
+    assert.strictEqual(coverRows('{% capture SRVersion %}5.1{% endcapture %}')[0], 'Version: 5.1 (SRVersion, line 1)');
+    assert.strictEqual(coverRows('{% if a %}{% assign SRVersion = "9" %}{% endif %}')[0], 'Version: 9 (SRVersion, line 1)', 'wherever it is set');
+    assert.strictEqual(coverRows('{% assign SRVersion = base | append: ".1" %}')[0], 'Version: base | append: ".1" (SRVersion, line 1)', 'worked out: shown as written');
+    assert.strictEqual(coverRows('{% assign SRVersion = "1" %}{% assign SRVersion = "2" %}')[0], 'Version: 1 (SRVersion, line 1)', 'the first one');
+});
+
+test('a template with no version of its own says so, and other Version names don\u2019t count', () => {
+    for (const text of ['<p>x</p>', '{% assign templateVersion = "3" %}', '{% assign Version = "3" %}', '{% assign SRVersionDate = "3" %}']) {
+        assert.strictEqual(coverRows(text)[0], 'Version: Not set: the template has no SRVersion, NALVersion, CTPVersion or other such value', text);
+    }
+});
+
+test('the fingerprint is kept beside the version, for edits made without a new version', () => {
+    const rows = coverRows('{% assign SRVersion = "4" %}<p>A</p>');
+    assert.match(rows[1], /^Fingerprint: [0-9a-f]{8} \u00b7 1 lines/);
+    assert.notStrictEqual(build('{% assign SRVersion = "4" %}<p>A</p>').stamp, build('{% assign SRVersion = "4" %}<p>B</p>').stamp);
 });
 
 test('in VS Code a reference goes to its line', () => {
@@ -205,6 +233,8 @@ test('the export is a page of its own, ready to print', () => {
     const page = spec.standaloneSpec(built, { fileName: 'letter.liquid', css: '.letter { color: navy; }' });
     assert.match(page, /^<!DOCTYPE html>/);
     assert.match(page, /<title>Spec: letter.liquid \([0-9a-f]{8}\)<\/title>/);
+    const versioned = spec.buildSpec('{% assign SRVersion = "4.12" %}<p>x</p>');
+    assert.match(spec.standaloneSpec(versioned, { fileName: 'sr.liquid' }), /<title>Spec: sr.liquid \(4.12\)<\/title>/);
     assert.ok(page.includes('.letter { color: navy; }'), 'with the template’s styles');
     assert.match(page, /@media print/);
     assert.match(page, /window\.print\(\)/);
@@ -222,7 +252,7 @@ test('Export saves the page where asked and offers to open it', async () => {
     await extension.exportSpec(template);
 
     assert.match(fs.readFileSync(target, 'utf8'), /Template specification/);
-    assert.match(stub.shownMessages[0], /Saved the spec for letter.liquid \(version [0-9a-f]{8}\) to letter.spec.html/);
+    assert.match(stub.shownMessages[0], /Saved the spec for letter.liquid \(fingerprint [0-9a-f]{8}\) to letter.spec.html/);
     assert.deepStrictEqual(stub.openedLinks.map(link => path.basename(String(link))), ['letter.spec.html']);
     fs.rmSync(dir, { recursive: true, force: true });
 });
