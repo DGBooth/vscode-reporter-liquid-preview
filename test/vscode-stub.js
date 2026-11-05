@@ -38,6 +38,8 @@ const testControllers = [];
 // pick answer may be a function of the items offered.
 const quickPickAnswers = [];
 const inputBoxAnswers = [];
+// Answers for the next showSaveDialog calls (a Uri, or undefined for cancel).
+const saveDialogAnswers = [];
 // Every webview panel the extension opened itself (the report panel).
 const createdPanels = [];
 
@@ -260,6 +262,7 @@ const vscode = {
             return typeof answer === 'function' ? answer(await items, options) : answer;
         },
         showInputBox: async () => inputBoxAnswers.shift(),
+        showSaveDialog: async () => saveDialogAnswers.shift(),
         showTextDocument: async (document, options) => {
             const editor = {
                 document,
@@ -372,6 +375,7 @@ function reset() {
     openedLinks.length = 0;
     settings.clear();
     inputBoxAnswers.length = 0;
+    saveDialogAnswers.length = 0;
     for (const panel of createdPanels.splice(0)) if (!panel.disposed) panel.dispose();
     vscode.workspace.textDocuments = [];
     for (const controller of testControllers) controller.runs.length = 0;
@@ -397,6 +401,7 @@ module.exports = {
     openedLinks,
     settings,
     inputBoxAnswers,
+    saveDialogAnswers,
     createdPanels,
     testControllers
 };
