@@ -14,6 +14,8 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-11-05
+
 ### Changed
 - The Full HTML Preview is now a **template spec**: the template written out for document owners to check and to ask for changes against, and laid out to print to PDF. The old view nested a coloured box inside a box for every block, which on a large report became unreadable, broke sentences in two wherever a word depended on a condition, and pushed conditional table rows out of their tables. Now:
   - every part that can vary has a **reference** (R4.2 for a rule's branch, L2 a repeat, C1.1 a choice's option, O3 optional, E1 a fill-in), shown in the margin with its condition in plain words;
