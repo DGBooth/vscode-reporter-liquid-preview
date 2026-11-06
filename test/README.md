@@ -153,6 +153,11 @@ files are separate processes, so state never leaks across a file.
 - **`preview-html.test.js`** — the preview document is assembled as a string, so
   escaping, unbalanced markup and a broken inline script would all fail
   silently. These check the document actually handed to the webview.
+- **`selectpdf.test.js`** — the "SelectPdf pages" view: the page, scale and
+  content box worked out from the settings; where each page ends, on made-up
+  positions (jsdom has no layout, so the measuring can't run here); the
+  rewrite that makes `@media print` apply; and how the view is put into the
+  HTML preview, its settings and the template's output with it.
 
 ## Adding to it
 

@@ -12,6 +12,11 @@ const { parseChecks, runChecks, asPreviewShowsIt, acceptCheck, relocateCheck } =
 // inlined into each preview document.
 const BUILDER_SCRIPT = require('fs').readFileSync(path.join(__dirname, 'webview', 'test-builder.js'), 'utf8');
 const BUILDER_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview', 'test-builder.css'), 'utf8');
+// The HTML preview's "SelectPdf pages" view (see webview/selectpdf-pages.js
+// and selectpdf-page.js), likewise.
+const PAGES_SCRIPT = require('fs').readFileSync(path.join(__dirname, 'webview', 'selectpdf-pages.js'), 'utf8');
+const PAGES_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview', 'selectpdf-pages.css'), 'utf8');
+const { pageGeometry, describeGeometry } = require('./selectpdf-page');
 const {
     liquidEngine,
     parseTagArgs,
@@ -186,6 +191,16 @@ function activate(context) {
             if (preview.templateUri === textDocumentChangeEvent.document.fileName) {
                 await queueRefresh(preview, () => refreshHtmlFullPanel(preview, panel));
             }
+        }
+    }));
+
+    // The SelectPdf pages view draws from these settings, so open HTML
+    // previews are rendered again when they change.
+    context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+        if (!event.affectsConfiguration('reporterLiquidPreview.selectPdf')) return;
+        for (let id in htmlPreviews) {
+            let { preview, panel } = htmlPreviews[id];
+            queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
         }
     }));
 
@@ -392,13 +407,13 @@ function queueRefresh(preview, run) {
 // Push new content into a preview panel: the first call sets the full webview
 // document, later calls patch it in place via a message (see buildPreviewHtml)
 // so the view isn't reloaded on every edit.
-function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = null) {
+function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = null, pages = false) {
     rendered = balanced(rendered);
     if (panel._rlpInitialized) {
         panel.webview.postMessage({ type: 'update', chrome, rendered });
     } else {
         let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles, builder);
+        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles, builder, { pages });
         panel._rlpInitialized = true;
     }
 }
@@ -513,15 +528,58 @@ async function refreshHtmlPanel(preview, panel) {
 
     publishDiagnostics(preview, diagnostics);
     const defaultName = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : '';
-    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName, edit: preview.builderEdit || null });
+    const selectPdf = selectPdfConfig(preview.templateUri, rendered);
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered, selectPdf) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName, edit: preview.builderEdit || null }, true);
+}
+
+// The reporterLiquidPreview.selectPdf.* settings, as set (see package.json).
+const SELECT_PDF_SETTINGS = [
+    'pageSize', 'customPageSize', 'orientation',
+    'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+    'webPageWidth', 'cssMediaType', 'fitWideContent', 'allowContentHeightResize',
+    'customCss', 'header', 'footer'
+];
+
+function readSelectPdfSettings() {
+    const config = vscode.workspace.getConfiguration('reporterLiquidPreview');
+    const out = {};
+    for (const name of SELECT_PDF_SETTINGS) {
+        const value = config.get('selectPdf.' + name);
+        if (value !== undefined) out[name] = value;
+    }
+    return out;
+}
+
+// What the SelectPdf pages view pages: the output as the template produced
+// it (SelectPdf gets the whole document, not the balanced fragment the
+// rendered view shows), the workspace CSS the preview links, and the page.
+function selectPdfConfig(templateUri, rendered) {
+    let css = '';
+    try {
+        css = templateUri ? readCssContents(templateUri) : '';
+    } catch (err) {
+        css = '';
+    }
+    return { geometry: pageGeometry(readSelectPdfSettings()), css, html: rendered || '' };
+}
+
+// JSON that can sit inside a <script> element: no "</script>" can end it early.
+function scriptSafeJson(value) {
+    return JSON.stringify(value).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
 }
 
 // The HTML Preview's own UI: a toolbar with a source toggle and a hidden
 // panel with the document's underlying HTML — the same render currently in
 // view, so it reflects the selected data and field values. Kept separate from
 // the rendered document itself (see buildPreviewHtml).
-function buildHtmlPreviewChrome(rendered) {
+function buildHtmlPreviewChrome(rendered, selectPdf = null) {
+    const pages = selectPdf
+        ? `<label class="lp-toggle" title="The document as SelectPdf will page it: laid out ${selectPdf.geometry.webPageWidth}px wide, scaled onto the page and split where Chromium would split it. The page comes from the reporterLiquidPreview.selectPdf settings."><input type="checkbox" id="lp-selectpdf"> SelectPdf pages</label>`
+            + `<span class="lp-pages-status">${escapeHtml(describeGeometry(selectPdf.geometry))} <span id="lp-selectpdf-pages"></span></span>`
+            + `<script type="application/json" id="lp-selectpdf-config">${scriptSafeJson(selectPdf)}</script>`
+        : '';
     const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`
+        + pages
         + `<button type="button" class="lp-action" data-lp-local="build-test" title="Build a test by clicking the parts of this page that should stay the way they are">Create test&hellip;</button></div>`;
     const sourcePanel = `<div class="lp-source">
 <div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
@@ -737,7 +795,7 @@ async function revealInEditor(file, line, col) {
 // edit doesn't reload the document — scroll position and toggle checkboxes
 // survive it. Patching each container separately via innerHTML also uses
 // fragment parsing, which cannot leak content outside its container.
-function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder = null) {
+function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder = null, { pages = false } = {}) {
     // The test builder's panel is a sibling placed before the chrome, so no
     // template markup can swallow it; its styles travel as inert text and are
     // applied inside its shadow root. The overlays that mark what is hovered
@@ -782,7 +840,7 @@ function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder 
   button.diag-goto { cursor: pointer; }
   button.diag-goto:hover, button.diag-goto:focus { background: #2d2718; color: #cfe9ff; outline: none; }
   #error-pane pre.diag-message { margin: 0; font-family: monospace; font-size: 11px; color: #d4d4d4; white-space: pre-wrap; word-break: break-word; }
-  .diag-snippet { margin-top: 3px; padding-left: 6px; border-left: 2px solid #4a4130; font-family: monospace; font-size: 11px; color: #b9ad8e; white-space: pre-wrap; word-break: break-word; }${extraStyles}${builderStyles}
+  .diag-snippet { margin-top: 3px; padding-left: 6px; border-left: 2px solid #4a4130; font-family: monospace; font-size: 11px; color: #b9ad8e; white-space: pre-wrap; word-break: break-word; }${extraStyles}${builderStyles}${pages ? '\n' + PAGES_STYLES : ''}
 </style>
 ${cssLinks}
 </head>
@@ -794,6 +852,7 @@ ${chrome}
 <div id="lp-rendered-root">
 ${rendered}
 </div>
+${pages ? '<div id="lp-pages"></div>' : ''}
 <script>
     window.addEventListener('message', event => {
         const msg = event.data;
@@ -977,6 +1036,7 @@ ${rendered}
     });
 </script>
 ${builder ? `<script>${BUILDER_SCRIPT}</script>` : ''}
+${pages ? `<script>${PAGES_SCRIPT}</script>` : ''}
 </body>
 </html>`;
 }
@@ -2037,6 +2097,8 @@ Object.assign(module.exports, {
     acceptActualOutput,
     buildErrorPaneHtml,
     buildFullPreviewContent,
+    buildHtmlPreviewChrome,
+    selectPdfConfig,
     buildPreviewHtml,
     cleanLiquidMessage,
     createTestsFromCases,
