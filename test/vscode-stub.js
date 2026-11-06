@@ -324,7 +324,8 @@ const vscode = {
             dispose() { }
         }),
         registerTextDocumentContentProvider: () => new Disposable(),
-        onDidChangeTextDocument: () => new Disposable()
+        onDidChangeTextDocument: () => new Disposable(),
+        onDidChangeConfiguration: () => new Disposable()
     },
 
     commands: {

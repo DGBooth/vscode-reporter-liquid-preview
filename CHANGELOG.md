@@ -14,6 +14,9 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+### Added
+- **SelectPdf pages** in the HTML preview: a toolbar checkbox that shows the document as SelectPdf will page it. The document is laid out at SelectPdf's web page width, scaled onto the page and split where Chromium would split it, honouring forced breaks, `break-inside: avoid`, orphans and widows. With print media, `@media print` styles apply and table headers repeat. The page, margins, header and footer bands, width and media type come from the new `reporterLiquidPreview.selectPdf.*` settings, named after SelectPdf's `HtmlToPdfOptions`.
+
 ## [1.16.0] - 2026-11-05
 
 ### Changed

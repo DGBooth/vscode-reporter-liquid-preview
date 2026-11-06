@@ -53,6 +53,29 @@ A toolbar pinned to the top of the viewport offers a **Show HTML source** checkb
 - Switching views keeps your place: the view you enter is scrolled to the same content you were looking at in the view you left, in both directions.
 - Robust against imperfect template output — stray closing tags or unclosed elements in the rendered HTML cannot break the toggle or the preview's own UI.
 
+#### SelectPdf pages
+
+Reporter's documents become PDFs through [SelectPdf](https://selectpdf.com/), and the PDF is split into pages the preview doesn't show. The **SelectPdf pages** checkbox in the toolbar shows the document as SelectPdf will page it: numbered sheets, with each page ending where SelectPdf's would. Use it to see a heading left alone at the foot of a page, a table split across pages, or a forced page break that lands badly, without running a conversion.
+
+It works the way SelectPdf.Universal does, which lays the page out in Chromium (the browser VS Code is built on):
+
+- The document is laid out in a window `webPageWidth` px wide (1024 by default) and scaled so that width fills the page between the margins. The toolbar shows the scale: `A4 portrait · 1024px at 78%`.
+- Pages end where Chromium ends them when it prints: at a forced break (`break-before`/`break-after: page`, `page-break-*: always`, nested ones too), otherwise at the last place that fits between blocks, table rows or lines of text. A line is never cut. Places inside `break-inside: avoid`, next to `break-after: avoid`, or that would leave fewer than `orphans`/`widows` lines are passed over unless nothing else fits. Something that can't break (an image, a table row) and is taller than a page is cut.
+- With `cssMediaType` set to `Print`, `@media print` styles apply, and a table's `thead` (`display: table-header-group`) repeats at the top of each page the table continues onto.
+- Header and footer bands, when on, take their height off every page and are marked on the sheets. What goes in them is set in code and isn't drawn.
+- The last page is shortened to where the content ends, as SelectPdf's `AllowContentHeightResize` does unless it's turned off.
+
+Set the page to match the code that converts your documents, using the `reporterLiquidPreview.selectPdf.*` settings ([below](#settings-and-shortcuts)). They are named after the `HtmlToPdfOptions` they mirror: `PdfPageSize`, `PdfPageOrientation`, `MarginTop`…, `WebPageWidth`, `CssMediaType`, `FitWideContent`, `AllowContentHeightResize`, `CustomCSS`, and the header and footer heights. The margins default to 0: set them to whatever your conversion sets.
+
+It's a close match, not an exact one. When it was built it was checked against Chromium's own print-to-PDF at the same scale. Page breaks matched word for word, except where a paragraph wrapped differently: Chromium measures text slightly differently when it prints, so a long paragraph can now and then wrap one word differently and move a break by a line. Some other things to know:
+
+- Fonts are the ones on *your* machine. If the server converting the documents doesn't have a font (Arial on a Linux server, say), SelectPdf uses another and the text wraps differently. The Liberation fonts have the same widths as Arial, Times New Roman and Courier New.
+- The classic Windows SelectPdf library (`Select.Pdf`) pages with WebKit by default, not Chromium, and can break pages differently.
+- A grid, or a flex row taller than a page, is cut at the page end rather than broken inside.
+- Images and stylesheets are loaded from where the preview loads them, not from the base URL your conversion passes.
+
+To check a template against the real thing, convert it with the same data through SelectPdf and compare where the pages end.
+
 ### Template Spec (Full HTML Preview)
 
 The template written out for the people who own the document, to check it does what it should and to ask for changes clearly. It needs no data: nothing is run. Every part of the document that can vary is shown once, in place, with a reference and what decides it in plain words, so an owner can write "R12.2 should also apply to DC pensions" and nobody has to guess what they meant.
@@ -376,6 +399,15 @@ Pin the tag to the version of the extension you have installed (see [Releases](h
 | `reporterLiquidPreview.autoClose` | on | Closing as you type in `.liquid` files: the `%}` after `{%-`, block end tags, HTML closing tags. |
 | `reporterLiquidPreview.format.printWidth` | 120 | Where Format Document wraps lines. |
 | `reporterLiquidPreview.checkForUpdates` | on | The daily check for a new release. |
+| `reporterLiquidPreview.selectPdf.pageSize` | `A4` | [SelectPdf pages](#selectpdf-pages): `PdfPageSize`. `customPageSize` (`{ "width", "height" }` in points) overrides it. |
+| `reporterLiquidPreview.selectPdf.orientation` | `Portrait` | `PdfPageOrientation`. |
+| `reporterLiquidPreview.selectPdf.marginTop`, `…Right`, `…Bottom`, `…Left` | 0 | `MarginTop` and the rest, in points. |
+| `reporterLiquidPreview.selectPdf.webPageWidth` | 1024 | `WebPageWidth`: the width in px the document is laid out at. |
+| `reporterLiquidPreview.selectPdf.cssMediaType` | `Screen` | `CssMediaType`. |
+| `reporterLiquidPreview.selectPdf.fitWideContent` | off | `FitWideContent`. |
+| `reporterLiquidPreview.selectPdf.allowContentHeightResize` | on | `AllowContentHeightResize`: a short last page. |
+| `reporterLiquidPreview.selectPdf.customCss` | none | `CustomCSS`. |
+| `reporterLiquidPreview.selectPdf.header`, `…footer` | none | `{ "display": true, "height": 50 }` in points, plus `displayOnFirstPage`, `displayOnOddPages`, `displayOnEvenPages`. |
 
 | Shortcut (in a `.liquid` file) | |
 |----------|--|
@@ -407,6 +439,8 @@ use them.
 | `template-tests.js` | Suites: reading them, running cases, the report, editing a suite in place. |
 | `output-checks.js` | Checks: parsing the output as a browser would, selectors and row labels, accepting and relocating. |
 | `webview/test-builder.js` | The point-and-click test builder in the HTML preview. |
+| `selectpdf-page.js` | The SelectPdf page from the settings: size, margins, scale. |
+| `webview/selectpdf-pages.js` | The SelectPdf pages view: lays the document out, finds where each page ends, and draws the sheets. |
 | `formatter.js` | Format Document: the layout, the `{%-` house style, and the before/after rendering check. |
 | `editing.js` | Completions and closing as you type. |
 | `authoring.js` | Both of those as VS Code providers, and the HTML language service. |

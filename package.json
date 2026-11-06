@@ -164,6 +164,190 @@
                     "default": 120,
                     "minimum": 40,
                     "description": "Format Document wraps lines longer than this."
+                },
+                "reporterLiquidPreview.selectPdf.pageSize": {
+                    "type": "string",
+                    "enum": [
+                        "A0",
+                        "A1",
+                        "A2",
+                        "A3",
+                        "A4",
+                        "A5",
+                        "A6",
+                        "A7",
+                        "A8",
+                        "A9",
+                        "A10",
+                        "B0",
+                        "B1",
+                        "B2",
+                        "B3",
+                        "B4",
+                        "B5",
+                        "ArchA",
+                        "ArchB",
+                        "ArchC",
+                        "ArchD",
+                        "ArchE",
+                        "Letter",
+                        "HalfLetter",
+                        "Letter11x17",
+                        "Note",
+                        "Flsa",
+                        "Ledger"
+                    ],
+                    "default": "A4",
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.PdfPageSize`. Ignored when `#reporterLiquidPreview.selectPdf.customPageSize#` is set."
+                },
+                "reporterLiquidPreview.selectPdf.customPageSize": {
+                    "type": [
+                        "object",
+                        "null"
+                    ],
+                    "default": null,
+                    "properties": {
+                        "width": {
+                            "type": "number",
+                            "minimum": 1
+                        },
+                        "height": {
+                            "type": "number",
+                            "minimum": 1
+                        }
+                    },
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.PdfPageCustomSize`, in points: `{ \"width\": 595.28, \"height\": 841.89 }`."
+                },
+                "reporterLiquidPreview.selectPdf.orientation": {
+                    "type": "string",
+                    "enum": [
+                        "Portrait",
+                        "Landscape"
+                    ],
+                    "default": "Portrait",
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.PdfPageOrientation`."
+                },
+                "reporterLiquidPreview.selectPdf.marginTop": {
+                    "type": "number",
+                    "default": 0,
+                    "minimum": 0,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.MarginTop`, in points (1pt = 1/72in). Set it to what the code that converts the documents sets."
+                },
+                "reporterLiquidPreview.selectPdf.marginRight": {
+                    "type": "number",
+                    "default": 0,
+                    "minimum": 0,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.MarginRight`, in points (1pt = 1/72in). Set it to what the code that converts the documents sets."
+                },
+                "reporterLiquidPreview.selectPdf.marginBottom": {
+                    "type": "number",
+                    "default": 0,
+                    "minimum": 0,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.MarginBottom`, in points (1pt = 1/72in). Set it to what the code that converts the documents sets."
+                },
+                "reporterLiquidPreview.selectPdf.marginLeft": {
+                    "type": "number",
+                    "default": 0,
+                    "minimum": 0,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.MarginLeft`, in points (1pt = 1/72in). Set it to what the code that converts the documents sets."
+                },
+                "reporterLiquidPreview.selectPdf.webPageWidth": {
+                    "type": "integer",
+                    "default": 1024,
+                    "minimum": 100,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.WebPageWidth`, the width in px the document is laid out at before it is scaled to fit between the page margins. Smaller makes everything larger on the page."
+                },
+                "reporterLiquidPreview.selectPdf.cssMediaType": {
+                    "type": "string",
+                    "enum": [
+                        "Screen",
+                        "Print"
+                    ],
+                    "default": "Screen",
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.CssMediaType`. With `Print`, `@media print` styles apply and a table's `thead` with `display: table-header-group` repeats on each page."
+                },
+                "reporterLiquidPreview.selectPdf.fitWideContent": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.FitWideContent`: a document wider than the web page width is laid out as wide as it needs (up to four times) and scaled down, rather than cut off at the right."
+                },
+                "reporterLiquidPreview.selectPdf.allowContentHeightResize": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.AllowContentHeightResize`: the last page is shortened to where the content ends."
+                },
+                "reporterLiquidPreview.selectPdf.customCss": {
+                    "type": "string",
+                    "default": "",
+                    "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.CustomCSS`, CSS added after the document's own."
+                },
+                "reporterLiquidPreview.selectPdf.header": {
+                    "type": [
+                        "object",
+                        "null"
+                    ],
+                    "default": null,
+                    "properties": {
+                        "display": {
+                            "type": "boolean",
+                            "description": "HtmlToPdfOptions.DisplayHeader: show the header."
+                        },
+                        "height": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Header.Height, in points."
+                        },
+                        "displayOnFirstPage": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Header.DisplayOnFirstPage."
+                        },
+                        "displayOnOddPages": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Header.DisplayOnOddPages."
+                        },
+                        "displayOnEvenPages": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Header.DisplayOnEvenPages."
+                        }
+                    },
+                    "markdownDescription": "SelectPdf pages: the header band, as `HtmlToPdfOptions.DisplayHeader` and `converter.Header` set it: `{ \"display\": true, \"height\": 50 }` (points). Its height comes off every page's content area; the view marks the band but doesn't render what goes in it."
+                },
+                "reporterLiquidPreview.selectPdf.footer": {
+                    "type": [
+                        "object",
+                        "null"
+                    ],
+                    "default": null,
+                    "properties": {
+                        "display": {
+                            "type": "boolean",
+                            "description": "HtmlToPdfOptions.DisplayFooter: show the footer."
+                        },
+                        "height": {
+                            "type": "number",
+                            "minimum": 0,
+                            "description": "Footer.Height, in points."
+                        },
+                        "displayOnFirstPage": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Footer.DisplayOnFirstPage."
+                        },
+                        "displayOnOddPages": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Footer.DisplayOnOddPages."
+                        },
+                        "displayOnEvenPages": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Footer.DisplayOnEvenPages."
+                        }
+                    },
+                    "markdownDescription": "SelectPdf pages: the footer band, as `HtmlToPdfOptions.DisplayFooter` and `converter.Footer` set it: `{ \"display\": true, \"height\": 50 }` (points). Its height comes off every page's content area; the view marks the band but doesn't render what goes in it."
                 }
             }
         },
