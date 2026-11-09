@@ -78,7 +78,7 @@ test('the pane markup is balanced', () => {
 
 test('the inline webview script is valid JavaScript', () => {
     const page = extension.buildPreviewHtml('', extension.buildErrorPaneHtml(rows), '<p>hi</p>', extension.htmlPreviewStyles);
-    const script = page.slice(page.lastIndexOf('<script>') + '<script>'.length, page.lastIndexOf('</script>'));
+    const script = page.slice(page.lastIndexOf('<script nonce=')).replace(/^<script[^>]*>/, '').replace(/<\/script>(?![\s\S]*<\/script>)[\s\S]*$/, '');
 
     assert.doesNotThrow(() => new vm.Script(script), 'the script is embedded in a template literal, so escaping can break it');
     assert.ok(script.includes('acquireVsCodeApi'));
@@ -93,7 +93,7 @@ test('the collapse checkbox sits inside the pane, where the CSS and the update h
     assert.ok(checkbox > page.indexOf('<div id="error-pane">'));
     assert.ok(checkbox < page.indexOf('<div id="lp-rendered-root">'));
     assert.ok(page.includes('#error-pane:has(#lp-hide-problems:checked) .diag-list'), 'the CSS that hides the list');
-    assert.ok(page.includes("'.lp-toggle input[id], #error-pane input[id]'"), 'the state kept across in-place updates');
+    assert.ok(page.includes("'.lp-toggle input[id], .lp-tab input[id], #error-pane input[id]'"), 'the state kept across in-place updates');
 });
 
 test('the pane sits in the chrome half, never in the rendered document', async () => {
@@ -105,7 +105,7 @@ test('the pane sits in the chrome half, never in the rendered document', async (
     const page = panel.webview.html;
 
     // Stop at the inline script, which names the pane in a selector of its own.
-    const renderedHalf = page.slice(page.indexOf('<div id="lp-rendered-root">'), page.indexOf('<script>'));
+    const renderedHalf = page.slice(page.indexOf('<div id="lp-rendered-root">'), page.indexOf('<script nonce='));
     assert.ok(chromeOf(page).includes('<div id="error-pane">'));
     assert.ok(!renderedHalf.includes('error-pane'), renderedHalf);
 });
@@ -152,4 +152,68 @@ test('the Full HTML Preview keeps its toolbar alongside the pane', async () => {
     assert.ok(chrome.includes('data-lp-action="exportSpec"'), 'the export button');
     assert.ok(paneOf(chrome).includes('Template error'));
     assert.ok(panel.webview.html.includes('Template specification'), 'and the spec beside it');
+});
+
+// ---- only the extension's own scripts run ----
+
+test('the preview allows only its own scripts: a nonce on each, and a policy naming it', () => {
+    const page = extension.buildPreviewHtml('', '', '<p>hi</p><script>templateScript()</script>', extension.htmlPreviewStyles, { defaultName: '' }, { pages: true, cspSource: 'https://webview.test' });
+    const policy = /<meta http-equiv="Content-Security-Policy" content="([^"]*)">/.exec(page)[1];
+    const nonce = /script-src 'nonce-([^']+)'/.exec(policy)[1];
+    assert.ok(policy.startsWith("default-src 'none'"), policy);
+    assert.ok(!/script-src[^;]*unsafe/.test(policy), 'no inline or eval scripts');
+    assert.ok(policy.includes('style-src https://webview.test'), 'the workspace stylesheets load');
+
+    const scripts = page.match(/<script\b[^>]*>/g);
+    const ours = scripts.filter(tag => tag.includes(`nonce="${nonce}"`));
+    assert.strictEqual(ours.length, 3, 'the preview, the test builder and the pages view');
+    // Whatever else is a script is data (the builder's styles) or the template's own, which has no nonce.
+    for (const tag of scripts.filter(tag => !ours.includes(tag))) {
+        assert.ok(tag === '<script>' || /type="(text\/plain|application\/json)"/.test(tag), tag);
+    }
+    assert.ok(page.includes('<script>templateScript()</script>'), 'the template\'s script is left as written, and has no nonce');
+    assert.notStrictEqual(nonce, /script-src 'nonce-([^']+)'/.exec(extension.buildPreviewHtml('', '', ''))[1], 'a new nonce for each document');
+});
+
+test('a changed stylesheet is linked again without reloading the preview', () => {
+    const { JSDOM, VirtualConsole } = require('jsdom');
+    const page = extension.buildPreviewHtml('<link rel="stylesheet" data-lp-css href="/w/css/site.css">', '', '<p>hi</p>');
+    const dom = new JSDOM(page, { runScripts: 'dangerously', virtualConsole: new VirtualConsole() });
+    try {
+        const { document } = dom.window;
+        dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: { type: 'css', links: '<link rel="stylesheet" data-lp-css href="/w/css/site.css?v=2">' } }));
+        const links = [...document.querySelectorAll('link[data-lp-css]')].map(link => link.getAttribute('href'));
+        assert.deepStrictEqual(links, ['/w/css/site.css?v=2']);
+        assert.ok(document.getElementById('lp-rendered-root').innerHTML.includes('<p>hi</p>'), 'the content is untouched');
+    } finally {
+        dom.window.close();
+    }
+});
+
+test('relative addresses in a stylesheet inlined for the pages view point at the files', () => {
+    const webview = { asWebviewUri: uri => 'https://res.test' + uri.fsPath };
+    const css = '@import "base.css"; @font-face { src: url(fonts/a%20b.woff2?v=1#x) } p { background: url("../img/bg.png"), url(data:image/png;base64,AAAA), url(https://cdn.test/x.png), url(/abs.png) }';
+    const out = extension.rebaseCssUrls(css, '/w/letters/css/site.css', webview);
+    assert.ok(out.includes('@import "https://res.test/w/letters/css/base.css"'), out);
+    assert.ok(out.includes('url("https://res.test/w/letters/css/fonts/a b.woff2?v=1#x")'), out);
+    assert.ok(out.includes('url("https://res.test/w/letters/img/bg.png")'), out);
+    assert.ok(out.includes('url("data:image/png;base64,AAAA")') && out.includes('url("https://cdn.test/x.png")') && out.includes('url("/abs.png")'), 'absolute addresses are left alone');
+});
+
+test('refreshes waiting their turn are run as one', async () => {
+    const preview = {};
+    const ran = [];
+    let release;
+    const first = extension.queueRefresh(preview, () => new Promise(resolve => { ran.push('first'); release = resolve; }));
+    await Promise.resolve();
+    // The first is under way; three more edits arrive before it finishes.
+    const second = extension.queueRefresh(preview, () => { ran.push('second'); });
+    const third = extension.queueRefresh(preview, () => { ran.push('third'); });
+    assert.strictEqual(second, third, 'the later edits share the refresh already waiting');
+    release();
+    await Promise.all([first, second]);
+    assert.deepStrictEqual(ran, ['first', 'second']);
+    // Nothing waiting any more: the next edit gets a refresh of its own.
+    await extension.queueRefresh(preview, () => { ran.push('fourth'); });
+    assert.deepStrictEqual(ran, ['first', 'second', 'fourth']);
 });

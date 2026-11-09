@@ -43,10 +43,21 @@ Renders your template as a styled HTML page in a VS Code webview panel, updated 
 - Use `ctrl+k h` (or **Reporter Liquid: Open HTML Preview to the Side**) while a `.liquid` file is active.
 - The rendered output is displayed with a white background and black text (including headings h1–h6), ensuring legibility regardless of your editor theme.
 - Edits update the preview **in place** — the document is patched rather than reloaded, so your scroll position and view settings survive every keystroke. Switching to another tab and back also preserves the view exactly as you left it.
+- Scripts in the template's output don't run in the preview, and neither do `onclick` and the like: it shows the HTML and CSS only. Images, fonts and stylesheets load from the workspace, from `https:` addresses and from `data:` URIs.
 
-#### Show HTML source
+#### The tabs: Edit, PDF preview, HTML source
 
-A toolbar pinned to the top of the viewport offers a **Show HTML source** checkbox that swaps the rendered document for the HTML behind it — the same render currently in view, reflecting the selected data file and field values. This replaces the need to keep a separate text preview open alongside the HTML preview.
+Reporter shows a document two ways: an edit mode, where the adviser ticks the optional parts, picks the choices and types the fill-ins, and the PDF made from it with those answers applied. The tabs in the preview's toolbar are those two, and the HTML behind the first.
+
+- **Edit** (where the preview opens) shows the fields as controls. Tick, choose or type and the page is rendered again with the answer, so anything that reads it follows: `{{ fields.notes }}`, `{% if fields.includeNotes == 'true' %}`. A text box takes its answer when you leave it or press Enter.
+- **PDF preview** shows the document as it is read, on the pages SelectPdf will make (see [SelectPdf pages](#selectpdf-pages)): an optional part is there or not, a choice shows the option picked, and an editor shows the text typed, with its line breaks.
+- **HTML source** shows the HTML behind the Edit tab.
+- Answers given in the preview are laid over the ones under `fields` in the data file and last as long as the preview does; the data file isn't changed. **Reset answers** goes back to the data file's.
+- Tests render the Edit tab's document from the data file, so **Create test…** asks you to reset any answers given in the preview first.
+
+#### HTML source
+
+The **HTML source** tab swaps the rendered document for the HTML behind it — the same render currently in view, reflecting the selected data file and field values. This replaces the need to keep a separate text preview open alongside the HTML preview.
 
 - The source is pretty-printed for readability: block elements are indented one per line, while inline content and the bodies of `pre`/`textarea`/`script`/`style` are left untouched, so the markup shown renders identically to the original.
 - The source is syntax-highlighted like the built-in editor: colours follow VS Code's default light/dark themes, and the code is displayed in your editor's font on the editor background.
@@ -55,12 +66,12 @@ A toolbar pinned to the top of the viewport offers a **Show HTML source** checkb
 
 #### SelectPdf pages
 
-Reporter's documents become PDFs through [SelectPdf](https://selectpdf.com/), and the PDF is split into pages the preview doesn't show. The **SelectPdf pages** checkbox in the toolbar shows the document as SelectPdf will page it: numbered sheets, with each page ending where SelectPdf's would. Use it to see a heading left alone at the foot of a page, a table split across pages, or a forced page break that lands badly, without running a conversion.
+Reporter's documents become PDFs through [SelectPdf](https://selectpdf.com/), and the PDF is split into pages the preview doesn't show. The **PDF preview** tab shows the document as SelectPdf will page it: numbered sheets, with each page ending where SelectPdf's would. Use it to see a heading left alone at the foot of a page, a table split across pages, or a forced page break that lands badly, without running a conversion.
 
 It works the way SelectPdf.Universal does, which lays the page out in Chromium (the browser VS Code is built on):
 
 - The document is laid out in a window `webPageWidth` px wide (1024 by default) and scaled so that width fills the page between the margins. The toolbar shows the scale: `A4 portrait · 1024px at 78%`.
-- Pages end where Chromium ends them when it prints: at a forced break (`break-before`/`break-after: page`, `page-break-*: always`, nested ones too), otherwise at the last place that fits between blocks, table rows or lines of text. A line is never cut. Places inside `break-inside: avoid`, next to `break-after: avoid`, or that would leave fewer than `orphans`/`widows` lines are passed over unless nothing else fits. Something that can't break (an image, a table row) and is taller than a page is cut.
+- Pages end where Chromium ends them when it prints: at a forced break (`break-before`/`break-after: page`, `page-break-*: always`, nested ones too), otherwise at the last place that fits between blocks, table rows or lines of text. A line is never cut. A table row that doesn't fit is broken inside, each cell between its own lines, as Chromium breaks it; add `tr { break-inside: avoid }` to keep rows whole. Places inside `break-inside: avoid`, next to `break-after: avoid`, or that would leave fewer than `orphans`/`widows` lines are passed over unless nothing else fits. Something that can't break (an image) and is taller than a page is cut.
 - With `cssMediaType` set to `Print`, `@media print` styles apply, and a table's `thead` (`display: table-header-group`) repeats at the top of each page the table continues onto.
 - Header and footer bands, when on, take their height off every page and are marked on the sheets. What goes in them is set in code and isn't drawn.
 - The last page is shortened to where the content ends, as SelectPdf's `AllowContentHeightResize` does unless it's turned off.
@@ -72,7 +83,10 @@ It's a close match, not an exact one. When it was built it was checked against C
 - Fonts are the ones on *your* machine. If the server converting the documents doesn't have a font (Arial on a Linux server, say), SelectPdf uses another and the text wraps differently. The Liberation fonts have the same widths as Arial, Times New Roman and Courier New.
 - The classic Windows SelectPdf library (`Select.Pdf`) pages with WebKit by default, not Chromium, and can break pages differently.
 - A grid, or a flex row taller than a page, is cut at the page end rather than broken inside.
+- With print media, a row of a table whose header repeats is moved to the next page whole rather than broken inside.
 - Images and stylesheets are loaded from where the preview loads them, not from the base URL your conversion passes.
+- Scripts don't run (see above). SelectPdf runs them unless `JavaScriptEnabled` is off, so anything a script adds to the page isn't paged here.
+- Only the sheets near the part of the panel in view are loaded, so a sheet can be blank for a moment when you scroll a long way.
 
 To check a template against the real thing, convert it with the same data through SelectPdf and compare where the pages end.
 
@@ -146,11 +160,13 @@ The HTML preview automatically injects stylesheets so the output matches your in
 - **`universal.css`** — any file with this name found at the root of your workspace folders is injected into every preview.
 - **`css/` folder** — all `.css` files inside a `css/` directory that sits alongside the active template file are injected.
 
+Open previews pick up a change to these files when it is saved.
+
 The template spec's export inlines the contents of these same files.
 
 ### Custom Liquid Tags
 
-Reporter's own tags, rendered as Reporter renders them. Each takes a field name, quoted (`"notes"`) or as a variable holding it. In Reporter, the reader's answer comes back as `fields.<name>`; to preview or test an answer, put it under `fields` in the data, e.g. `{ "fields": { "includeNotes": "true", "delivery": "1" } }`.
+Reporter's own tags, rendered as Reporter renders them. Each takes a field name, quoted (`"notes"`) or as a variable holding it. In Reporter, the reader's answer comes back as `fields.<name>`: the text typed for an `editor`, the option's number from `0` for a `choice`, and `true` or `false` for an `optional`. Until a field is answered it reads as `false`, `0` or nothing. To preview an answer, give it in the HTML preview's [Edit tab](#the-tabs-edit-pdf-preview-html-source); to keep one, or to test it, put it under `fields` in the data, e.g. `{ "fields": { "includeNotes": "true", "delivery": "1" } }`. The answers are text, so compare them as text: `{% if fields.delivery == "1" %}`.
 
 | Tag | Renders | Options and answer |
 |-----|---------|--------------------|

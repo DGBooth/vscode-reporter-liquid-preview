@@ -2,11 +2,11 @@
     "name": "reporter-liquid-preview",
     "displayName": "Reporter Liquid Preview",
     "description": "Preview, edit, format and test Reporter Liquid templates",
-    "version": "1.17.0",
+    "version": "1.18.0",
     "publisher": "DGBooth",
     "license": "MIT",
     "engines": {
-        "vscode": "^1.32.0"
+        "vscode": "^1.78.0"
     },
     "icon": "icon.png",
     "repository": {

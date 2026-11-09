@@ -59,13 +59,16 @@ function activate(context) {
 
         dispose() {
             this.onDidChangeEmitter.dispose();
-            this.previews.clear();
+            this.previews = {};
         }
 
         async provideTextDocumentContent(uri) {
             let queryParmeters = new URLSearchParams(uri.query);
             let previewId = queryParmeters.get('id');
             let preview = this.previews[previewId];
+            // A preview tab left over from an earlier session (restored when
+            // the window reloads) has nothing behind it any more.
+            if (!preview) return 'This preview is from an earlier session. Open the preview again from the template.';
 
             if (preview.templateUri && preview.templateDirty) {
                 try {
@@ -99,6 +102,14 @@ function activate(context) {
     context.subscriptions.push(previewContentProvider);
 
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider('reporter-liquid-preview', previewContentProvider));
+    // A closed preview is forgotten, so its template and data aren't held on to.
+    if (typeof vscode.workspace.onDidCloseTextDocument === 'function') {
+        context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => {
+            if (!document.uri || document.uri.scheme !== 'reporter-liquid-preview') return;
+            const id = new URLSearchParams(document.uri.query).get('id');
+            if (id) delete previewContentProvider.previews[id];
+        }));
+    }
 
     context.subscriptions.push(vscode.commands.registerCommand('reporterLiquidPreview.preview', async () => {
         let document = vscode.window.activeTextEditor && vscode.window.activeTextEditor.document;
@@ -204,6 +215,29 @@ function activate(context) {
         }
     }));
 
+    // The stylesheets the previews use (see findCssPaths) are linked once, when
+    // a panel opens. When one is saved, added or removed the open panels are
+    // given the links again, and the HTML previews rendered again so the
+    // SelectPdf pages view pages with the new styles.
+    const cssWatcher = vscode.workspace.createFileSystemWatcher('**/*.css');
+    const onCssChanged = uri => {
+        const changed = uri && uri.fsPath;
+        if (!changed) return;
+        const refreshLinks = ({ preview, panel }) => {
+            if (!panel._rlpInitialized || !usesCssFile(preview.templateUri, changed)) return false;
+            panel.webview.postMessage({ type: 'css', links: buildCssLinks(preview.templateUri, panel.webview, Date.now()) });
+            return true;
+        };
+        for (let id in htmlPreviews) {
+            if (refreshLinks(htmlPreviews[id])) {
+                const { preview, panel } = htmlPreviews[id];
+                queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
+            }
+        }
+        for (let id in htmlFullPreviews) refreshLinks(htmlFullPreviews[id]);
+    };
+    context.subscriptions.push(cssWatcher, cssWatcher.onDidChange(onCssChanged), cssWatcher.onDidCreate(onCssChanged), cssWatcher.onDidDelete(onCssChanged));
+
     templateStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
     templateStatusBarItem.show();
     context.subscriptions.push(templateStatusBarItem);
@@ -228,7 +262,7 @@ function joinWithAnd(parts) {
     return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
 }
 
-// "Show HTML source" toggle plumbing shared by both HTML previews. Webview
+// The HTML source view's plumbing shared by both HTML previews. Webview
 // scripts are disabled, so the swap is wired up purely with CSS body:has().
 // The rendered document keeps its white page (it previews the finished,
 // printed document), but the source view follows the VS Code theme via the
@@ -239,8 +273,17 @@ const viewSourceStyles = `
   .lp-toolbar { position: sticky; top: 0; z-index: 9000; display: flex; flex-wrap: wrap; gap: 6px 18px; background: white; margin: -8px -8px 10px -8px; padding: 8px 10px; border-bottom: 1px solid #e0e0e0; }
   .lp-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: #444; cursor: pointer; user-select: none; }
   .lp-toggle input { margin: 0; }
+  /* The views, as tabs: a radio group, so the swap between them stays pure
+     CSS (body:has(#id:checked)) and the arrow keys move between them. */
+  .lp-tabs { display: inline-flex; align-self: stretch; gap: 2px; margin: -8px 0 -8px -4px; font: 12px sans-serif; }
+  .lp-tab { position: relative; display: inline-flex; align-items: center; padding: 8px 10px; color: #555; border-bottom: 2px solid transparent; cursor: pointer; user-select: none; }
+  .lp-tab input { position: absolute; opacity: 0; pointer-events: none; }
+  .lp-tab:hover { color: #000; }
+  .lp-tab:has(input:checked) { color: #000; font-weight: 600; border-bottom-color: #0078d4; }
+  .lp-tab:has(input:focus-visible) { outline: 1px solid #0078d4; outline-offset: -2px; }
   .lp-action { margin-left: auto; font: 12px sans-serif; color: #444; background: #f3f3f3; border: 1px solid #d0d0d0; border-radius: 3px; padding: 1px 8px; cursor: pointer; }
   .lp-action:hover { background: #e8e8e8; }
+  .lp-action.lp-reset { margin-left: 0; }
   .lp-source { display: none; }
   .lp-source-hint { font-family: sans-serif; font-size: 12px; color: var(--vscode-descriptionForeground, #444); margin-bottom: 8px; }
   .lp-source pre { background: none; border: none; margin: 0; padding: 2px 4px; color: var(--vscode-editor-foreground, #333); font-family: var(--vscode-editor-font-family, "SF Mono", Monaco, Menlo, Consolas, monospace); font-size: var(--vscode-editor-font-size, 12px); line-height: 1.5; white-space: pre-wrap; word-break: break-word; cursor: text; }
@@ -256,7 +299,8 @@ const viewSourceStyles = `
   body.vscode-dark .lp-tk-str, body.vscode-high-contrast .lp-tk-str { color: #ce9178; }
   body.vscode-dark .lp-tk-comment, body.vscode-high-contrast .lp-tk-comment { color: #6a9955; }
   body:has(#lp-show-source:checked) { background-color: var(--vscode-editor-background, white); }
-  body:has(#lp-show-source:checked) .lp-toggle { color: var(--vscode-foreground, #444); }
+  body:has(#lp-show-source:checked) .lp-toggle,
+  body:has(#lp-show-source:checked) .lp-tab { color: var(--vscode-foreground, #444); }
   body:has(#lp-show-source:checked) .lp-toolbar { background: var(--vscode-editor-background, white); border-bottom-color: var(--vscode-panel-border, #e0e0e0); }
   body:has(#lp-show-source:checked) #lp-rendered-root,
   body:has(#lp-show-source:checked) #lp-rendered-root ~ * { display: none; }
@@ -398,8 +442,19 @@ async function refreshHtmlFullPanel(preview, panel) {
 // async and fires on every keystroke, so without a queue two refreshes overlap:
 // they race on the shared warning buffer, and whichever render finishes last
 // wins, which can leave the pane showing an older version of the template.
+//
+// A refresh reads the template and data as they are when it starts, so one
+// that is still waiting its turn already covers any edit made since it was
+// queued: another isn't queued behind it. Typing faster than the preview
+// renders then costs one render per render's worth of typing, not one per key.
 function queueRefresh(preview, run) {
-    const next = (preview.refreshQueue || Promise.resolve()).then(run, run);
+    if (preview.refreshPending) return preview.refreshPending;
+    const start = () => {
+        preview.refreshPending = null;
+        return run();
+    };
+    const next = (preview.refreshQueue || Promise.resolve()).then(start, start);
+    preview.refreshPending = next;
     preview.refreshQueue = next.catch(() => { });
     return next;
 }
@@ -413,7 +468,7 @@ function updatePreviewPanel(panel, preview, chrome, rendered, styles, builder = 
         panel.webview.postMessage({ type: 'update', chrome, rendered });
     } else {
         let cssLinks = buildCssLinks(preview.templateUri, panel.webview);
-        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles, builder, { pages });
+        panel.webview.html = buildPreviewHtml(cssLinks, chrome, rendered, styles, builder, { pages, cspSource: panel.webview.cspSource || '' });
         panel._rlpInitialized = true;
     }
 }
@@ -440,7 +495,18 @@ async function openHtmlPreview(preview) {
     htmlPreviews[preview.id] = { preview, panel };
     wirePreviewMessages(panel, {
         saveBuiltTest: message => saveBuiltTest(preview, panel, message),
-        listBuiltTests: () => listBuiltTests(preview, panel)
+        listBuiltTests: () => listBuiltTests(preview, panel),
+        // The reader ticked, chose or typed in one of the template's fields
+        // (see the webview script): keep the answer and render with it.
+        setField: message => {
+            if (typeof message.name !== 'string' || !message.name) return;
+            preview.fieldAnswers = Object.assign({}, preview.fieldAnswers, { [message.name]: String(message.value === undefined ? '' : message.value) });
+            return queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
+        },
+        resetFields: () => {
+            preview.fieldAnswers = {};
+            return queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
+        }
     });
 
     await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
@@ -475,7 +541,7 @@ function strayTagDiagnostics(rendered, file) {
         'Unbalanced HTML',
         `The output has a ${stray.tag} that closes nothing it opened${stray.followedBy ? `, just before \u201c${stray.followedBy}\u201d` : ', at the end'}. `
             + `The preview ignores it, but a browser showing the whole page may close the wrong element there and push the rest of the document out of its section. `
-            + `Remove the extra ${stray.tag} from the template (Show HTML source shows the output around it).`,
+            + `Remove the extra ${stray.tag} from the template (the HTML source tab shows the output around it).`,
         file,
         null
     ));
@@ -515,9 +581,11 @@ async function refreshHtmlPanel(preview, panel) {
         }
     }
 
+    // The data, with the answers given in this preview over the ones in it.
+    const data = dataWithAnswers(preview);
     let rendered;
     try {
-        const result = await renderWithDiagnostics(preview.template, preview.data, preview.templateUri);
+        const result = await renderWithDiagnostics(preview.template, data, preview.templateUri);
         rendered = result.rendered;
         preview.lastRenderedHtml = rendered;
         if (!templateIsStale) diagnostics.push(...result.diagnostics, ...strayTagDiagnostics(rendered, preview.templateUri));
@@ -528,8 +596,29 @@ async function refreshHtmlPanel(preview, panel) {
 
     publishDiagnostics(preview, diagnostics);
     const defaultName = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : '';
-    const selectPdf = selectPdfConfig(preview.templateUri, rendered);
-    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered, selectPdf) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName, edit: preview.builderEdit || null }, true);
+    // The Edit tab shows the document as it is filled in. The PDF is made from
+    // the document as it is read, with the answers applied and no controls, so
+    // that is rendered too, for the PDF preview tab to page.
+    let paged = rendered;
+    try {
+        paged = (await renderWithDiagnostics(preview.template, data, preview.templateUri, { mode: 'view' })).rendered;
+    } catch (err) {
+        paged = rendered;
+    }
+    const selectPdf = selectPdfConfig(preview.templateUri, paged, panel.webview);
+    const answered = Object.keys(preview.fieldAnswers || {}).length;
+    updatePreviewPanel(panel, preview, buildHtmlPreviewChrome(rendered, selectPdf, { answered }) + buildErrorPaneHtml(diagnostics), rendered, htmlPreviewStyles, { defaultName, edit: preview.builderEdit || null }, true);
+}
+
+// The preview's data with the answers given in the preview itself (ticking,
+// choosing and typing in the rendered fields) laid over its `fields`. They
+// last as long as the preview: the data file isn't written to.
+function dataWithAnswers(preview) {
+    const answers = preview.fieldAnswers;
+    if (!answers || Object.keys(answers).length === 0) return preview.data;
+    const data = preview.data && typeof preview.data === 'object' ? preview.data : {};
+    const given = data.fields && typeof data.fields === 'object' && !Array.isArray(data.fields) ? data.fields : {};
+    return Object.assign({}, data, { fields: Object.assign({}, given, answers) });
 }
 
 // The reporterLiquidPreview.selectPdf.* settings, as set (see package.json).
@@ -553,10 +642,10 @@ function readSelectPdfSettings() {
 // What the SelectPdf pages view pages: the output as the template produced
 // it (SelectPdf gets the whole document, not the balanced fragment the
 // rendered view shows), the workspace CSS the preview links, and the page.
-function selectPdfConfig(templateUri, rendered) {
+function selectPdfConfig(templateUri, rendered, webview = null) {
     let css = '';
     try {
-        css = templateUri ? readCssContents(templateUri) : '';
+        css = templateUri ? readCssForFrames(templateUri, webview) : '';
     } catch (err) {
         css = '';
     }
@@ -572,17 +661,27 @@ function scriptSafeJson(value) {
 // panel with the document's underlying HTML — the same render currently in
 // view, so it reflects the selected data and field values. Kept separate from
 // the rendered document itself (see buildPreviewHtml).
-function buildHtmlPreviewChrome(rendered, selectPdf = null) {
+function buildHtmlPreviewChrome(rendered, selectPdf = null, { answered = 0 } = {}) {
+    // The views are tabs: the document as it is filled in, the PDF it becomes
+    // (when there are page settings to page it by) and the HTML behind it.
+    const tab = (id, label, title, checked = false) =>
+        `<label class="lp-tab" title="${title}"><input type="radio" name="lp-view" id="${id}"${checked ? ' checked' : ''}>${label}</label>`;
+    const tabs = `<span class="lp-tabs" role="radiogroup" aria-label="View">`
+        + tab('lp-view-edit', 'Edit', 'The document as it is filled in. Tick, choose or type in its fields and the document follows, fields.&lt;name&gt; included.', true)
+        + (selectPdf ? tab('lp-selectpdf', 'PDF preview', `The document as it is read, with the answers applied, on the pages SelectPdf will make: laid out ${selectPdf.geometry.webPageWidth}px wide, scaled onto the page and split where Chromium would split it. The page comes from the reporterLiquidPreview.selectPdf settings.`) : '')
+        + tab('lp-show-source', 'HTML source', 'The HTML behind the Edit tab.')
+        + `</span>`;
+    const reset = answered
+        ? `<button type="button" class="lp-action lp-reset" data-lp-action="resetFields" title="Go back to the answers in the data file">Reset ${pluralize(answered, 'answer')}</button>`
+        : '';
     const pages = selectPdf
-        ? `<label class="lp-toggle" title="The document as SelectPdf will page it: laid out ${selectPdf.geometry.webPageWidth}px wide, scaled onto the page and split where Chromium would split it. The page comes from the reporterLiquidPreview.selectPdf settings."><input type="checkbox" id="lp-selectpdf"> SelectPdf pages</label>`
-            + `<span class="lp-pages-status">${escapeHtml(describeGeometry(selectPdf.geometry))} <span id="lp-selectpdf-pages"></span></span>`
+        ? `<span class="lp-pages-status">${escapeHtml(describeGeometry(selectPdf.geometry))} <span id="lp-selectpdf-pages"></span></span>`
             + `<script type="application/json" id="lp-selectpdf-config">${scriptSafeJson(selectPdf)}</script>`
         : '';
-    const toolbar = `<div class="lp-toolbar"><label class="lp-toggle"><input type="checkbox" id="lp-show-source"> Show HTML source</label>`
-        + pages
+    const toolbar = `<div class="lp-toolbar">${tabs}${reset}${pages}`
         + `<button type="button" class="lp-action" data-lp-local="build-test" title="Build a test by clicking the parts of this page that should stay the way they are">Create test&hellip;</button></div>`;
     const sourcePanel = `<div class="lp-source">
-<div class="lp-source-hint">The HTML behind the view below, as rendered with the current data and field values.</div>
+<div class="lp-source-hint">The HTML behind the Edit tab, as rendered with the current data and answers.</div>
 <pre>${highlightHtml(formatHtml(rendered))}</pre>
 </div>`;
     return toolbar + sourcePanel;
@@ -616,11 +715,64 @@ function findCssPaths(templateUri) {
     return cssPaths;
 }
 
-function buildCssLinks(templateUri, webview) {
+// `version`, when given, goes on each link so a changed file is fetched again
+// rather than taken from the page's cache.
+function buildCssLinks(templateUri, webview, version = null) {
     return findCssPaths(templateUri)
         .map(p => {
             let uri = webview.asWebviewUri(vscode.Uri.file(p));
-            return `<link rel="stylesheet" href="${uri}">`;
+            return `<link rel="stylesheet" data-lp-css href="${uri}${version ? '?v=' + version : ''}">`;
+        })
+        .join('\n');
+}
+
+// Whether `cssFile` is (or, if it was just added or removed, would be) one of
+// the stylesheets findCssPaths gives the template.
+function usesCssFile(templateUri, cssFile) {
+    if (path.basename(cssFile) === 'universal.css') {
+        return (vscode.workspace.workspaceFolders || []).some(folder => path.dirname(cssFile) === folder.uri.fsPath);
+    }
+    return !!templateUri && path.dirname(cssFile) === path.join(path.dirname(templateUri), 'css');
+}
+
+// A stylesheet's text, read again only when the file has changed: the
+// SelectPdf pages view is handed the styles on every render.
+const _cssTextCache = new Map();
+function readCssFile(file) {
+    const fs = require('fs');
+    const stat = fs.statSync(file);
+    const cached = _cssTextCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.text;
+    const text = fs.readFileSync(file, 'utf8');
+    _cssTextCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, text });
+    return text;
+}
+
+// CSS from `file` with its relative url(...)s and @imports pointed at the
+// files themselves. Inlined into a <style>, a relative address would be read
+// against the page instead of the stylesheet, and a font or image would go
+// missing where the linked stylesheet finds it.
+function rebaseCssUrls(css, file, webview) {
+    const dir = path.dirname(file);
+    const rebase = address => {
+        if (!address || /^([a-z][a-z0-9+.-]*:|\/|#)/i.test(address)) return address;
+        const [, name, suffix] = /^([^?#]*)(.*)$/.exec(address);
+        let decoded = name;
+        try { decoded = decodeURIComponent(name); } catch (err) { /* use it as written */ }
+        return webview.asWebviewUri(vscode.Uri.file(path.resolve(dir, decoded))) + suffix;
+    };
+    return css
+        .replace(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^'")\s]+))\s*\)/gi, (all, a, b, c) => `url("${rebase((a || b || c || '').trim())}")`)
+        .replace(/(@import\s+)(?:"([^"]*)"|'([^']*)')/gi, (all, start, a, b) => `${start}"${rebase(a || b || '')}"`);
+}
+
+// The stylesheets as one piece of CSS for the SelectPdf pages view's frames,
+// which take them inline (see selectPdfConfig).
+function readCssForFrames(templateUri, webview) {
+    return findCssPaths(templateUri)
+        .map(p => {
+            const text = readCssFile(p);
+            return `/* ${path.basename(p)} */\n${webview ? rebaseCssUrls(text, p, webview) : text}`;
         })
         .join('\n');
 }
@@ -795,7 +947,24 @@ async function revealInEditor(file, line, col) {
 // edit doesn't reload the document — scroll position and toggle checkboxes
 // survive it. Patching each container separately via innerHTML also uses
 // fragment parsing, which cannot leak content outside its container.
-function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder = null, { pages = false } = {}) {
+//
+// Only the extension's own scripts run: the Content-Security-Policy allows
+// scripts carrying this document's nonce and nothing else, so a <script> or an
+// onclick in the template's output (or in the data it prints) is inert. That
+// is the same on the first load as after an update (innerHTML never runs
+// scripts), and it holds in the SelectPdf pages view's frames too, which
+// inherit the policy. Such a script would otherwise run with the preview's
+// own access: the workspace's files and the messages the extension acts on.
+function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder = null, { pages = false, cspSource = '' } = {}) {
+    const nonce = require('crypto').randomBytes(16).toString('base64');
+    const csp = [
+        `default-src 'none'`,
+        `img-src ${cspSource} https: data:`,
+        `media-src ${cspSource} https: data:`,
+        `font-src ${cspSource} https: data:`,
+        `style-src ${cspSource} https: 'unsafe-inline'`,
+        `script-src 'nonce-${nonce}'`
+    ].join('; ');
     // The test builder's panel is a sibling placed before the chrome, so no
     // template markup can swallow it; its styles travel as inert text and are
     // applied inside its shadow root. The overlays that mark what is hovered
@@ -817,6 +986,7 @@ function buildPreviewHtml(cssLinks, chrome, rendered, extraStyles = '', builder 
     return `<!DOCTYPE html>
 <html>
 <head>
+<meta http-equiv="Content-Security-Policy" content="${csp}">
 <style>
   body { background-color: white; color: black; margin: 0; padding: 8px; box-sizing: border-box; }
   body:has(#error-pane) { padding-bottom: 230px; }
@@ -853,20 +1023,31 @@ ${chrome}
 ${rendered}
 </div>
 ${pages ? '<div id="lp-pages"></div>' : ''}
-<script>
+<script nonce="${nonce}">
     window.addEventListener('message', event => {
         const msg = event.data;
+        // A stylesheet changed on disk: link them again (see the CSS watcher).
+        if (msg && msg.type === 'css') {
+            document.querySelectorAll('link[data-lp-css]').forEach(link => link.remove());
+            document.head.insertAdjacentHTML('beforeend', msg.links);
+            return;
+        }
         if (!msg || msg.type !== 'update') return;
         const toggles = {};
-        for (const input of document.querySelectorAll('.lp-toggle input[id], #error-pane input[id]')) {
+        for (const input of document.querySelectorAll('.lp-toggle input[id], .lp-tab input[id], #error-pane input[id]')) {
             toggles[input.id] = input.checked;
         }
         const legend = document.querySelector('.lp-legend');
         const legendOpen = legend ? legend.open : null;
         const openNotes = [...document.querySelectorAll('details.sp-notes')].map(d => d.open);
         const x = window.scrollX, y = window.scrollY;
+        // The field just answered keeps the focus, so Tab carries on from it.
+        const active = document.activeElement;
+        const focusId = active && active.id && document.getElementById('lp-rendered-root').contains(active) ? active.id : null;
         document.getElementById('lp-chrome').innerHTML = msg.chrome;
         document.getElementById('lp-rendered-root').innerHTML = msg.rendered;
+        const refocus = focusId && document.getElementById(focusId);
+        if (refocus && document.getElementById('lp-rendered-root').contains(refocus)) refocus.focus({ preventScroll: true });
         for (const id in toggles) {
             const input = document.getElementById(id);
             if (input) input.checked = toggles[id];
@@ -899,6 +1080,21 @@ ${pages ? '<div id="lp-pages"></div>' : ''}
             line: Number(button.getAttribute('data-diag-line')),
             col: Number(button.getAttribute('data-diag-col'))
         });
+    });
+
+    // ---- Answering the template's fields, and edit mode ----
+    // Ticking an optional, choosing an option or typing in an editor (the
+    // controls the field tags render carry data-editor-id) is posted to the
+    // extension, which renders again with the answer. A text box posts when
+    // it is left or Enter is pressed, so typing isn't interrupted.
+    document.addEventListener('change', event => {
+        const input = event.target;
+        if (!input || !vscodeApi || !input.getAttribute) return;
+        const root = document.getElementById('lp-rendered-root');
+        const name = input.getAttribute('data-editor-id');
+        if (!name || !root || !root.contains(input)) return;
+        const value = input.type === 'checkbox' ? String(input.checked) : input.value;
+        vscodeApi.postMessage({ type: 'action', action: 'setField', name, value });
     });
 
     // ---- Scroll sync between the rendered view and the HTML source view ----
@@ -1016,27 +1212,35 @@ ${pages ? '<div id="lp-pages"></div>' : ''}
         window.scrollTo(0, Math.max(0, window.scrollY + el.getBoundingClientRect().top - toolbarBottom() - 16));
     }
 
-    // Delegated so the listener survives content patches. The checkbox is
-    // flipped back briefly to measure the view being left — this happens
-    // within a single frame, so nothing visibly flickers.
+    // Delegated so the listener survives content patches. Going between the
+    // Edit and HTML source tabs, the tab being left is selected again briefly
+    // to measure it — this happens within a single frame, so nothing visibly
+    // flickers. (A radio button only says when it is chosen, so the tab that
+    // was showing is remembered.)
+    let showing = 'lp-view-edit';
     document.addEventListener('change', event => {
         const input = event.target;
-        if (!input || input.id !== 'lp-show-source') return;
-        if (input.checked) {
-            input.checked = false;
+        if (!input || input.name !== 'lp-view' || !input.checked) return;
+        const from = showing;
+        showing = input.id;
+        const edit = document.getElementById('lp-view-edit');
+        const source = document.getElementById('lp-show-source');
+        if (!edit || !source) return;
+        if (input === source && from === edit.id) {
+            edit.checked = true;
             const snippet = renderedTopSnippet();
-            input.checked = true;
+            source.checked = true;
             scrollSourceToSnippet(snippet);
-        } else {
-            input.checked = true;
+        } else if (input === edit && from === source.id) {
+            source.checked = true;
             const snippet = sourceTopSnippet();
-            input.checked = false;
+            edit.checked = true;
             scrollRenderedToSnippet(snippet);
         }
     });
 </script>
-${builder ? `<script>${BUILDER_SCRIPT}</script>` : ''}
-${pages ? `<script>${PAGES_SCRIPT}</script>` : ''}
+${builder ? `<script nonce="${nonce}">${BUILDER_SCRIPT}</script>` : ''}
+${pages ? `<script nonce="${nonce}">${PAGES_SCRIPT}</script>` : ''}
 </body>
 </html>`;
 }
@@ -1848,6 +2052,9 @@ async function saveBuiltTest(preview, panel, message) {
     const checks = Array.isArray(message.checks) ? message.checks : [];
     const wholePage = message.wholePage === true;
     if (!name) return reply(false, 'Give the test a name first.');
+    // A test renders the template as it is filled in, with the data file's
+    // answers; checks picked from any other page wouldn't match it.
+    if (Object.keys(preview.fieldAnswers || {}).length) return reply(false, 'This page has answers that aren\u2019t in the data file, so a test wouldn\u2019t see them. Put them under "fields" in the data file, or press Reset answers, then pick what to check.');
     if (message.editing) return updateBuiltTest(preview, reply, name, checks, message);
     if (checks.length === 0 && !wholePage) return reply(false, 'Add at least one check, or tick \u201cAlso check the whole page\u201d.');
 
@@ -2099,6 +2306,9 @@ Object.assign(module.exports, {
     buildFullPreviewContent,
     buildHtmlPreviewChrome,
     selectPdfConfig,
+    rebaseCssUrls,
+    queueRefresh,
+    dataWithAnswers,
     buildPreviewHtml,
     cleanLiquidMessage,
     createTestsFromCases,

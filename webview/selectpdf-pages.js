@@ -12,12 +12,13 @@
 //     new page, even in a nested element;
 //   - otherwise the page ends at the last place content can break that still
 //     fits: between blocks, between table rows, or between lines of text (a
-//     line is never cut);
+//     line is never cut). A table row breaks inside too, each cell between
+//     its own lines;
 //   - places inside break-inside: avoid, next to break-before/after: avoid, or
 //     that would leave fewer than `orphans` / `widows` lines (2) are used only
 //     when nothing better fits;
-//   - content that can't break at all and doesn't fit (a tall image, a table
-//     row taller than a page) is cut at the page end;
+//   - content that can't break at all and doesn't fit (a tall image) is cut
+//     at the page end;
 //   - with print media, a table's thead (display: table-header-group) repeats
 //     at the top of each page the table continues onto.
 //
@@ -25,12 +26,14 @@
 // time: find where the page ends, push what follows down to the next page's
 // top (a margin, or a spacer where there is no element to give one), measure
 // again. Then each page is shown in its own iframe of the finished layout,
-// scrolled to that page and scaled onto a sheet.
+// scrolled to that page and scaled onto a sheet. Every such iframe holds the
+// whole document, so only the sheets near the part of the panel in view are
+// loaded; the rest are blank until they are scrolled to.
 //
 // The break choice itself (chooseNextBreak) and the media rewrite are plain
 // functions, exported under Node for test/selectpdf-pages.test.js. In the
 // webview this file is inlined as a script and wires itself to the toolbar's
-// "SelectPdf pages" toggle.
+// PDF preview tab.
 
 (function (root) {
     'use strict';
@@ -246,12 +249,36 @@
             for (let node = el, depth = 0; node && depth < 50; depth++) {
                 const style = styleOf(node);
                 if (breakValue(style, which) === kind) return true;
-                let next = null;
-                const children = Array.from(node.children).filter(c => !SKIP_TAGS.test(c.tagName) && styleOf(c).display !== 'none');
-                next = which === 'Before' ? children[0] : children[children.length - 1];
-                node = next;
+                node = edgeBlock(node, which === 'Before');
             }
             return false;
+        }
+
+        // The block that starts (ends) `el`'s content, or null when text or
+        // other inline content comes first (last): a break before a block
+        // that follows text falls after that text, not before `el`.
+        function edgeBlock(el, first) {
+            const nodes = Array.from(el.childNodes);
+            if (!first) nodes.reverse();
+            for (const node of nodes) {
+                if (node.nodeType === 3) {
+                    if (node.data.trim()) return null;
+                    continue;
+                }
+                if (node.nodeType !== 1 || SKIP_TAGS.test(node.tagName) || node.hasAttribute('data-rlp-spacer')) continue;
+                const style = styleOf(node);
+                if (style.display === 'none') continue;
+                if (style.position === 'absolute' || style.position === 'fixed' || style.float !== 'none') continue;
+                if (style.display === 'contents') {
+                    const inner = edgeBlock(node, first);
+                    if (inner) return inner;
+                    if (node.textContent.trim()) return null;
+                    continue;
+                }
+                if (/^inline|^ruby/.test(style.display) || node.tagName === 'BR') return null;
+                return node;
+            }
+            return null;
         }
 
         // The line boxes of a run of inline content.
@@ -313,7 +340,7 @@
         }
 
         // The places the content between pageTop and pageBottom can break.
-        function candidates(body, pageTop, pageBottom, printMedia) {
+        function candidates(body, pageTop, pageBottom, printMedia, avoidAll = false) {
             const out = [];
             const walk = (el, avoidInside, depth) => {
                 if (depth > 200) return;
@@ -334,6 +361,9 @@
                     if (item.kind === 'el') {
                         if (fragmentable(item.el, item.style)) {
                             walk(item.el, avoidInside || breakValue(item.style, 'Inside') === 'avoid', depth + 1);
+                        } else if (item.style.display === 'table-row' && depth < 200 && item.top < pageBottom && item.bottom > pageBottom + EPS) {
+                            const inRow = rowBreak(item, avoidInside || breakValue(item.style, 'Inside') === 'avoid', pageTop, pageBottom, printMedia);
+                            if (inRow) out.push(inRow);
                         }
                     } else if (item.top < pageBottom && item.bottom > pageBottom) {
                         const style = styleOf(el);
@@ -353,8 +383,52 @@
                     }
                 }
             };
-            walk(body, false, 0);
+            walk(body, avoidAll, 0);
             return out;
+        }
+
+        // A break inside a table row that runs past the page end. Chromium
+        // breaks each cell's content on its own, wherever that cell can break,
+        // and lines the cells of a row it has broken up at the top. So the
+        // break is one in each cell that needs it, taken together; a cell
+        // that can't break before the page end makes it a place to avoid.
+        function rowBreak(row, avoid, pageTop, pageBottom, printMedia) {
+            const table = row.el.closest('table');
+            // Not under a repeating header: the rest of the row would have to
+            // start below a header drawn in the middle of the row. The row is
+            // kept whole there (see the README).
+            if (printMedia && table && repeatsHeader(table, row.el)) return null;
+            const cells = Array.from(row.el.children).filter(c => styleOf(c).display === 'table-cell');
+            const restore = alignTop(cells);
+            const parts = [];
+            let y = -Infinity;
+            for (const cell of cells) {
+                const range = doc.createRange();
+                range.selectNodeContents(cell);
+                const r = range.getBoundingClientRect();
+                if (!r.height) continue;
+                const end = r.bottom + scrollY();
+                if (end <= pageBottom + EPS) continue;
+                const style = styleOf(cell);
+                if (!fragmentable(cell, style)) { avoid = true; continue; }
+                const list = candidates(cell, pageTop, pageBottom, printMedia, breakValue(style, 'Inside') === 'avoid');
+                const choice = chooseNextBreak(list, pageTop, pageBottom - pageTop, end);
+                if (choice.kind !== 'break') { avoid = true; continue; }
+                const part = list[choice.index];
+                if (part.avoid) avoid = true;
+                parts.push(part);
+                y = Math.max(y, part.y);
+            }
+            restore();
+            if (!parts.length) return null;
+            return { y, next: y, forced: false, avoid, apply: { type: 'row', cells, parts } };
+        }
+
+        // Whether `table` has a header that repeats on each page (print
+        // media), for a break before `first`.
+        function repeatsHeader(table, first) {
+            const thead = table.tHead;
+            return !!thead && styleOf(thead).display === 'table-header-group' && !thead.contains(first) && first !== thead;
         }
 
         function contentEnd(doc) {
@@ -364,20 +438,31 @@
             return Math.max(html.bottom, body.bottom + marginBottom) + scrollY();
         }
 
-        return { styleOf, top, candidates, contentEnd, lineStart };
+        return { styleOf, top, candidates, contentEnd, lineStart, repeatsHeader };
+    }
+
+    // Line the cells of a row up at the top, as Chromium does in a row it
+    // breaks. Returns a function that puts them back.
+    function alignTop(cells) {
+        const before = cells.map(cell => [cell.style.getPropertyValue('vertical-align'), cell.style.getPropertyPriority('vertical-align')]);
+        cells.forEach(cell => cell.style.setProperty('vertical-align', 'top', 'important'));
+        return () => cells.forEach((cell, i) => {
+            if (before[i][0]) cell.style.setProperty('vertical-align', before[i][0], before[i][1]);
+            else cell.style.removeProperty('vertical-align');
+        });
     }
 
     // ---- pushing content to the next page ----
 
     // Adjust `set(amount)` until measure() reads `target`. A few rounds, since
     // collapsing margins and table spacing make the first guess land short.
-    function settle(set, measure, target, start = 0) {
+    function settle(set, measure, target, start = 0, min = 0) {
         let amount = start;
         set(amount);
         for (let round = 0; round < 4; round++) {
             const off = target - measure();
             if (Math.abs(off) <= 0.25) break;
-            amount = Math.max(0, amount + off);
+            amount = Math.max(min, amount + off);
             set(amount);
         }
     }
@@ -388,8 +473,26 @@
         }
     }
 
+    // Give `clone` and everything in it the look of `original`. A header row
+    // repeated among the body rows is no longer matched by rules written for
+    // the header ("thead th"), so what those rules gave it is copied over.
+    const LOOK = /^(background|border|color|font|text|padding|vertical-align|white-space|letter-spacing|word-spacing|line-height|opacity|box-shadow|outline)/;
+    function copyLook(m, original, clone) {
+        const style = m.styleOf(original);
+        for (let i = 0; i < style.length; i++) {
+            const prop = style[i];
+            if (LOOK.test(prop)) clone.style.setProperty(prop, style.getPropertyValue(prop));
+        }
+        for (let i = 0; i < original.children.length && i < clone.children.length; i++) copyLook(m, original.children[i], clone.children[i]);
+    }
+
     function applyBreak(doc, m, candidate, nextPageTop) {
         const a = candidate.apply;
+        if (a.type === 'row') {
+            alignTop(a.cells);
+            for (const part of a.parts) applyBreak(doc, m, part, nextPageTop);
+            return;
+        }
         if (a.type === 'line') {
             const anchor = m.lineStart(a.line.start);
             // The line moves as a whole, so its first fragment keeps the same
@@ -401,7 +504,26 @@
             spacer.setAttribute('aria-hidden', 'true');
             spacerStyle(spacer);
             anchor.parentNode.insertBefore(spacer, anchor);
-            settle(h => spacer.style.setProperty('height', h + 'px', 'important'), () => m.top(anchor), nextPageTop + offset);
+            // The spacer ends the line before it, and the last line of
+            // justified text isn't justified. So in justified text that line
+            // is ended by wrapping instead: a full-width inline box wraps onto
+            // a line of its own, which the spacer's negative margin takes
+            // back when the push needed is less than that line's height.
+            let block = anchor.parentNode;
+            while (block && block.nodeType === 1 && /^(inline|contents)$/.test(m.styleOf(block).display)) block = block.parentNode;
+            const justified = block && block.nodeType === 1 && m.styleOf(block).textAlign === 'justify';
+            if (justified) {
+                const wrap = doc.createElement('span');
+                wrap.setAttribute('data-rlp-spacer', '');
+                wrap.setAttribute('aria-hidden', 'true');
+                spacerStyle(wrap);
+                for (const [prop, value] of [['display', 'inline-block'], ['width', '100%'], ['height', '0'], ['vertical-align', 'top']]) wrap.style.setProperty(prop, value, 'important');
+                spacer.parentNode.insertBefore(wrap, spacer);
+            }
+            settle(h => {
+                spacer.style.setProperty('height', Math.max(0, h) + 'px', 'important');
+                spacer.style.setProperty('margin-top', Math.min(0, h) + 'px', 'important');
+            }, () => m.top(anchor), nextPageTop + offset, 0, justified ? -1000 : 0);
             return;
         }
 
@@ -417,7 +539,7 @@
         if (rowGroup || containerDisplay === 'table' || containerDisplay === 'inline-table') {
             const table = container.closest('table') || container;
             const thead = table.tHead;
-            const repeat = printMedia && thead && m.styleOf(thead).display === 'table-header-group' && !thead.contains(first) && first !== thead;
+            const repeat = printMedia && m.repeatsHeader(table, first);
             const rows = [];
             const spacerRow = doc.createElement('tr');
             spacerRow.setAttribute('data-rlp-spacer', '');
@@ -430,6 +552,7 @@
             const headerRows = repeat ? Array.from(thead.rows).map(r => {
                 const clone = r.cloneNode(true);
                 clone.setAttribute('data-rlp-repeated-header', '');
+                copyLook(m, r, clone);
                 return clone;
             }) : [];
             rows.push(...headerRows);
@@ -588,7 +711,7 @@
     function drawSheets(config, result) {
         const g = config.geometry;
         const sheets = el('div', 'lp-sheets');
-        const loads = [];
+        const pages = [];
         for (let k = 0; k < result.pages; k++) {
             const number = k + 1;
             const last = k === result.pages - 1;
@@ -628,24 +751,76 @@
             sheet.appendChild(label);
             sheets.appendChild(sheet);
 
-            loads.push(new Promise(resolve => {
-                frame.addEventListener('load', () => {
-                    try {
-                        const doc = frame.contentDocument;
-                        applyMedia(doc, result.medium);
-                        // Room to scroll the last page to its top.
-                        addStyle(doc, `html::after { content: ""; display: block; height: ${result.pageHeight}px; }`, true);
-                        frame.contentWindow.scrollTo(0, k * result.pageHeight);
-                    } catch (err) { /* leave the page at the top */ }
-                    resolve();
-                }, { once: true });
-            }));
-            frame.srcdoc = result.html;
+            // Not { once: true }: emptying the frame loads a blank page, and
+            // that load mustn't be taken for the document's.
+            const page = { sheet, frame, shown: false, loaded: null };
+            frame.addEventListener('load', () => {
+                if (!page.shown) return;
+                try {
+                    const doc = frame.contentDocument;
+                    applyMedia(doc, result.medium);
+                    // Room to scroll the last page to its top.
+                    addStyle(doc, `html::after { content: ""; display: block; height: ${result.pageHeight}px; }`, true);
+                    frame.contentWindow.scrollTo(0, k * result.pageHeight);
+                } catch (err) { /* leave the page at the top */ }
+                if (page.loaded) page.loaded();
+            });
+            pages.push(page);
         }
-        return { sheets, loads };
+
+        // Load a sheet's page; resolves when it is in place.
+        const show = page => {
+            if (page.shown) return Promise.resolve();
+            page.shown = true;
+            return new Promise(resolve => {
+                page.loaded = () => { page.loaded = null; resolve(); };
+                page.frame.srcdoc = result.html;
+            });
+        };
+        const hide = page => {
+            if (!page.shown) return;
+            page.shown = false;
+            if (page.loaded) page.loaded();
+            page.frame.removeAttribute('srcdoc');
+        };
+
+        // The sheets within two panel heights of what is in view.
+        const near = () => {
+            const reach = 2 * (root.innerHeight || document.documentElement.clientHeight || 800);
+            return pages.filter(page => {
+                const r = page.sheet.getBoundingClientRect();
+                return r.bottom > -reach && r.top < (root.innerHeight || 0) + reach;
+            });
+        };
+        let observer = null;
+        // Start loading as sheets come near, and from then on keep to those.
+        const watch = () => {
+            if (typeof root.IntersectionObserver !== 'function') return Promise.all(pages.map(show));
+            const first = Promise.all(near().map(show));
+            const bySheet = new Map(pages.map(page => [page.sheet, page]));
+            observer = new root.IntersectionObserver(entries => {
+                for (const entry of entries) {
+                    const page = bySheet.get(entry.target);
+                    if (!page) continue;
+                    if (entry.isIntersecting) show(page); else hide(page);
+                }
+            }, { rootMargin: '200% 0px' });
+            pages.forEach(page => observer.observe(page.sheet));
+            return first;
+        };
+        sheets._rlpDiscard = () => {
+            if (observer) observer.disconnect();
+            sheets.remove();
+        };
+        return { sheets, watch };
     }
 
-    // ---- the toolbar toggle ----
+    // Take sheets out of the panel, and stop loading pages into them.
+    function discard(sheets) {
+        if (sheets._rlpDiscard) sheets._rlpDiscard(); else sheets.remove();
+    }
+
+    // ---- the toolbar's PDF preview tab ----
 
     const toggle = () => document.getElementById('lp-selectpdf');
     const active = () => !!(toggle() && toggle().checked);
@@ -691,15 +866,15 @@
             return;
         }
         if (!result || !isCurrent()) return;
-        const { sheets, loads } = drawSheets(config, result);
+        const { sheets, watch } = drawSheets(config, result);
         // Built out of sight, then swapped in, so the scroll position holds.
         sheets.classList.add('lp-sheets-pending');
         target.appendChild(sheets);
         fitZoom(sheets, config);
-        await Promise.race([Promise.all(loads), new Promise(r => setTimeout(r, 4000))]);
-        if (!isCurrent()) { sheets.remove(); return; }
+        await Promise.race([watch(), new Promise(r => setTimeout(r, 4000))]);
+        if (!isCurrent()) { discard(sheets); return; }
         const y = root.scrollY;
-        target.querySelectorAll('.lp-sheets:not(.lp-sheets-pending)').forEach(old => old.remove());
+        target.querySelectorAll('.lp-sheets:not(.lp-sheets-pending)').forEach(discard);
         sheets.classList.remove('lp-sheets-pending');
         fitZoom(sheets, config);
         root.scrollTo(root.scrollX, y);
@@ -711,34 +886,29 @@
         setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${fitted}`);
     }
 
+    // The view was turned off: stop any paging under way and let the pages go
+    // (each is a copy of the document).
+    function stop() {
+        run++;
+        clearTimeout(timer);
+        if (host()) host().querySelectorAll('.lp-sheets').forEach(discard);
+    }
+
     function schedule(delay) {
         clearTimeout(timer);
         if (!active()) return;
         timer = setTimeout(render, delay);
     }
 
+    // The views are tabs (a radio group): paging starts when this one is
+    // chosen and stops when another is. The test builder, which picks from
+    // the Edit tab, chooses that tab itself.
     document.addEventListener('change', event => {
         const input = event.target;
-        if (!input || !input.id) return;
-        if (input.id === 'lp-selectpdf') {
-            if (input.checked) {
-                const source = document.getElementById('lp-show-source');
-                if (source) source.checked = false;
-                schedule(0);
-            } else {
-                run++;
-            }
-        } else if (input.id === 'lp-show-source' && input.checked && toggle()) {
-            toggle().checked = false;
-            run++;
-        }
+        if (!input || input.name !== 'lp-view' || !input.checked) return;
+        if (input.id === 'lp-selectpdf') schedule(0);
+        else stop();
     });
-
-    // The test builder picks from the rendered view, not the pages.
-    document.addEventListener('click', event => {
-        const button = event.target && event.target.closest && event.target.closest('[data-lp-local="build-test"]');
-        if (button && toggle()) { toggle().checked = false; run++; }
-    }, true);
 
     // A new render (see buildPreviewHtml) replaces the toolbar; the toggle's
     // state is restored by the update handler, which runs before this one.

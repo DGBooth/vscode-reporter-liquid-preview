@@ -14,6 +14,29 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-11-09
+
+### Added
+- The HTML preview's fields can be answered, as in Reporter's edit mode. On the **Edit** tab, ticking an optional part, picking a choice or typing in an editor renders the page again with that answer, so `fields.<name>` and anything decided by it follow. Answers given in the preview are laid over the data file's `fields` and can be reset; the data file isn't changed.
+- The **PDF preview** tab (the SelectPdf pages view) pages the document as it is read, with the answers applied and without the fields' controls, which is what the PDF is made from.
+
+### Changed
+- The HTML preview's views are tabs (**Edit**, **PDF preview**, **HTML source**) in place of the "Show HTML source" and "SelectPdf pages" checkboxes.
+- An unanswered field reads as Reporter gives it: `fields.<name>` is `false` for an optional, `0` for a choice and empty for an editor, where it used to be missing. A template that tests `fields.x == 'false'`, or prints a field, with no answer in the data now renders as it does in Reporter; a test whose expected output relied on the old behaviour will show the difference.
+- Scripts in a template's output no longer run in the HTML preview, the template spec or the SelectPdf pages view. They used to run when a preview first opened (but not after an edit), with the preview's own access to the workspace, and one that asked for the VS Code API stopped the preview's own buttons working. The previews now carry a Content-Security-Policy that allows only the extension's scripts. Images, fonts and stylesheets load from the workspace, `https:` and `data:` only.
+- SelectPdf pages loads only the sheets near the part of the panel in view, rather than a copy of the whole document for every page, and lets them go when the view is turned off.
+- Typing faster than a preview can render no longer queues a render for every key: edits made while one is waiting share it.
+- Open previews pick up a saved change to `universal.css` or a `css/` stylesheet without being reopened.
+- VS Code 1.78 or newer is required. The previews have relied on CSS `:has()` for some time, which older versions don't have.
+
+### Fixed
+- SelectPdf pages: fonts and images a workspace stylesheet refers to by a relative `url(...)` are found, as they are in the rendered view. A missing font changed where lines wrap and so where pages end.
+- A plain-text preview tab restored from an earlier session says so instead of failing, and closing a plain-text preview no longer leaves its template and data in memory.
+- SelectPdf pages: a table row that doesn't fit on the page is broken inside, each cell between its own lines, as Chromium breaks it. It was moved to the next page whole, which put every later page break in the wrong place for tables with long cells.
+- SelectPdf pages: a forced page break on a heading that follows text inside the same element no longer also breaks before that text.
+- SelectPdf pages: in justified text, the last line on a page stays justified when the paragraph carries on over the page.
+- SelectPdf pages: a table header repeated on a later page (print media) keeps the styling given to it by rules such as `thead th`.
+
 ## [1.17.0] - 2026-11-06
 
 ### Added
