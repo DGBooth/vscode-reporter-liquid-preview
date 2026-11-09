@@ -53,6 +53,21 @@ function resolveTagName(args, ctx) {
     return '';
 }
 
+// What a field tag (optional, editor, choice) needs to know about the render it
+// is in: the answers given so far, and whether the document is being filled in
+// ('edit': the tags draw their tick boxes, text boxes and radio buttons) or
+// read ('view': the document as it goes to the PDF, with only the answers'
+// results). `unanswered` is what `fields.<name>` holds before the reader has
+// answered, which the render fills in (see renderWithDiagnostics).
+function fieldState(ctx, name, unanswered) {
+    const envs = (ctx && ctx.environments) || {};
+    const tracker = envs._rlpTracker;
+    const fields = (tracker && tracker.fields) || envs.fields || {};
+    if (tracker && tracker.defaults && name && !tracker.defaults.has(name)) tracker.defaults.set(name, unanswered);
+    const answer = fields[name] !== undefined && fields[name] !== null ? String(fields[name]) : unanswered;
+    return { answer, view: !!tracker && tracker.mode === 'view' };
+}
+
 // Record a tag name into the per-render duplicate tracker (injected via render
 // context), along with where each use appeared, so a clash can be pointed at
 // rather than only named.
@@ -405,8 +420,10 @@ function registerCustomTags(engine) {
         async render(ctx) {
             const name = resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
-            const fields = (ctx.environments && ctx.environments.fields) || {};
-            const checkedAttr = fields[name] === 'true' ? ' checked=""' : '';
+            const { answer, view } = fieldState(ctx, name, 'false');
+            // In the PDF an optional part is there or it isn't.
+            if (view) return answer === 'true' ? await this.liquid.renderer.renderTemplates(this.templates, ctx) : '';
+            const checkedAttr = answer === 'true' ? ' checked=""' : '';
             const inner = await this.liquid.renderer.renderTemplates(this.templates, ctx);
             return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}"><label for="${name}"><input type="checkbox" id="${name}" name="${name}" data-editor-id="${name}" value="true"${checkedAttr}><span class="optional-content">${inner}</span></label></div>`;
         }
@@ -430,8 +447,9 @@ function registerCustomTags(engine) {
             const placeholder = this.args.placeholder || '';
             const maxlength = this.args.maxlength !== undefined ? this.args.maxlength : 100;
             const minlength = this.args.minlength !== undefined ? this.args.minlength : 0;
-            const fields = (ctx.environments && ctx.environments.fields) || {};
-            const value = fields[name] !== undefined ? String(fields[name]) : '';
+            const { answer: value, view } = fieldState(ctx, name, '');
+            // In the PDF, the text that was typed, with its line breaks.
+            if (view) return escapeHtml(value).replace(/\r?\n/g, '<br>');
             if (lines <= 1) {
                 return `<div id="editor-wrapper-${name}" class="editor "><input type="text" id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"></div>`;
             } else {
@@ -456,8 +474,12 @@ function registerCustomTags(engine) {
             const name = resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
             const title = this.args.title !== undefined ? this.args.title : '';
-            const fields = (ctx.environments && ctx.environments.fields) || {};
-            const selectedValue = fields[name] !== undefined ? String(fields[name]) : '0';
+            const { answer: selectedValue, view } = fieldState(ctx, name, '0');
+            // In the PDF, the chosen option's content alone.
+            if (view) {
+                const chosen = /^\d+$/.test(selectedValue) ? this.parts[Number(selectedValue)] : null;
+                return chosen ? await this.liquid.renderer.renderTemplates(chosen, ctx) : '';
+            }
             const titleHtml = title ? `<span class="editor-intro">${escapeHtml(title)}</span>` : '';
             let labelsHtml = '';
             for (let i = 0; i < this.parts.length; i++) {
@@ -620,23 +642,59 @@ let _renderQueue = Promise.resolve();
 // warnings, each located. A render error is thrown, not reported, so callers
 // can decide what to show instead. Shared by the preview and the template
 // tests, so a test sees exactly what the preview would.
-function renderWithDiagnostics(template, data, file) {
+//
+// `options.mode` is 'edit' (the default: the field tags draw their controls)
+// or 'view' (the document as it goes to the PDF; see fieldState).
+//
+// Reporter gives every field an answer: until the reader changes it,
+// `fields.<name>` is 'false' for an optional, '0' for a choice and '' for an
+// editor. The data only has the answers someone put in it, and which fields a
+// template has is only known once it has rendered (a name can come from a
+// variable, a tag can sit in a loop). So the render watches `fields`: if the
+// template read a field its tags left unanswered, or went through them all, it
+// is rendered again with those answers filled in. Most templates never read
+// an unanswered field and render once.
+function renderWithDiagnostics(template, data, file, options = {}) {
+    const mode = options.mode === 'view' ? 'view' : 'edit';
     const run = async () => {
-        const nameTracker = { seen: new Map(), dupes: [] };
-        const dataWithTracker = Object.assign({}, data, { _rlpTracker: nameTracker });
-        _currentWarnings = [];
-        try {
-            const rendered = await liquidEngine.render(template, dataWithTracker);
-            const diagnostics = [];
-            for (const name of nameTracker.dupes) {
-                diagnostics.push(duplicateNameDiagnostic(name, nameTracker.seen.get(name) || [], file));
+        const given = data ? data.fields : undefined;
+        // Something other than an object under `fields` is left as it is.
+        const watching = given === undefined || given === null || (typeof given === 'object' && !Array.isArray(given));
+        let fields = watching ? Object.assign({}, given) : null;
+        for (let pass = 0; ; pass++) {
+            const tracker = { seen: new Map(), dupes: [], mode, fields, defaults: new Map(), missed: new Set(), listed: false };
+            const scope = Object.assign({}, data, { _rlpTracker: tracker });
+            if (watching) {
+                scope.fields = new Proxy(fields, {
+                    get(target, key, receiver) {
+                        if (typeof key === 'string' && !(key in target)) tracker.missed.add(key);
+                        return Reflect.get(target, key, receiver);
+                    },
+                    ownKeys(target) {
+                        tracker.listed = true;
+                        return Reflect.ownKeys(target);
+                    }
+                });
             }
-            for (const warning of _currentWarnings) {
-                diagnostics.push(diagnostic('warning', 'Warning', warning.message, file, warning.location));
+            _currentWarnings = [];
+            try {
+                const rendered = await liquidEngine.render(template, scope);
+                const unanswered = watching ? Array.from(tracker.defaults).filter(([name]) => !(name in fields)) : [];
+                if (pass < 3 && unanswered.length && (tracker.listed || unanswered.some(([name]) => tracker.missed.has(name)))) {
+                    for (const [name, value] of unanswered) fields[name] = value;
+                    continue;
+                }
+                const diagnostics = [];
+                for (const name of tracker.dupes) {
+                    diagnostics.push(duplicateNameDiagnostic(name, tracker.seen.get(name) || [], file));
+                }
+                for (const warning of _currentWarnings) {
+                    diagnostics.push(diagnostic('warning', 'Warning', warning.message, file, warning.location));
+                }
+                return { rendered, diagnostics };
+            } finally {
+                _currentWarnings = null;
             }
-            return { rendered, diagnostics };
-        } finally {
-            _currentWarnings = null;
         }
     };
     const next = _renderQueue.then(run, run);
@@ -736,7 +794,7 @@ function escapeHtml(str) {
 // Parse and render template text for a test case. Never throws: a template
 // that fails to parse or render comes back with no html and the located error
 // among its diagnostics.
-async function renderForTest(text, data, file) {
+async function renderForTest(text, data, file, options = {}) {
     let template;
     try {
         template = liquidEngine.parse(text);
@@ -744,7 +802,7 @@ async function renderForTest(text, data, file) {
         return { html: null, diagnostics: [liquidDiagnostic('Template error', err, file)] };
     }
     try {
-        const { rendered, diagnostics } = await renderWithDiagnostics(template, data, file);
+        const { rendered, diagnostics } = await renderWithDiagnostics(template, data, file, options);
         return { html: rendered, diagnostics };
     } catch (err) {
         return { html: null, diagnostics: [liquidDiagnostic('Render error', err, file)] };

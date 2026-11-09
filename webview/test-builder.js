@@ -662,8 +662,9 @@
     function open() {
         state.open = true;
         document.body.classList.add('lp-building');
-        const source = document.getElementById('lp-show-source');
-        if (source && source.checked) source.click();
+        // Parts are picked from the Edit tab.
+        const edit = document.getElementById('lp-view-edit');
+        if (edit && !edit.checked) edit.click();
         render();
         // Ask which tests this page already has, for the test picker.
         if (vscodeApi) vscodeApi.postMessage({ type: 'action', action: 'listBuiltTests' });

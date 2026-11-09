@@ -203,10 +203,10 @@ function configIn(html) {
 
 test('the HTML preview has the toggle, the pages container and the paging script', async () => {
     const { page } = await htmlPreview('<p>hi</p>');
-    assert.ok(chromeOf(page).includes('id="lp-selectpdf"'), 'the toggle is in the toolbar');
+    assert.ok(chromeOf(page).includes('<input type="radio" name="lp-view" id="lp-selectpdf">PDF preview'), 'the tab is in the toolbar');
     assert.ok(page.includes('<div id="lp-pages"></div>'));
     assert.ok(page.includes('body:has(#lp-selectpdf:checked) #lp-rendered-root { display: none; }'));
-    const script = page.slice(page.lastIndexOf('<script>') + '<script>'.length, page.lastIndexOf('</script>'));
+    const script = page.slice(page.lastIndexOf('<script nonce=')).replace(/^<script[^>]*>/, '').replace(/<\/script>(?![\s\S]*<\/script>)[\s\S]*$/, '');
     assert.ok(script.includes('chooseNextBreak'), 'the last script is the paging one');
     assert.doesNotThrow(() => new vm.Script(script));
 });
@@ -257,7 +257,7 @@ test('the workspace CSS goes with it, inlined', async () => {
     fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('the toggle stays on across a live edit, and turning it on turns the source view off', async () => {
+test('the PDF preview tab stays chosen across a live edit, and choosing it leaves the source view', async () => {
     const { panel } = await htmlPreview('<p>one</p>');
     const dom = new JSDOM(panel.webview.html, { runScripts: 'dangerously', virtualConsole: new VirtualConsole(), pretendToBeVisual: true });
     const { document } = dom.window;
