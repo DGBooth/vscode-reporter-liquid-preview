@@ -41,7 +41,7 @@ test('in a tag, its name: a block brings its end tag in the house style, replaci
     assert.strictEqual(ifTag.insert, 'if ${1:condition} %}$0{%- endif %}');
     assert.deepStrictEqual(ifTag.replace, [6, 10], 'the typed "i" and the " %}" after it');
     assert.deepStrictEqual(item('<p>{%- i\u2038}', 'if').replace, [7, 9], 'or the } the editor paired with {');
-    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}" %}\n\t$0\n{%- endoptional %}');
+    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}"${2:, title: "${3}"} %}\n\t$0\n{%- endoptional %}');
     assert.strictEqual(item('{%- ‸', 'optional').detail, 'Reporter tag');
     assert.strictEqual(item('{%- ‸', 'assign').insert, 'assign ${1:name} = ${2:value} %}');
 });
@@ -79,8 +79,9 @@ test('fields: the names Reporter’s tags give them in this template', () => {
 });
 
 test('Reporter tags’ options', () => {
-    assert.deepStrictEqual(offered('{%- editor "ref", ‸ %}'), ['placeholder', 'lines', 'maxlength', 'minlength']);
+    assert.deepStrictEqual(offered('{%- editor "ref", ‸ %}'), ['title', 'placeholder', 'lines', 'maxlength', 'minlength']);
     assert.deepStrictEqual(offered('{%- choice "d", ‸ %}'), ['title']);
+    assert.deepStrictEqual(offered('{%- optional "o", ‸ %}'), ['title']);
 });
 
 test('nothing is offered as Liquid in HTML, or in a comment', () => {
@@ -255,7 +256,7 @@ test('Reporter’s tags go in over several lines, as a formatted template has th
 });
 
 test('the completion list gives Reporter’s tags in the same layout', () => {
-    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}" %}\n\t$0\n{%- endoptional %}');
+    assert.strictEqual(item('{%- ‸', 'optional').insert, 'optional "${1:name}"${2:, title: "${3}"} %}\n\t$0\n{%- endoptional %}');
     assert.strictEqual(item('{%- ‸', 'editor').insert, 'editor "${1:name}"${2:, placeholder: "${3}"} %}\n\t$0\n{%- endeditor %}');
     assert.strictEqual(item('{%- ‸', 'choice').insert, 'choice "${1:name}", title: "${2:Title}" %}\n\t${3:First option}\n{%- or %}\n\t${4:Second option}\n{%- endchoice %}');
     assert.strictEqual(item('{%- ‸', 'or').insert, 'or %}\n\t$0');

@@ -360,3 +360,11 @@ test('the spec\u2019s code is dark on light whatever styles code around it', () 
     assert.strictEqual(style.color, 'rgb(36, 41, 47)');
     assert.strictEqual(style.backgroundColor, 'rgb(243, 244, 246)');
 });
+
+test('a fill-in is labelled by its title, with its placeholder in the box', () => {
+    const { doc } = documentOf('{% editor "risk", title: "Attitude to risk", placeholder: "Type here" %}{% endeditor %}');
+    assert.strictEqual(doc.querySelector('.sp-tag').textContent, 'E1Fill in Attitude to risk');
+    assert.strictEqual(doc.querySelector('.sp-fillbox').textContent, 'Type here');
+    const untitled = documentOf('{% editor "risk", placeholder: "Type here" %}{% endeditor %}').doc;
+    assert.strictEqual(untitled.querySelector('.sp-tag').textContent, 'E1Fill in Type here', 'with no title, the placeholder says what it is');
+});

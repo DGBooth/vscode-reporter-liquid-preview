@@ -42,6 +42,12 @@ function parseTagArgs(argsStr) {
     return result;
 }
 
+// The heading Reporter shows above an optional, an editor or a choice: its
+// title, when it has one.
+function titleHtml(args) {
+    return args.title !== undefined && args.title !== '' ? `<span class="editor-intro">${escapeHtml(args.title)}</span>` : '';
+}
+
 // Resolve the tag name from parsed args: either a literal string or a variable looked up in context.
 function resolveTagName(args, ctx) {
     if (args.name) return args.name;
@@ -425,7 +431,7 @@ function registerCustomTags(engine) {
             if (view) return answer === 'true' ? await this.liquid.renderer.renderTemplates(this.templates, ctx) : '';
             const checkedAttr = answer === 'true' ? ' checked=""' : '';
             const inner = await this.liquid.renderer.renderTemplates(this.templates, ctx);
-            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}"><label for="${name}"><input type="checkbox" id="${name}" name="${name}" data-editor-id="${name}" value="true"${checkedAttr}><span class="optional-content">${inner}</span></label></div>`;
+            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}">${titleHtml(this.args)}<label for="${name}"><input type="checkbox" id="${name}" name="${name}" data-editor-id="${name}" value="true"${checkedAttr}><span class="optional-content">${inner}</span></label></div>`;
         }
     });
 
@@ -451,9 +457,9 @@ function registerCustomTags(engine) {
             // In the PDF, the text that was typed, with its line breaks.
             if (view) return escapeHtml(value).replace(/\r?\n/g, '<br>');
             if (lines <= 1) {
-                return `<div id="editor-wrapper-${name}" class="editor "><input type="text" id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"></div>`;
+                return `<div id="editor-wrapper-${name}" class="editor ">${titleHtml(this.args)}<input type="text" id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}"></div>`;
             } else {
-                return `<div id="editor-wrapper-${name}" class="editor "><textarea id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" rows="${lines}">${escapeHtml(value)}</textarea></div>`;
+                return `<div id="editor-wrapper-${name}" class="editor ">${titleHtml(this.args)}<textarea id="${name}" data-editor-id="${name}" maxlength="${maxlength}" minlength="${minlength}" placeholder="${escapeHtml(placeholder)}" rows="${lines}">${escapeHtml(value)}</textarea></div>`;
             }
         }
     });
@@ -473,21 +479,19 @@ function registerCustomTags(engine) {
         async render(ctx) {
             const name = resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
-            const title = this.args.title !== undefined ? this.args.title : '';
             const { answer: selectedValue, view } = fieldState(ctx, name, '0');
             // In the PDF, the chosen option's content alone.
             if (view) {
                 const chosen = /^\d+$/.test(selectedValue) ? this.parts[Number(selectedValue)] : null;
                 return chosen ? await this.liquid.renderer.renderTemplates(chosen, ctx) : '';
             }
-            const titleHtml = title ? `<span class="editor-intro">${escapeHtml(title)}</span>` : '';
             let labelsHtml = '';
             for (let i = 0; i < this.parts.length; i++) {
                 const checkedAttr = String(i) === selectedValue ? ' checked=""' : '';
                 const inner = await this.liquid.renderer.renderTemplates(this.parts[i], ctx);
                 labelsHtml += `<label for="${name}-${i + 1}"><input type="radio" id="${name}-${i + 1}" name="${name}" data-editor-id="${name}" value="${i}"${checkedAttr}><span class="choice-content">${inner}</span></label>`;
             }
-            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}">${titleHtml}${labelsHtml}</div>`;
+            return `<div id="${name}-wrapper" class="editor " data-editor-id="${name}">${titleHtml(this.args)}${labelsHtml}</div>`;
         }
     });
 }

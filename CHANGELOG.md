@@ -14,6 +14,9 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+### Fixed
+- An `optional`'s or an `editor`'s `title` was ignored in the previews; Reporter shows it as a heading above the field. It's now shown there, as a choice's title already was, while the field is being answered, and, like a choice's, never in the finished document. The template spec labels a fill-in by its title, with its placeholder in the box. `title` is offered in completions for both, and an `optional` snippet includes it.
+
 ## [1.18.0] - 2026-11-09
 
 ### Added

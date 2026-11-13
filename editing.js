@@ -116,16 +116,16 @@ const TAGS = {
     include: ['include "${1:file}" %}', 'Renders another template here.'],
     layout: ['layout "${1:file}" %}', 'Renders this template inside another.'],
     block: ['block ${1:name} %}$0{%DASH endblock %}', 'A part of a layout this template fills in.'],
-    optional: ['optional "${1:name}" %}\n\t$0\n{%DASH endoptional %}', 'Reporter: a part the reader can tick to include. Its field is fields.name ("true" when ticked).'],
-    editor: ['editor "${1:name}"${2:, placeholder: "${3}"} %}\n\t$0\n{%DASH endeditor %}', 'Reporter: a text box the reader fills in. Its field is fields.name. Options: placeholder, lines, maxlength, minlength.'],
+    optional: ['optional "${1:name}"${2:, title: "${3}"} %}\n\t$0\n{%DASH endoptional %}', 'Reporter: a part the reader can tick to include. Its field is fields.name ("true" when ticked). Options: title.'],
+    editor: ['editor "${1:name}"${2:, placeholder: "${3}"} %}\n\t$0\n{%DASH endeditor %}', 'Reporter: a text box the reader fills in. Its field is fields.name. Options: title, placeholder, lines, maxlength, minlength.'],
     choice: ['choice "${1:name}", title: "${2:Title}" %}\n\t${3:First option}\n{%DASH or %}\n\t${4:Second option}\n{%DASH endchoice %}', 'Reporter: options the reader picks one of, separated by {% or %}. Its field is fields.name ("0" for the first).'],
     or: ['or %}\n\t$0', 'Reporter: the next option within a choice.']
 };
 
 const REPORTER_OPTIONS = {
-    editor: { placeholder: 'Text shown in the empty box.', lines: 'How many lines the box has; more than 1 makes a text area.', maxlength: 'The most characters allowed (100 if not given).', minlength: 'The fewest characters allowed (0 if not given).' },
+    editor: { title: 'A heading shown above the box.', placeholder: 'Greyed-out text shown in the empty box, such as "Type here"; never part of what is typed.', lines: 'How many lines the box has; more than 1 makes a text area.', maxlength: 'The most characters allowed (100 if not given).', minlength: 'The fewest characters allowed (0 if not given).' },
     choice: { title: 'A heading shown above the options.' },
-    optional: {}
+    optional: { title: 'A heading shown above the tick box.' }
 };
 
 const FORLOOP = {

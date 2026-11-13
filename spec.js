@@ -679,7 +679,9 @@ function buildSpec(text, options = {}) {
             const notes = [];
             if (node.args.lines > 1) notes.push(`${node.args.lines} lines`);
             if (node.args.maxlength !== undefined) notes.push(`up to ${node.args.maxlength} characters`);
-            const what = node.args.placeholder || humanizeName(node.args.name || node.args.nameVar);
+            // The title is the heading above the box; the placeholder is the
+            // grey text inside it, shown in the box itself.
+            const what = node.args.title || node.args.placeholder || humanizeName(node.args.name || node.args.nameVar);
             return { label: 'Fill in', detail: escapeHtml(what) + (notes.length ? ` <span class="sp-quiet">(${notes.join(', ')})</span>` : '') };
         }
         return { label: '', detail: '' };

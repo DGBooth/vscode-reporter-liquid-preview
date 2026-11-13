@@ -170,9 +170,11 @@ Reporter's own tags, rendered as Reporter renders them. Each takes a field name,
 
 | Tag | Renders | Options and answer |
 |-----|---------|--------------------|
-| `{% optional "name" %}…{% endoptional %}` | Its contents with a tick box. | Ticked when `fields.name` is `"true"`. |
-| `{% editor "name" %}…{% endeditor %}` | A text box, or a text area with `lines` over 1. | `placeholder`, `lines` (1), `maxlength` (100), `minlength` (0). Its value is `fields.name`. |
+| `{% optional "name", title: "…" %}…{% endoptional %}` | Its contents with a tick box, under an optional `title`. | Ticked when `fields.name` is `"true"`. |
+| `{% editor "name", title: "…", placeholder: "…" %}…{% endeditor %}` | A text box, or a text area with `lines` over 1, under an optional `title`. The `placeholder` is greyed-out text in the empty box, such as "Type here", never part of what's typed. | `title`, `placeholder`, `lines` (1), `maxlength` (100), `minlength` (0). Its value is `fields.name`. |
 | `{% choice "name", title: "…" %}…{% or %}…{% endchoice %}` | Options separated by `{% or %}`, as radio buttons, under an optional `title`. | `fields.name` is the chosen option's number, from `"0"` for the first (the default). |
+
+A `title` is a heading for the adviser, shown above the field while it's being answered, as Reporter shows it. Like the tick boxes, radio buttons and text boxes, it isn't part of the finished document. Only a written value is read: `title: "…"`, not a variable or a filter.
 
 Each field name should be used once per template; the [Problems panel](#problems-panel) flags a repeat.
 
