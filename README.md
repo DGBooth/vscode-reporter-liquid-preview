@@ -176,7 +176,7 @@ Reporter's own tags, rendered as Reporter renders them. Each takes a field name,
 
 A `title` is a heading for the adviser, shown above the field while it's being answered, as Reporter shows it. Like the tick boxes, radio buttons and text boxes, it isn't part of the finished document. Only a written value is read: `title: "…"`, not a variable or a filter.
 
-Each field name should be used once per template; the [Problems panel](#problems-panel) flags a repeat.
+Each field name should be used once per template; the [Problems panel](#problems-panel) flags a repeat. A name from a variable is checked by the value it takes as the template runs, so a clash between it and another field is caught, and so is a loop that gives every item's field the same name, or items in the data that give the same one. It only sees what the data renders: a clash in a branch the data doesn't reach, or with values it doesn't have, shows with data that reaches it. [Template tests](#template-tests) over a few data files check each of them, and fail on a duplicate.
 
 Beyond those, `{% echo value | filter %}` is accepted as `{{ value | filter }}`. Reporter accepts it, but the engine behind the preview only gained the tag in a later version, so the extension supplies it. Values, filters and their warnings behave as they do in `{{ }}`, and the template spec shows it as a data value.
 
@@ -209,7 +209,7 @@ Every entry says **where** the problem is, not just what it is:
 - **The offending source**, quoted underneath, so you can recognise the construct without leaving the preview.
 - **An error inside a block** (an `if`, a `for`, an `optional`...) is located at the error itself, not at the block's opening tag, however many blocks deep it is.
 - Warnings raised inside a filter are traced back to the `{{ ... }}` or `{% ... %}` that ran it — including filters called from inside a loop or a nested tag, which have no way to name their own position otherwise.
-- **Duplicate field names** point at the repeat and name the line it collides with, rather than just listing the names.
+- **Duplicate field names** point at the repeat and name the line it collides with, rather than just listing the names. A name from a variable says which variable, and one tag repeated by a loop is said to be that, with what to change.
 - **Unbalanced HTML** — a closing tag like a stray `</div>` that closes nothing the output opened — is flagged with the text that follows it, so you can find it. Put into a whole page, such a tag can close an element around the document and push everything after it out of its section. The preview displays the output without it, as the template tests read it, so what you see, what you click in the test builder and what the checks test are always the same structure.
 - **Data errors** are located in the `.json` file, not the template, using the position `JSON.parse` reports.
 - The **Full HTML Preview** locates a missing end tag by line, alongside the "Not closed" markers in the annotated document that show where it starts.

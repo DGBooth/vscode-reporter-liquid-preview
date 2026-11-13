@@ -235,3 +235,36 @@ test('a field whose name has no value is warned about, not left to fail silently
     assert.match(result.diagnostics[0].message, /name comes from missingName, which has no value here/);
     assert.strictEqual(result.diagnostics[0].line, 1);
 });
+
+// Duplicate names, for fields named by variables: the names are the values
+// the variables take as the template runs, so they're checked as they happen.
+const dupes = async (text, data = {}) => (await engine.renderForTest(text, data, TEMPLATE)).diagnostics
+    .filter(d => d.title === 'Duplicate field name')
+    .map(d => `${d.line}:${d.col} ${d.message}`);
+
+test('a variable-named field clashing with another field is a duplicate, and says where its name came from', async () => {
+    assert.deepStrictEqual(await dupes('{% assign n = "prot" %}{% choice n %}A{% or %}B{% endchoice %}\n{% editor "prot" %}{% endeditor %}'), [
+        '2:1 “prot” is used 2 times — every field needs its own name. It is first used on line 1. The name comes from n.'
+    ]);
+});
+
+test('a loop that gives every item’s field the same name is a duplicate, said to be one tag repeated', async () => {
+    assert.deepStrictEqual(await dupes('{% for p in ps %}{% optional "optionTBC" %}A{% endoptional %}{% endfor %}', { ps: [1, 2, 3] }), [
+        '1:18 “optionTBC” is used 3 times — every field needs its own name. The same tag gives it to a field each time it is repeated, as in a loop: name it per item, such as from the item’s id.'
+    ]);
+    assert.deepStrictEqual(await dupes('{% for p in ps %}{% assign n = "prot" %}{% choice n %}A{% or %}B{% endchoice %}{% endfor %}', { ps: [1, 2] }), [
+        '1:41 “prot” is used 2 times — every field needs its own name. The same tag, repeated as in a loop, named a field from n each time, and it was “prot” each time: make it different for each item.'
+    ]);
+});
+
+test('fields named per item are fine, unless two items give the same name', async () => {
+    const text = '{% for p in ps %}{% choice p.urn %}A{% or %}B{% endchoice %}{% endfor %}';
+    assert.deepStrictEqual(await dupes(text, { ps: [{ urn: 'a' }, { urn: 'b' }] }), []);
+    assert.deepStrictEqual(await dupes(text, { ps: [{ urn: 'a' }, { urn: 'a' }] }), [
+        '1:18 “a” is used 2 times — every field needs its own name. The same tag, repeated as in a loop, named a field from p.urn each time, and it was “a” each time: make it different for each item.'
+    ]);
+});
+
+test('the same name in branches that never both show is not a duplicate', async () => {
+    assert.deepStrictEqual(await dupes('{% if x %}{% optional "o" %}a{% endoptional %}{% else %}{% optional "o" %}b{% endoptional %}{% endif %}', { x: true }), []);
+});
