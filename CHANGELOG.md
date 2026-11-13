@@ -14,6 +14,8 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+## [1.18.2] - 2026-11-13
+
 ### Fixed
 - Duplicate field names are now found among fields named by variables, which before had no name to compare: a variable's value clashing with another field's name, a loop giving every item's field the same name, and items in the data giving the same one. The message says which variable the name came from, and when one tag repeated by a loop is the cause, says so and what to change, rather than "first used on line" its own line.
 - A field named by a variable the template sets (with `assign` or `capture`, or a loop's item, as in `{% choice protectionName %}` inside a loop over provisions) had no name, because the name was looked for in the data only. A choice's radio buttons then weren't one group, so choosing one option didn't clear the other, its answer couldn't be kept, and `fields.<name>` had nothing to read. Names are now looked up as Liquid looks up any value, dotted paths (`provision.urn`) included, so each such field has its own name, and a choice's value is under `fields`, from `"0"` for the first option. A name that still comes out empty is now a warning in the Problems panel rather than a silent failure.
