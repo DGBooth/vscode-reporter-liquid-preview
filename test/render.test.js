@@ -83,3 +83,32 @@ test('a render error still reports the token it failed on', async () => {
             return true;
         });
 });
+
+// What Reporter shows, as described by the people who use it: a title is a
+// heading above an optional's tick box, an editor's box and a choice's options;
+// a placeholder is greyed-out text inside an editor's empty box, never typed in.
+test('a title is a heading above an optional, an editor and a choice', async () => {
+    const render = text => extension.liquidEngine.parseAndRender(text, { fields: {} });
+    const heading = '<span class="editor-intro">Tax residency</span>';
+    const optional = await render('{% optional "tax", title: "Tax residency" %}Body{% endoptional %}');
+    assert.ok(optional.startsWith(`<div id="tax-wrapper" class="editor " data-editor-id="tax">${heading}<label for="tax">`), optional);
+    const line = await render('{% editor "tax", title: "Tax residency", placeholder: "Type here" %}{% endeditor %}');
+    assert.ok(line.startsWith(`<div id="editor-wrapper-tax" class="editor ">${heading}<input type="text"`), line);
+    const box = await render('{% editor "tax", title: "Tax residency", lines: 3 %}{% endeditor %}');
+    assert.ok(box.startsWith(`<div id="editor-wrapper-tax" class="editor ">${heading}<textarea`), box);
+    const choice = await render('{% choice "tax", title: "Tax residency" %}A{% or %}B{% endchoice %}');
+    assert.ok(choice.startsWith(`<div id="tax-wrapper" class="editor " data-editor-id="tax">${heading}<label for="tax-1">`), choice);
+});
+
+test('no title, or an empty one, means no heading', async () => {
+    for (const text of ['{% optional "o" %}x{% endoptional %}', '{% editor "e", title: "" %}{% endeditor %}', '{% choice "c" %}A{% or %}B{% endchoice %}']) {
+        const out = await extension.liquidEngine.parseAndRender(text, { fields: {} });
+        assert.ok(!out.includes('editor-intro'), text);
+    }
+});
+
+test('a placeholder is greyed-out text in the empty box, and a title is escaped', async () => {
+    const out = await extension.liquidEngine.parseAndRender('{% editor "e", title: "Risk & <reward>", placeholder: "Type here" %}{% endeditor %}', { fields: {} });
+    assert.ok(out.includes('<span class="editor-intro">Risk &amp; &lt;reward&gt;</span>'), out);
+    assert.ok(out.includes('placeholder="Type here" value=""'), 'a placeholder, with nothing typed');
+});

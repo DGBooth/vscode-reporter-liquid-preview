@@ -138,3 +138,15 @@ test('answering a field is posted to the extension, and choosing a tab is not', 
         dom.window.close();
     }
 });
+
+test('titles are headings for the adviser while editing, and never part of the PDF', async () => {
+    const text = '{% optional "ps", title: "Add a PS" %}<p>PS</p>{% endoptional %}'
+        + '{% editor "note", title: "Your note", placeholder: "Type here" %}{% endeditor %}'
+        + '{% choice "sign", title: "Sign off" %}<p>A</p>{% or %}<p>B</p>{% endchoice %}';
+    const data = { fields: { ps: 'true', note: 'Hello', sign: '1' } };
+    const editing = await render(text, data, 'edit');
+    for (const title of ['Add a PS', 'Your note', 'Sign off']) {
+        assert.ok(editing.includes(`<span class="editor-intro">${title}</span>`), `${title} while editing`);
+    }
+    assert.strictEqual(await render(text, data, 'view'), '<p>PS</p>Hello<p>B</p>', 'the PDF: answers only, no titles or placeholders');
+});
