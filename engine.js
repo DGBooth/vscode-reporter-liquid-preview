@@ -29,8 +29,9 @@ function parseTagArgs(argsStr) {
     if (nameMatch) {
         result.name = nameMatch[1];
     } else {
-        // Unquoted first argument (not a key:value pair) is a variable whose runtime value is the name
-        const varMatch = argsStr.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\s*:)/);
+        // Unquoted first argument (not a key:value pair) is a variable whose runtime value is the name:
+        // `choiceName`, or a path into one, `provision.urn` or `names[0]`.
+        const varMatch = argsStr.match(/^\s*([a-zA-Z_][\w-]*(?:\.[\w-]+|\[[^\]]*\])*)(?!\s*:)/);
         if (varMatch) result.nameVar = varMatch[1];
     }
     const kvRegex = /(\w+):\s*(?:"([^"]*)"|'([^']*)'|(\d+(?:\.\d+)?))/g;
@@ -49,12 +50,18 @@ function titleHtml(args) {
 }
 
 // Resolve the tag name from parsed args: either a literal string or a variable looked up in context.
-function resolveTagName(args, ctx) {
+//
+// The variable is looked up as Liquid looks up any value: among the template's
+// own (assign, capture, a loop's variable) as well as the data. Looking in the
+// data alone gave a name set by the template no value, so a choice named per
+// item in a loop had no name: its radio buttons weren't one group, so choosing
+// one didn't clear the other, and it had no field to answer.
+async function resolveTagName(args, ctx) {
     if (args.name) return args.name;
     if (args.nameVar) {
-        const envs = (ctx && ctx.environments) || {};
-        const resolved = envs[args.nameVar];
-        return resolved !== undefined ? String(resolved) : '';
+        const resolved = ctx && typeof ctx.get === 'function' ? await ctx.get(args.nameVar) : undefined;
+        if (resolved !== undefined && resolved !== null && String(resolved) !== '') return String(resolved);
+        addWarning(`This field's name comes from ${args.nameVar}, which has no value here, so the field has no name: its answer can't be kept, and a choice's options don't clear each other.`);
     }
     return '';
 }
@@ -424,7 +431,7 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
+            const name = await resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
             const { answer, view } = fieldState(ctx, name, 'false');
             // In the PDF an optional part is there or it isn't.
@@ -448,7 +455,7 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
+            const name = await resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
             const lines = this.args.lines !== undefined ? this.args.lines : 1;
             const placeholder = this.args.placeholder || '';
@@ -483,7 +490,7 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
+            const name = await resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
             const { answer: selectedValue, view } = fieldState(ctx, name, '0');
             // In the PDF, the chosen option's content alone.

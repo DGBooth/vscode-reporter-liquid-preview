@@ -15,6 +15,7 @@ version bump, so a version can include work committed before its bump.
 ## [Unreleased]
 
 ### Fixed
+- A field named by a variable the template sets (with `assign` or `capture`, or a loop's item, as in `{% choice protectionName %}` inside a loop over provisions) had no name, because the name was looked for in the data only. A choice's radio buttons then weren't one group, so choosing one option didn't clear the other, its answer couldn't be kept, and `fields.<name>` had nothing to read. Names are now looked up as Liquid looks up any value, dotted paths (`provision.urn`) included, so each such field has its own name, and a choice's value is under `fields`, from `"0"` for the first option. A name that still comes out empty is now a warning in the Problems panel rather than a silent failure.
 - What's between `{% editor %}` and `{% endeditor %}` was ignored, so the box showed empty; in Reporter it's the box's starting text. It's now in the box, for the adviser to keep or change, and is the field's value until they do: `fields.<name>` reads it, and the PDF preview shows it. It can use data (`{{ client.name }}`), and is trimmed, so the multi-line layout of the editor snippet adds no line break. An answer, even an empty one, replaces it. The template spec shows it inside the fill-in box, as typed text, apart from a placeholder's greyed-out text.
 
 ## [1.18.1] - 2026-11-13

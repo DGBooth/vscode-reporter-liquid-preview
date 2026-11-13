@@ -177,3 +177,61 @@ test('the starting text can come from the data, and the tag’s layout doesn’t
     assert.match(await render(laidOut, {}, 'edit'), /<textarea[^>]*>Line one\n\tLine two<\/textarea>/);
     assert.match(await render('{% editor "e", placeholder: "Type here" %}{% endeditor %}', {}, 'edit'), /placeholder="Type here" value=""/, 'nothing between the tags: an empty box with its placeholder');
 });
+
+// A choice named per item, as in a loop over a report's provisions. Its name
+// came from the template's own variables, which weren't looked in, so it had
+// none: its radio buttons weren't one group, choosing one didn't clear the
+// other, and the choice had no field.
+const PER_PROVISION = '{% for p in provisions %}'
+    + '{% assign protection = "protection" | append: p.urn %}'
+    + '{% choice protection, title: "Annuity protection" %}<p>Yes</p>{% or %}<p>No</p>{% endchoice %}'
+    + '[{{ fields[protection] }}]'
+    + '{% endfor %}';
+const PROVISIONS = { provisions: [{ urn: 'A1' }, { urn: 'B2' }] };
+
+test('a field named by the template’s own variables has that name', async () => {
+    const names = async (text, data) => [...(await render(text, data, 'edit')).matchAll(/<input type="(?:radio|checkbox|text)" id="[^"]*" name="([^"]*)"|<input type="text" id="([^"]*)"/g)].map(m => m[1] || m[2]);
+    assert.deepStrictEqual(await names(PER_PROVISION, PROVISIONS), ['protectionA1', 'protectionA1', 'protectionB2', 'protectionB2'], 'from assign, in a loop');
+    assert.deepStrictEqual(await names('{% capture n %}ps{{ 1 }}{% endcapture %}{% optional n %}x{% endoptional %}', {}), ['ps1'], 'from capture');
+    assert.deepStrictEqual(await names('{% for p in ps %}{% editor p.ref %}{% endeditor %}{% endfor %}', { ps: [{ ref: 'note' }] }), ['note'], 'from a loop variable’s property');
+});
+
+test('a choice’s value is its option’s number from 0, under fields, before and after it’s answered', async () => {
+    const before = await render(PER_PROVISION, PROVISIONS, 'edit');
+    assert.deepStrictEqual([...before.matchAll(/\[(\d*)\]/g)].map(m => m[1]), ['0', '0'], 'the first option until answered');
+    const after = await render(PER_PROVISION, Object.assign({ fields: { protectionB2: '1' } }, PROVISIONS), 'edit');
+    assert.deepStrictEqual([...after.matchAll(/\[(\d*)\]/g)].map(m => m[1]), ['0', '1']);
+    assert.deepStrictEqual([...after.matchAll(/id="(protection\w+-\d)"[^>]*checked=""/g)].map(m => m[1]), ['protectionA1-1', 'protectionB2-2'], 'one option checked in each');
+});
+
+test('choosing the other option clears the first, in the preview', async () => {
+    const { preview, panel, page } = await htmlPreview(PER_PROVISION, { data: PROVISIONS });
+    const posted = [];
+    const dom = new JSDOM(page, {
+        runScripts: 'dangerously',
+        virtualConsole: new VirtualConsole(),
+        beforeParse(window) { window.acquireVsCodeApi = () => ({ postMessage: message => posted.push(message) }); }
+    });
+    try {
+        const { document, Event } = dom.window;
+        const no = document.getElementById('protectionB2-2');
+        no.checked = true;
+        no.dispatchEvent(new Event('change', { bubbles: true }));
+        assert.strictEqual(document.getElementById('protectionB2-1').checked, false, 'one group: the browser clears Yes');
+        assert.strictEqual(document.getElementById('protectionA1-1').checked, true, 'another provision’s choice is its own');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(posted)), [{ type: 'action', action: 'setField', name: 'protectionB2', value: '1' }]);
+    } finally {
+        dom.window.close();
+    }
+    preview.fieldAnswers = { protectionB2: '1' };
+    await extension.refreshHtmlPanel(preview, panel);
+    const rendered = panel.messages[panel.messages.length - 1].rendered;
+    assert.deepStrictEqual([...rendered.matchAll(/id="(protection\w+-\d)"[^>]*checked=""/g)].map(m => m[1]), ['protectionA1-1', 'protectionB2-2'], 'and the render with the answer agrees');
+});
+
+test('a field whose name has no value is warned about, not left to fail silently', async () => {
+    const result = await engine.renderForTest('{% choice missingName %}A{% or %}B{% endchoice %}', {}, TEMPLATE);
+    assert.strictEqual(result.diagnostics.length, 1);
+    assert.match(result.diagnostics[0].message, /name comes from missingName, which has no value here/);
+    assert.strictEqual(result.diagnostics[0].line, 1);
+});
