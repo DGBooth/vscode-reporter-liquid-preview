@@ -150,3 +150,30 @@ test('titles are headings for the adviser while editing, and never part of the P
     }
     assert.strictEqual(await render(text, data, 'view'), '<p>PS</p>Hello<p>B</p>', 'the PDF: answers only, no titles or placeholders');
 });
+
+test('what is between the editor tags is the box’s starting text', async () => {
+    const line = await render('{% editor "amount" %}1500{% endeditor %}', {}, 'edit');
+    assert.match(line, /<input type="text" id="amount"[^>]* placeholder="" value="1500">/);
+    const box = await render('{% editor "note", lines: 3 %}Dear client{% endeditor %}', {}, 'edit');
+    assert.match(box, /<textarea id="note"[^>]*>Dear client<\/textarea>/);
+    assert.strictEqual(await render('{% editor "note" %}Dear client{% endeditor %}', {}, 'view'), 'Dear client', 'and what goes to the PDF if it’s left as it is');
+});
+
+test('an answer replaces the starting text, even an empty one', async () => {
+    const text = '{% editor "amount" %}1500{% endeditor %}';
+    assert.match(await render(text, { fields: { amount: '2000' } }, 'edit'), /value="2000"/);
+    assert.strictEqual(await render(text, { fields: { amount: '2000' } }, 'view'), '2000');
+    assert.strictEqual(await render(text, { fields: { amount: '' } }, 'view'), '', 'a box the reader cleared stays clear');
+});
+
+test('the starting text is the field’s value until it’s answered', async () => {
+    assert.strictEqual(await render('{% editor "amount" %}1500{% endeditor %}[{{ fields.amount }}]', {}, 'view'), '1500[1500]');
+    assert.strictEqual(await render('[{{ fields.amount }}]{% editor "amount" %}1500{% endeditor %}', {}, 'view'), '[1500]1500', 'read before the tag, too');
+});
+
+test('the starting text can come from the data, and the tag’s layout doesn’t add to it', async () => {
+    assert.match(await render('{% editor "to" %}{{ client.name }}{% endeditor %}', { client: { name: 'Ada' } }, 'edit'), /value="Ada"/);
+    const laidOut = '{%- editor "note", lines: 3 %}\n\tLine one\n\tLine two\n{%- endeditor %}';
+    assert.match(await render(laidOut, {}, 'edit'), /<textarea[^>]*>Line one\n\tLine two<\/textarea>/);
+    assert.match(await render('{% editor "e", placeholder: "Type here" %}{% endeditor %}', {}, 'edit'), /placeholder="Type here" value=""/, 'nothing between the tags: an empty box with its placeholder');
+});

@@ -679,6 +679,7 @@ function buildSpec(text, options = {}) {
             const notes = [];
             if (node.args.lines > 1) notes.push(`${node.args.lines} lines`);
             if (node.args.maxlength !== undefined) notes.push(`up to ${node.args.maxlength} characters`);
+            if (node.children.some(c => (c.type === 'text' && /\S/.test(c.text)) || c.type === 'output')) notes.push('starts with the text in the box, which the adviser can change');
             // The title is the heading above the box; the placeholder is the
             // grey text inside it, shown in the box itself.
             const what = node.args.title || node.args.placeholder || humanizeName(node.args.name || node.args.nameVar);
@@ -832,7 +833,14 @@ function buildSpec(text, options = {}) {
         const head = node.type === 'choice'
             ? `<div class="sp-tag sp-head">${ref(node.id, node.line)}<span class="sp-lbl">Choose one</span>${item.title ? ` <span class="sp-det">${escapeHtml(item.title)}</span>` : ''}</div>`
             : '';
-        const fill = p => (node.type === 'editor' && !hasVisible(p.html) ? `<span class="sp-fillbox">${escapeHtml(node.args.placeholder || '')}</span>` : p.html);
+        // An editor is a box: its starting text inside it, as if typed, or else
+        // its placeholder, greyed out.
+        const fill = p => {
+            if (node.type !== 'editor') return p.html;
+            return hasVisible(p.html)
+                ? `<span class="sp-fillbox sp-fillbox-start">${p.html.trim()}</span>`
+                : `<span class="sp-fillbox">${escapeHtml(node.args.placeholder || '')}</span>`;
+        };
 
         if (mode === 'inline') {
             const mark = p => `<sup class="sp-mk" title="${escapeHtml(plainText(p.words.label + ' ' + p.words.detail, 300))}">${p.id}</sup>`;
@@ -1073,6 +1081,7 @@ const SPEC_STYLES = `
   .sp-row-end td { padding: 0 !important; height: 2px; background: var(--sp) !important; border: none !important; }
   .sp-data { background: #eceff1; border-bottom: 1px dotted #78909c; border-radius: 3px; padding: 0 4px; color: #37474f; font-style: italic; }
   .sp-fillbox { display: inline-block; min-width: 14em; min-height: 1.4em; border: 1px dashed #c25e00; background: #fff4e5; color: #8a5a2b; font-style: italic; padding: 1px 6px; border-radius: 3px; }
+  .sp-fillbox-start { color: #222; font-style: normal; border-style: solid; background: #fffaf2; }
   .sp-note { font-size: 12px; color: #555; background: #f5f5f5; border-left: 3px solid #9e9e9e; padding: 3px 8px; margin: 6px 0; font-style: italic; }
   .sp-note-label { font-style: normal; font-weight: 700; text-transform: uppercase; font-size: 10px; letter-spacing: .05em; color: #777; }
   .sp-notes { margin: 6px 0; font: 12px system-ui, sans-serif; color: #666; }

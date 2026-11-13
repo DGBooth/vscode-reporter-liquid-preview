@@ -14,6 +14,9 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+### Fixed
+- What's between `{% editor %}` and `{% endeditor %}` was ignored, so the box showed empty; in Reporter it's the box's starting text. It's now in the box, for the adviser to keep or change, and is the field's value until they do: `fields.<name>` reads it, and the PDF preview shows it. It can use data (`{{ client.name }}`), and is trimmed, so the multi-line layout of the editor snippet adds no line break. An answer, even an empty one, replaces it. The template spec shows it inside the fill-in box, as typed text, apart from a placeholder's greyed-out text.
+
 ## [1.18.1] - 2026-11-13
 
 ### Fixed

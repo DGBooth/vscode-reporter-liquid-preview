@@ -435,7 +435,8 @@ function registerCustomTags(engine) {
         }
     });
 
-    // editor tag: renders an input or textarea wrapped in a div
+    // editor tag: renders an input or textarea wrapped in a div, holding the
+    // answer, or the text between the tags until there is one
     engine.registerTag('editor', {
         parse(tagToken, remainTokens) {
             this.args = parseTagArgs(tagToken.args);
@@ -446,14 +447,19 @@ function registerCustomTags(engine) {
                 .on('end', () => { throw new Error('editor tag not closed'); });
             stream.start();
         },
-        render(ctx) {
+        async render(ctx) {
             const name = resolveTagName(this.args, ctx);
             trackTagName(name, ctx);
             const lines = this.args.lines !== undefined ? this.args.lines : 1;
             const placeholder = this.args.placeholder || '';
             const maxlength = this.args.maxlength !== undefined ? this.args.maxlength : 100;
             const minlength = this.args.minlength !== undefined ? this.args.minlength : 0;
-            const { answer: value, view } = fieldState(ctx, name, '');
+            // What's between the tags is the box's starting text: there when
+            // the box is first shown, for the reader to keep or change, and the
+            // field's value until they do. It's trimmed, so laying the tag out
+            // over lines (the house style) doesn't put a line break before it.
+            const initial = (await this.liquid.renderer.renderTemplates(this.templates, ctx)).trim();
+            const { answer: value, view } = fieldState(ctx, name, initial);
             // In the PDF, the text that was typed, with its line breaks.
             if (view) return escapeHtml(value).replace(/\r?\n/g, '<br>');
             if (lines <= 1) {
