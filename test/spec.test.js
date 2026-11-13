@@ -368,3 +368,15 @@ test('a fill-in is labelled by its title, with its placeholder in the box', () =
     const untitled = documentOf('{% editor "risk", placeholder: "Type here" %}{% endeditor %}').doc;
     assert.strictEqual(untitled.querySelector('.sp-tag').textContent, 'E1Fill in Type here', 'with no title, the placeholder says what it is');
 });
+
+test('a fill-in\u2019s starting text is shown in its box, as typed, and said to be changeable', () => {
+    const { built, doc } = documentOf('<p>Amount: {% editor "amount", title: "Amount", placeholder: "Type here" %}{{ plan.value }}{% endeditor %}</p>'
+        + '{%- editor "note", lines: 3 %}\n\tDear client\n{%- endeditor %}');
+    const boxes = [...doc.querySelectorAll('.sp-fillbox')];
+    assert.deepStrictEqual(boxes.map(b => [b.className, b.textContent]), [
+        ['sp-fillbox sp-fillbox-start', 'plan value'],
+        ['sp-fillbox sp-fillbox-start', 'Dear client']
+    ]);
+    assert.match(doc.textContent, /starts with the text in the box, which the adviser can change/);
+    assert.strictEqual(built.stats.editors, 2);
+});

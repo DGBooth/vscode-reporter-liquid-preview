@@ -29,8 +29,9 @@ function parseTagArgs(argsStr) {
     if (nameMatch) {
         result.name = nameMatch[1];
     } else {
-        // Unquoted first argument (not a key:value pair) is a variable whose runtime value is the name
-        const varMatch = argsStr.match(/^\s*([a-zA-Z_][a-zA-Z0-9_]*)(?!\s*:)/);
+        // Unquoted first argument (not a key:value pair) is a variable whose runtime value is the name:
+        // `choiceName`, or a path into one, `provision.urn` or `names[0]`.
+        const varMatch = argsStr.match(/^\s*([a-zA-Z_][\w-]*(?:\.[\w-]+|\[[^\]]*\])*)(?!\s*:)/);
         if (varMatch) result.nameVar = varMatch[1];
     }
     const kvRegex = /(\w+):\s*(?:"([^"]*)"|'([^']*)'|(\d+(?:\.\d+)?))/g;
@@ -49,12 +50,18 @@ function titleHtml(args) {
 }
 
 // Resolve the tag name from parsed args: either a literal string or a variable looked up in context.
-function resolveTagName(args, ctx) {
+//
+// The variable is looked up as Liquid looks up any value: among the template's
+// own (assign, capture, a loop's variable) as well as the data. Looking in the
+// data alone gave a name set by the template no value, so a choice named per
+// item in a loop had no name: its radio buttons weren't one group, so choosing
+// one didn't clear the other, and it had no field to answer.
+async function resolveTagName(args, ctx) {
     if (args.name) return args.name;
     if (args.nameVar) {
-        const envs = (ctx && ctx.environments) || {};
-        const resolved = envs[args.nameVar];
-        return resolved !== undefined ? String(resolved) : '';
+        const resolved = ctx && typeof ctx.get === 'function' ? await ctx.get(args.nameVar) : undefined;
+        if (resolved !== undefined && resolved !== null && String(resolved) !== '') return String(resolved);
+        addWarning(`This field's name comes from ${args.nameVar}, which has no value here, so the field has no name: its answer can't be kept, and a choice's options don't clear each other.`);
     }
     return '';
 }
@@ -75,17 +82,21 @@ function fieldState(ctx, name, unanswered) {
 }
 
 // Record a tag name into the per-render duplicate tracker (injected via render
-// context), along with where each use appeared, so a clash can be pointed at
-// rather than only named.
-function trackTagName(name, ctx) {
+// context), along with where each use appeared and the variable it was named
+// by, if any, so a clash can be pointed at rather than only named. Names come
+// from the values variables take as the template runs, so a clash between a
+// variable's value and another field's name, or a loop giving one name to
+// every item, is caught as it happens.
+function trackTagName(name, ctx, args = {}) {
     const tracker = ctx && ctx.environments && ctx.environments._rlpTracker;
     if (!tracker || !name) return;
+    const use = Object.assign({}, currentLocation(), { via: args.nameVar || null });
     const uses = tracker.seen.get(name);
     if (uses) {
-        uses.push(currentLocation());
+        uses.push(use);
         if (!tracker.dupes.includes(name)) tracker.dupes.push(name);
     } else {
-        tracker.seen.set(name, [currentLocation()]);
+        tracker.seen.set(name, [use]);
     }
 }
 
@@ -424,8 +435,8 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
-            trackTagName(name, ctx);
+            const name = await resolveTagName(this.args, ctx);
+            trackTagName(name, ctx, this.args);
             const { answer, view } = fieldState(ctx, name, 'false');
             // In the PDF an optional part is there or it isn't.
             if (view) return answer === 'true' ? await this.liquid.renderer.renderTemplates(this.templates, ctx) : '';
@@ -435,7 +446,8 @@ function registerCustomTags(engine) {
         }
     });
 
-    // editor tag: renders an input or textarea wrapped in a div
+    // editor tag: renders an input or textarea wrapped in a div, holding the
+    // answer, or the text between the tags until there is one
     engine.registerTag('editor', {
         parse(tagToken, remainTokens) {
             this.args = parseTagArgs(tagToken.args);
@@ -446,14 +458,19 @@ function registerCustomTags(engine) {
                 .on('end', () => { throw new Error('editor tag not closed'); });
             stream.start();
         },
-        render(ctx) {
-            const name = resolveTagName(this.args, ctx);
-            trackTagName(name, ctx);
+        async render(ctx) {
+            const name = await resolveTagName(this.args, ctx);
+            trackTagName(name, ctx, this.args);
             const lines = this.args.lines !== undefined ? this.args.lines : 1;
             const placeholder = this.args.placeholder || '';
             const maxlength = this.args.maxlength !== undefined ? this.args.maxlength : 100;
             const minlength = this.args.minlength !== undefined ? this.args.minlength : 0;
-            const { answer: value, view } = fieldState(ctx, name, '');
+            // What's between the tags is the box's starting text: there when
+            // the box is first shown, for the reader to keep or change, and the
+            // field's value until they do. It's trimmed, so laying the tag out
+            // over lines (the house style) doesn't put a line break before it.
+            const initial = (await this.liquid.renderer.renderTemplates(this.templates, ctx)).trim();
+            const { answer: value, view } = fieldState(ctx, name, initial);
             // In the PDF, the text that was typed, with its line breaks.
             if (view) return escapeHtml(value).replace(/\r?\n/g, '<br>');
             if (lines <= 1) {
@@ -477,8 +494,8 @@ function registerCustomTags(engine) {
             stream.start();
         },
         async render(ctx) {
-            const name = resolveTagName(this.args, ctx);
-            trackTagName(name, ctx);
+            const name = await resolveTagName(this.args, ctx);
+            trackTagName(name, ctx, this.args);
             const { answer: selectedValue, view } = fieldState(ctx, name, '0');
             // In the PDF, the chosen option's content alone.
             if (view) {
@@ -774,16 +791,28 @@ function jsonDiagnostic(title, err, text, file) {
 // collides with, rather than listing the names and leaving the hunt to the
 // reader.
 function duplicateNameDiagnostic(name, uses, file) {
-    const located = uses.filter(Boolean);
+    const located = uses.filter(use => use && typeof use.line === 'number');
     const first = located[0];
-    const repeat = located[1] || first;
-    const elsewhere = first && repeat !== first ? ` It is first used on line ${first.line}.` : '';
+    const repeat = located.find(use => use.line !== first.line || use.col !== first.col) || first;
+    // Every use from one tag: a loop repeating it, each time with this name.
+    const oneTag = first && located.length === uses.length && repeat === first;
+    const variables = [...new Set(uses.map(use => use && use.via).filter(Boolean))];
+    let where = first && repeat !== first ? ` It is first used on line ${first.line}.` : '';
+    let from = variables.length ? ` The name comes from ${variables.join(' and ')}.` : '';
+    if (oneTag && variables.length) {
+        // Named per item, but the items gave the same name: the data, or
+        // what the name is worked out from, repeats.
+        where = ` The same tag, repeated as in a loop, named a field from ${variables[0]} each time, and it was \u201c${name}\u201d each time: make it different for each item.`;
+        from = '';
+    } else if (oneTag) {
+        where = ' The same tag gives it to a field each time it is repeated, as in a loop: name it per item, such as from the item\u2019s id.';
+    }
     return diagnostic(
         'error',
         'Duplicate field name',
-        `“${name}” is used ${pluralize(uses.length, 'time')} — every field needs its own name.${elsewhere}`,
+        `“${name}” is used ${pluralize(uses.length, 'time')} — every field needs its own name.${where}${from}`,
         file,
-        repeat
+        repeat ? { line: repeat.line, col: repeat.col, snippet: repeat.snippet } : null
     );
 }
 

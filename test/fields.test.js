@@ -150,3 +150,121 @@ test('titles are headings for the adviser while editing, and never part of the P
     }
     assert.strictEqual(await render(text, data, 'view'), '<p>PS</p>Hello<p>B</p>', 'the PDF: answers only, no titles or placeholders');
 });
+
+test('what is between the editor tags is the box’s starting text', async () => {
+    const line = await render('{% editor "amount" %}1500{% endeditor %}', {}, 'edit');
+    assert.match(line, /<input type="text" id="amount"[^>]* placeholder="" value="1500">/);
+    const box = await render('{% editor "note", lines: 3 %}Dear client{% endeditor %}', {}, 'edit');
+    assert.match(box, /<textarea id="note"[^>]*>Dear client<\/textarea>/);
+    assert.strictEqual(await render('{% editor "note" %}Dear client{% endeditor %}', {}, 'view'), 'Dear client', 'and what goes to the PDF if it’s left as it is');
+});
+
+test('an answer replaces the starting text, even an empty one', async () => {
+    const text = '{% editor "amount" %}1500{% endeditor %}';
+    assert.match(await render(text, { fields: { amount: '2000' } }, 'edit'), /value="2000"/);
+    assert.strictEqual(await render(text, { fields: { amount: '2000' } }, 'view'), '2000');
+    assert.strictEqual(await render(text, { fields: { amount: '' } }, 'view'), '', 'a box the reader cleared stays clear');
+});
+
+test('the starting text is the field’s value until it’s answered', async () => {
+    assert.strictEqual(await render('{% editor "amount" %}1500{% endeditor %}[{{ fields.amount }}]', {}, 'view'), '1500[1500]');
+    assert.strictEqual(await render('[{{ fields.amount }}]{% editor "amount" %}1500{% endeditor %}', {}, 'view'), '[1500]1500', 'read before the tag, too');
+});
+
+test('the starting text can come from the data, and the tag’s layout doesn’t add to it', async () => {
+    assert.match(await render('{% editor "to" %}{{ client.name }}{% endeditor %}', { client: { name: 'Ada' } }, 'edit'), /value="Ada"/);
+    const laidOut = '{%- editor "note", lines: 3 %}\n\tLine one\n\tLine two\n{%- endeditor %}';
+    assert.match(await render(laidOut, {}, 'edit'), /<textarea[^>]*>Line one\n\tLine two<\/textarea>/);
+    assert.match(await render('{% editor "e", placeholder: "Type here" %}{% endeditor %}', {}, 'edit'), /placeholder="Type here" value=""/, 'nothing between the tags: an empty box with its placeholder');
+});
+
+// A choice named per item, as in a loop over a report's provisions. Its name
+// came from the template's own variables, which weren't looked in, so it had
+// none: its radio buttons weren't one group, choosing one didn't clear the
+// other, and the choice had no field.
+const PER_PROVISION = '{% for p in provisions %}'
+    + '{% assign protection = "protection" | append: p.urn %}'
+    + '{% choice protection, title: "Annuity protection" %}<p>Yes</p>{% or %}<p>No</p>{% endchoice %}'
+    + '[{{ fields[protection] }}]'
+    + '{% endfor %}';
+const PROVISIONS = { provisions: [{ urn: 'A1' }, { urn: 'B2' }] };
+
+test('a field named by the template’s own variables has that name', async () => {
+    const names = async (text, data) => [...(await render(text, data, 'edit')).matchAll(/<input type="(?:radio|checkbox|text)" id="[^"]*" name="([^"]*)"|<input type="text" id="([^"]*)"/g)].map(m => m[1] || m[2]);
+    assert.deepStrictEqual(await names(PER_PROVISION, PROVISIONS), ['protectionA1', 'protectionA1', 'protectionB2', 'protectionB2'], 'from assign, in a loop');
+    assert.deepStrictEqual(await names('{% capture n %}ps{{ 1 }}{% endcapture %}{% optional n %}x{% endoptional %}', {}), ['ps1'], 'from capture');
+    assert.deepStrictEqual(await names('{% for p in ps %}{% editor p.ref %}{% endeditor %}{% endfor %}', { ps: [{ ref: 'note' }] }), ['note'], 'from a loop variable’s property');
+});
+
+test('a choice’s value is its option’s number from 0, under fields, before and after it’s answered', async () => {
+    const before = await render(PER_PROVISION, PROVISIONS, 'edit');
+    assert.deepStrictEqual([...before.matchAll(/\[(\d*)\]/g)].map(m => m[1]), ['0', '0'], 'the first option until answered');
+    const after = await render(PER_PROVISION, Object.assign({ fields: { protectionB2: '1' } }, PROVISIONS), 'edit');
+    assert.deepStrictEqual([...after.matchAll(/\[(\d*)\]/g)].map(m => m[1]), ['0', '1']);
+    assert.deepStrictEqual([...after.matchAll(/id="(protection\w+-\d)"[^>]*checked=""/g)].map(m => m[1]), ['protectionA1-1', 'protectionB2-2'], 'one option checked in each');
+});
+
+test('choosing the other option clears the first, in the preview', async () => {
+    const { preview, panel, page } = await htmlPreview(PER_PROVISION, { data: PROVISIONS });
+    const posted = [];
+    const dom = new JSDOM(page, {
+        runScripts: 'dangerously',
+        virtualConsole: new VirtualConsole(),
+        beforeParse(window) { window.acquireVsCodeApi = () => ({ postMessage: message => posted.push(message) }); }
+    });
+    try {
+        const { document, Event } = dom.window;
+        const no = document.getElementById('protectionB2-2');
+        no.checked = true;
+        no.dispatchEvent(new Event('change', { bubbles: true }));
+        assert.strictEqual(document.getElementById('protectionB2-1').checked, false, 'one group: the browser clears Yes');
+        assert.strictEqual(document.getElementById('protectionA1-1').checked, true, 'another provision’s choice is its own');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(posted)), [{ type: 'action', action: 'setField', name: 'protectionB2', value: '1' }]);
+    } finally {
+        dom.window.close();
+    }
+    preview.fieldAnswers = { protectionB2: '1' };
+    await extension.refreshHtmlPanel(preview, panel);
+    const rendered = panel.messages[panel.messages.length - 1].rendered;
+    assert.deepStrictEqual([...rendered.matchAll(/id="(protection\w+-\d)"[^>]*checked=""/g)].map(m => m[1]), ['protectionA1-1', 'protectionB2-2'], 'and the render with the answer agrees');
+});
+
+test('a field whose name has no value is warned about, not left to fail silently', async () => {
+    const result = await engine.renderForTest('{% choice missingName %}A{% or %}B{% endchoice %}', {}, TEMPLATE);
+    assert.strictEqual(result.diagnostics.length, 1);
+    assert.match(result.diagnostics[0].message, /name comes from missingName, which has no value here/);
+    assert.strictEqual(result.diagnostics[0].line, 1);
+});
+
+// Duplicate names, for fields named by variables: the names are the values
+// the variables take as the template runs, so they're checked as they happen.
+const dupes = async (text, data = {}) => (await engine.renderForTest(text, data, TEMPLATE)).diagnostics
+    .filter(d => d.title === 'Duplicate field name')
+    .map(d => `${d.line}:${d.col} ${d.message}`);
+
+test('a variable-named field clashing with another field is a duplicate, and says where its name came from', async () => {
+    assert.deepStrictEqual(await dupes('{% assign n = "prot" %}{% choice n %}A{% or %}B{% endchoice %}\n{% editor "prot" %}{% endeditor %}'), [
+        '2:1 “prot” is used 2 times — every field needs its own name. It is first used on line 1. The name comes from n.'
+    ]);
+});
+
+test('a loop that gives every item’s field the same name is a duplicate, said to be one tag repeated', async () => {
+    assert.deepStrictEqual(await dupes('{% for p in ps %}{% optional "optionTBC" %}A{% endoptional %}{% endfor %}', { ps: [1, 2, 3] }), [
+        '1:18 “optionTBC” is used 3 times — every field needs its own name. The same tag gives it to a field each time it is repeated, as in a loop: name it per item, such as from the item’s id.'
+    ]);
+    assert.deepStrictEqual(await dupes('{% for p in ps %}{% assign n = "prot" %}{% choice n %}A{% or %}B{% endchoice %}{% endfor %}', { ps: [1, 2] }), [
+        '1:41 “prot” is used 2 times — every field needs its own name. The same tag, repeated as in a loop, named a field from n each time, and it was “prot” each time: make it different for each item.'
+    ]);
+});
+
+test('fields named per item are fine, unless two items give the same name', async () => {
+    const text = '{% for p in ps %}{% choice p.urn %}A{% or %}B{% endchoice %}{% endfor %}';
+    assert.deepStrictEqual(await dupes(text, { ps: [{ urn: 'a' }, { urn: 'b' }] }), []);
+    assert.deepStrictEqual(await dupes(text, { ps: [{ urn: 'a' }, { urn: 'a' }] }), [
+        '1:18 “a” is used 2 times — every field needs its own name. The same tag, repeated as in a loop, named a field from p.urn each time, and it was “a” each time: make it different for each item.'
+    ]);
+});
+
+test('the same name in branches that never both show is not a duplicate', async () => {
+    assert.deepStrictEqual(await dupes('{% if x %}{% optional "o" %}a{% endoptional %}{% else %}{% optional "o" %}b{% endoptional %}{% endif %}', { x: true }), []);
+});
