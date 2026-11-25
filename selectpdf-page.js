@@ -145,6 +145,49 @@ function pageGeometry(rawSettings) {
     };
 }
 
+// Reporter sets a template's page in the definition.json beside it, as a list
+// of { key, value } under "settings". Its select.* keys are the page (see
+// Reporter's "Getting started" docs on the Select PDF engine):
+//
+//   select.widthPoints, select.heightPoints        595 x 842 unless set
+//   select.header.enabled, .height, .displayOnFirstPage   off, 0, true
+//   select.footer.enabled, .height, .displayOnFirstPage   off, 0, true
+//
+// A template with a definition.json is converted with these, Reporter's
+// defaults filling in what it leaves out, whatever the workspace settings say;
+// so they are laid over them. A band that's enabled with no height takes no
+// room. What goes in the bands (.html, page numbers) and a contents page don't
+// change where pages end, and aren't read. Returns the settings and the
+// select.* keys that were set, or null for a file that isn't a definition.
+const DEFINITION_SETTINGS = ['pageSize', 'customPageSize', 'orientation', 'header', 'footer'];
+
+function definitionPageSettings(json) {
+    let definition = json;
+    if (typeof json === 'string') {
+        try { definition = JSON.parse(json); } catch (err) { return null; }
+    }
+    if (!definition || typeof definition !== 'object' || Array.isArray(definition)) return null;
+    const values = {};
+    for (const setting of Array.isArray(definition.settings) ? definition.settings : []) {
+        if (setting && typeof setting.key === 'string' && setting.key.startsWith('select.')) values[setting.key] = setting.value;
+    }
+    const given = key => values[key] !== undefined && values[key] !== null && values[key] !== '';
+    const num = (key, fallback) => (given(key) && Number.isFinite(Number(values[key])) ? Number(values[key]) : fallback);
+    const bool = (key, fallback) => (given(key) ? values[key] === true || String(values[key]).toLowerCase() === 'true' : fallback);
+    const band = name => (bool(`select.${name}.enabled`, false)
+        ? { display: true, height: num(`select.${name}.height`, 0), displayOnFirstPage: bool(`select.${name}.displayOnFirstPage`, true) }
+        : null);
+    return {
+        settings: {
+            customPageSize: { width: num('select.widthPoints', 595), height: num('select.heightPoints', 842) },
+            orientation: 'Portrait',
+            header: band('header'),
+            footer: band('footer')
+        },
+        keys: Object.keys(values)
+    };
+}
+
 // "A4 portrait · 1024px layout at 78% on the page": what the toolbar says the
 // pages are. The percentage is how much the layout is shrunk to fit between
 // the margins, not how large the view is drawn.
@@ -161,5 +204,7 @@ module.exports = {
     PT_TO_PX,
     normalizeSelectPdfSettings,
     pageGeometry,
-    describeGeometry
+    describeGeometry,
+    definitionPageSettings,
+    DEFINITION_SETTINGS
 };

@@ -879,7 +879,9 @@
     function showGeometry(config) {
         const node = document.getElementById('lp-selectpdf-geometry');
         if (!node || !config || !geometryApi()) return;
-        node.textContent = geometryApi().describeGeometry(config.geometry) + (trial ? ' \u00b7 trying, not saved' : '');
+        node.textContent = geometryApi().describeGeometry(config.geometry)
+            + (config.definition ? ' \u00b7 page from definition.json' : '')
+            + (trial ? ' \u00b7 trying, not saved' : '');
         node.classList.toggle('lp-trying', !!trial);
     }
 
@@ -907,6 +909,7 @@
         }).join('');
         panel.innerHTML = '<div class="lp-tune-head"><b>Page settings</b><button type="button" class="lp-tune-close" data-tune="close" title="Close" aria-label="Close">\u00d7</button></div>'
             + '<p class="lp-tune-hint">Change these until the pages match a PDF from production: where each line wraps and each page ends. They page this view only, until saved.</p>'
+            + '<p class="lp-tune-definition" id="lp-tune-definition" hidden></p>'
             + `<div class="lp-tune-grid">${rows}</div>`
             + '<div class="lp-tune-readout" id="lp-tune-readout"></div>'
             + '<div class="lp-tune-actions"><button type="button" data-tune="save">Save to workspace settings</button><button type="button" data-tune="revert">Revert</button></div>';
@@ -929,8 +932,31 @@
         }
         const custom = !!settings.customPageSize;
         const size = panel.querySelector('[data-tune-field="pageSize"]');
+        // A custom size is shown as itself, not as the named size it overrides.
+        let customOption = size.querySelector('option[data-custom]');
+        if (custom) {
+            if (!customOption) {
+                customOption = document.createElement('option');
+                customOption.setAttribute('data-custom', '');
+                customOption.value = '';
+                size.insertBefore(customOption, size.firstChild);
+            }
+            customOption.textContent = `${settings.customPageSize.width} \u00d7 ${settings.customPageSize.height}pt`;
+            size.value = '';
+        } else if (customOption) {
+            customOption.remove();
+        }
         size.disabled = custom;
-        size.title = custom ? 'reporterLiquidPreview.selectPdf.customPageSize is set, and wins over this' : '';
+        size.title = !custom ? ''
+            : config.definition ? 'The page size is the template\u2019s definition.json\u2019s (select.widthPoints \u00d7 select.heightPoints)'
+            : 'reporterLiquidPreview.selectPdf.customPageSize is set, and wins over this';
+        const note = document.getElementById('lp-tune-definition');
+        if (note) {
+            note.hidden = !config.definition;
+            note.textContent = config.definition
+                ? 'This template has a definition.json, which sets its page size, header and footer in Reporter (its select.* settings). Try them here, but change them there to keep them: Save leaves them out.'
+                : '';
+        }
         showReadout(config);
     }
 
@@ -939,12 +965,27 @@
         if (!node || !config) return;
         const g = config.geometry;
         const pt = value => Math.round(value * 0.75 * 10) / 10;
-        node.textContent = `The ${g.webPageWidth}px layout is shrunk to ${Math.round(g.scale * 1000) / 10}% to fit between the margins, `
-            + `so each page holds ${Math.round(g.layoutPageHeight)}px of it, in a content area of ${pt(g.content.width)} \u00d7 ${pt(g.content.height)}pt.`;
+        const off = [];
+        const m = g.margins;
+        if (m.top || m.right || m.bottom || m.left) off.push(`margins of ${pt(m.top)}, ${pt(m.right)}, ${pt(m.bottom)} and ${pt(m.left)}pt`);
+        if (g.header) off.push(`a ${pt(g.header.height)}pt header`);
+        if (g.footer) off.push(`a ${pt(g.footer.height)}pt footer`);
+        node.textContent = `The page is ${pt(g.page.width)} \u00d7 ${pt(g.page.height)}pt`
+            + (off.length ? `; less ${off.join(' and ')}, the content area is ${pt(g.content.width)} \u00d7 ${pt(g.content.height)}pt. ` : ', all of it content. ')
+            + `The ${g.webPageWidth}px layout is shrunk to ${Math.round(g.scale * 1000) / 10}% to fit its width, so each page holds ${Math.round(g.layoutPageHeight)}px of it.`;
         const save = tunePanel() && tunePanel().querySelector('[data-tune="save"]');
         const revert = tunePanel() && tunePanel().querySelector('[data-tune="revert"]');
-        if (save) save.disabled = !trial;
+        if (save) save.disabled = !savable(config);
         if (revert) revert.disabled = !trial;
+    }
+
+    // What Save would write: the values tried that aren't the definition's.
+    function savable(config) {
+        if (!trial) return null;
+        const own = config && config.definition ? config.definition.controls : [];
+        const out = {};
+        for (const name of Object.keys(trial)) if (!own.includes(name)) out[name] = trial[name];
+        return Object.keys(out).length ? out : null;
     }
 
     // A control was changed: try its value.
@@ -1001,9 +1042,10 @@
             fillTunePanel(config);
             showGeometry(config);
             schedule(0);
-        } else if (what === 'save' && trial) {
+        } else if (what === 'save') {
+            const settings = savable(readConfig());
             const api = root.__rlpVsCodeApi;
-            if (api) api.postMessage({ type: 'action', action: 'saveSelectPdfSettings', settings: trial });
+            if (api && settings) api.postMessage({ type: 'action', action: 'saveSelectPdfSettings', settings });
         }
     });
     document.addEventListener('input', event => {

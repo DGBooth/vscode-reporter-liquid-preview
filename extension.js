@@ -23,7 +23,7 @@ const PAGES_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview', 
 const PAGE_GEOMETRY_SCRIPT = '(function () { var module = { exports: {} };\n'
     + require('fs').readFileSync(path.join(__dirname, 'selectpdf-page.js'), 'utf8')
     + '\nwindow.__rlpPageGeometry = module.exports; })();\n';
-const { pageGeometry, describeGeometry } = require('./selectpdf-page');
+const { pageGeometry, describeGeometry, definitionPageSettings, DEFINITION_SETTINGS } = require('./selectpdf-page');
 const {
     liquidEngine,
     parseTagArgs,
@@ -244,6 +244,20 @@ function activate(context) {
         for (let id in htmlFullPreviews) refreshLinks(htmlFullPreviews[id]);
     };
     context.subscriptions.push(cssWatcher, cssWatcher.onDidChange(onCssChanged), cssWatcher.onDidCreate(onCssChanged), cssWatcher.onDidDelete(onCssChanged));
+
+    // A template's definition.json sets its page (see templateDefinition), so
+    // the HTML previews of the templates beside it are paged again when it's
+    // saved, added or removed.
+    const definitionWatcher = vscode.workspace.createFileSystemWatcher('**/definition.json');
+    const onDefinitionChanged = uri => {
+        const dir = uri && uri.fsPath && path.dirname(uri.fsPath);
+        if (!dir) return;
+        for (let id in htmlPreviews) {
+            const { preview, panel } = htmlPreviews[id];
+            if (preview.templateUri && path.dirname(preview.templateUri) === dir) queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
+        }
+    };
+    context.subscriptions.push(definitionWatcher, definitionWatcher.onDidChange(onDefinitionChanged), definitionWatcher.onDidCreate(onDefinitionChanged), definitionWatcher.onDidDelete(onDefinitionChanged));
 
     templateStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
     templateStatusBarItem.show();
@@ -515,7 +529,7 @@ async function openHtmlPreview(preview) {
             return queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
         },
         // Page settings tried in the PDF preview's panel, to keep.
-        saveSelectPdfSettings: message => saveSelectPdfSettings(message.settings)
+        saveSelectPdfSettings: message => saveSelectPdfSettings(message.settings, preview.templateUri)
     });
 
     await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
@@ -649,15 +663,19 @@ const TUNABLE_SELECT_PDF_SETTINGS = [
 // (.vscode/settings.json), so everyone working in it pages the same way; to
 // the user's own when no folder is open. Only the ones that differ are
 // written. Changing them pages every open preview again (see activate).
-async function saveSelectPdfSettings(values) {
+// A template with a definition.json takes its page size, header and footer from
+// it, so those aren't saved for it: saved, they'd do nothing for it.
+async function saveSelectPdfSettings(values, templateUri = null) {
     if (!values || typeof values !== 'object') return;
+    const fromDefinition = templateDefinition(templateUri) ? DEFINITION_SETTINGS : [];
+    const skipped = fromDefinition.filter(name => Object.prototype.hasOwnProperty.call(values, name));
     const config = vscode.workspace.getConfiguration('reporterLiquidPreview');
     const toWorkspace = (vscode.workspace.workspaceFolders || []).length > 0;
     const target = toWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
     const changed = [];
     try {
         for (const name of TUNABLE_SELECT_PDF_SETTINGS) {
-            if (!Object.prototype.hasOwnProperty.call(values, name)) continue;
+            if (!Object.prototype.hasOwnProperty.call(values, name) || fromDefinition.includes(name)) continue;
             const value = values[name];
             if (JSON.stringify(config.get('selectPdf.' + name)) === JSON.stringify(value)) continue;
             await config.update('selectPdf.' + name, value, target);
@@ -668,9 +686,12 @@ async function saveSelectPdfSettings(values) {
         return;
     }
     const where = toWorkspace ? 'the workspace settings (.vscode/settings.json)' : 'your user settings';
-    vscode.window.showInformationMessage(changed.length
+    const notSaved = skipped.length
+        ? ` The ${skipped.join(', ')} tried come from this template's definition.json, so weren't saved: change its select.* settings to keep them.`
+        : '';
+    vscode.window.showInformationMessage((changed.length
         ? `Saved ${pluralize(changed.length, 'page setting')} to ${where}: ${changed.map(name => 'selectPdf.' + name).join(', ')}.`
-        : 'The page settings were already saved.');
+        : skipped.length ? 'No page settings were saved.' : 'The page settings were already saved.') + notSaved);
 }
 
 function readSelectPdfSettings() {
@@ -693,9 +714,31 @@ function selectPdfConfig(templateUri, rendered, webview = null) {
     } catch (err) {
         css = '';
     }
-    const settings = readSelectPdfSettings();
-    // The settings go too, for the page settings panel to try others against.
-    return { geometry: pageGeometry(settings), settings, css, html: rendered || '' };
+    // A template's own definition.json sets its page in Reporter, over the
+    // workspace settings. The settings go too, for the page settings panel to
+    // try others against.
+    const definition = templateDefinition(templateUri);
+    const settings = Object.assign({}, readSelectPdfSettings(), definition ? definition.settings : {});
+    return {
+        geometry: pageGeometry(settings),
+        settings,
+        definition: definition ? { file: 'definition.json', controls: DEFINITION_SETTINGS } : null,
+        css,
+        html: rendered || ''
+    };
+}
+
+// The page a template's definition.json sets (see definitionPageSettings), or
+// null when it has none, or one that can't be read.
+function templateDefinition(templateUri) {
+    if (!templateUri) return null;
+    let text;
+    try {
+        text = require('fs').readFileSync(path.join(path.dirname(templateUri), 'definition.json'), 'utf8');
+    } catch (err) {
+        return null;
+    }
+    return definitionPageSettings(text);
 }
 
 // JSON that can sit inside a <script> element: no "</script>" can end it early.
@@ -721,7 +764,7 @@ function buildHtmlPreviewChrome(rendered, selectPdf = null, { answered = 0 } = {
         ? `<button type="button" class="lp-action lp-reset" data-lp-action="resetFields" title="Go back to the answers in the data file">Reset ${pluralize(answered, 'answer')}</button>`
         : '';
     const pages = selectPdf
-        ? `<span class="lp-pages-status"><span id="lp-selectpdf-geometry">${escapeHtml(describeGeometry(selectPdf.geometry))}</span> <span id="lp-selectpdf-pages"></span></span>`
+        ? `<span class="lp-pages-status"><span id="lp-selectpdf-geometry">${escapeHtml(describeGeometry(selectPdf.geometry) + (selectPdf.definition ? ' \u00b7 page from definition.json' : ''))}</span> <span id="lp-selectpdf-pages"></span></span>`
             + `<button type="button" class="lp-action lp-pages-tune" data-lp-local="tune-pages" title="Try other page settings here, to match a PDF from production, and save them when they do">Page settings&hellip;</button>`
             + `<script type="application/json" id="lp-selectpdf-config">${scriptSafeJson(selectPdf)}</script>`
         : '';
