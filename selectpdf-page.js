@@ -48,7 +48,9 @@ const DEFAULTS = {
     allowContentHeightResize: true,
     customCss: '',
     header: null,
-    footer: null
+    footer: null,
+    keepLinesTogether: true,
+    pageMarginSides: false
 };
 
 function number(value, fallback, min, max) {
@@ -93,7 +95,9 @@ function normalizeSelectPdfSettings(raw = {}) {
         allowContentHeightResize: raw.allowContentHeightResize !== false,
         customCss: typeof raw.customCss === 'string' ? raw.customCss : '',
         header: band(raw.header),
-        footer: band(raw.footer)
+        footer: band(raw.footer),
+        keepLinesTogether: raw.keepLinesTogether !== false,
+        pageMarginSides: raw.pageMarginSides === true
     };
 }
 
@@ -141,7 +145,13 @@ function pageGeometry(rawSettings) {
         cssMediaType: settings.cssMediaType,
         fitWideContent: settings.fitWideContent,
         allowContentHeightResize: settings.allowContentHeightResize,
-        customCss: settings.customCss
+        customCss: settings.customCss,
+        // How the engine pages, where Reporter's (selectwin8) differs from
+        // Chromium's (see the README): whether a break keeps the CSS's
+        // orphans and widows (2 lines each side unless set), and whether the
+        // CSS's @page left and right margins narrow the text column.
+        keepLinesTogether: settings.keepLinesTogether,
+        pageMarginSides: settings.pageMarginSides
     };
 }
 

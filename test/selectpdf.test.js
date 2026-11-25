@@ -564,3 +564,50 @@ test('a definition.json that can’t be read is said to be, not quietly passed o
         cleanup();
     }
 });
+
+// ---- how the engine pages ----
+// Reporter's engine (selectwin8) differs from Chromium in two ways a
+// production PDF shows: a break can leave one line alone at the top of a page,
+// and the CSS's @page left and right margins narrow the column (its top and
+// bottom margins don't move the text). Both are settings, off by default so
+// the view pages as Chromium does unless told otherwise. Their paging was
+// checked in Chromium; jsdom can't lay out.
+
+test('keeping lines together and @page side margins are settings, as Chromium pages by default', () => {
+    const g = pageGeometry({});
+    assert.strictEqual(g.keepLinesTogether, true);
+    assert.strictEqual(g.pageMarginSides, false);
+    const reporter = pageGeometry({ keepLinesTogether: false, pageMarginSides: true });
+    assert.strictEqual(reporter.keepLinesTogether, false);
+    assert.strictEqual(reporter.pageMarginSides, true);
+    assert.strictEqual(reporter.scale, g.scale, 'the side margins narrow the column, not the scale');
+    const offered = require('../package.json').contributes.configuration.properties;
+    assert.strictEqual(offered['reporterLiquidPreview.selectPdf.keepLinesTogether'].default, true);
+    assert.strictEqual(offered['reporterLiquidPreview.selectPdf.pageMarginSides'].default, false);
+});
+
+test('the settings reach the view, and the panel tries and saves them', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { keepLinesTogether: false });
+    assert.strictEqual(configIn(page).geometry.keepLinesTogether, false);
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="keepLinesTogether"]').checked, false);
+        assert.strictEqual(live.document.querySelector('[data-tune-field="pageMarginSides"]').checked, false);
+        live.set('pageMarginSides', true);
+        assert.match(live.label(), /trying, not saved/);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings').map(m => m.settings))), [{ pageMarginSides: true }]);
+    } finally {
+        live.dom.window.close();
+    }
+    await extension.saveSelectPdfSettings({ pageMarginSides: true, keepLinesTogether: false });
+    assert.deepStrictEqual(stub.settingUpdates.map(u => u.key), ['reporterLiquidPreview.selectPdf.pageMarginSides'], 'only what changed');
+});
+
+test('the paging script reads the @page side margins and keeps lines by the setting', () => {
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /keepLinesTogether \? parseInt\(style\.orphans, 10\) \|\| 2 : 1/, 'one line either side allowed when off');
+    assert.match(script, /function pageSideMargins\(doc\)/);
+    assert.match(script, /@page side margins/, 'and the status says it applied them');
+});

@@ -87,6 +87,11 @@ Set the page to match the code that converts your documents, using the `reporter
 
 **Save to workspace settings** writes the values that changed to `.vscode/settings.json`, so everyone working in the folder pages the same way (to your user settings if no folder is open). **Revert** goes back to the settings. Values tried and not saved last until the preview is closed. For a template with a `definition.json`, the page size, header and footer can be tried in the panel but aren't saved, since the definition decides them for that template: change its `select.*` settings to keep them. The panel says so.
 
+**Where Reporter's engine differs from Chromium.** A production PDF from Reporter (`"renderer": "selectwin8"`) shows two differences from Chromium, each a setting, and each in the panel to try and save:
+
+- **Keep 2 lines together at a break** (`reporterLiquidPreview.selectPdf.keepLinesTogether`, on by default as in Chromium). Chromium never leaves a single line of a paragraph alone at the top or foot of a page (CSS `orphans` and `widows`, 2 unless set); Reporter's engine does. Turn it off to break where production does.
+- **Use @page side margins** (`…pageMarginSides`, off by default). Chromium's preview ignores `@page`; Reporter's engine keeps the `@page` left and right margins clear on the paper, so the text is laid out in a narrower column at the same scale (its top and bottom margins don't move the text: the header and footer bands do that). The status says the margins it applied, for example `@page side margins 12 and 12mm`.
+
 The preview pages as SelectPdf's Chromium-based engine does. A definition's `renderer` (such as `selectwin8`) isn't read: if it names one of SelectPdf's older engines (its original engine is WebKit-based), text can measure slightly differently there, so a long paragraph can now and then wrap a word differently from the preview, even with the page set right.
 
 It's a close match, not an exact one. When it was built it was checked against Chromium's own print-to-PDF at the same scale. Page breaks matched word for word, except where a paragraph wrapped differently: Chromium measures text slightly differently when it prints, so a long paragraph can now and then wrap one word differently and move a break by a line. Some other things to know:

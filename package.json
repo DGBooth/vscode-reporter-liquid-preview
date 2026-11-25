@@ -276,6 +276,16 @@
                     "default": true,
                     "markdownDescription": "SelectPdf pages: `HtmlToPdfOptions.AllowContentHeightResize`: the last page is shortened to where the content ends."
                 },
+                "reporterLiquidPreview.selectPdf.keepLinesTogether": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "SelectPdf pages: a page break keeps at least two lines of a paragraph on each side (CSS `orphans` and `widows`), as Chromium does. Reporter's engine evidently doesn't, leaving one line alone at the top of a page: turn this off to page as it does."
+                },
+                "reporterLiquidPreview.selectPdf.pageMarginSides": {
+                    "type": "boolean",
+                    "default": false,
+                    "markdownDescription": "SelectPdf pages: the CSS's `@page` left and right margins narrow the text column, kept clear on the paper, at the same scale. Reporter's engine evidently applies them, but not the `@page` top and bottom margins."
+                },
                 "reporterLiquidPreview.selectPdf.customCss": {
                     "type": "string",
                     "default": "",

@@ -169,7 +169,7 @@
         return '';
     }
 
-    function makeMeasurer(doc) {
+    function makeMeasurer(doc, { keepLinesTogether = true } = {}) {
         const win = doc.defaultView;
         const styleOf = el => win.getComputedStyle(el);
         const scrollY = () => win.scrollY || 0;
@@ -367,8 +367,10 @@
                         }
                     } else if (item.top < pageBottom && item.bottom > pageBottom) {
                         const style = styleOf(el);
-                        const orphans = parseInt(style.orphans, 10) || 2;
-                        const widows = parseInt(style.widows, 10) || 2;
+                        // Without keeping lines together (the engine Reporter
+                        // uses doesn't), one line may be left either side.
+                        const orphans = keepLinesTogether ? parseInt(style.orphans, 10) || 2 : 1;
+                        const widows = keepLinesTogether ? parseInt(style.widows, 10) || 2 : 1;
                         const ls = lines(item.nodes);
                         for (let j = 1; j < ls.length; j++) {
                             const boundary = (ls[j - 1].bottom + ls[j].top) / 2;
@@ -651,9 +653,22 @@
             await settled(doc);
             if (!isCurrent()) return null;
 
+            // The CSS's @page left and right margins, kept clear on the
+            // paper: the text is laid out in the column between them, at the
+            // same scale.
+            const inset = g.pageMarginSides ? pageSideMargins(doc) : { left: 0, right: 0 };
+            let widened = false;
+            if (inset.left || inset.right) {
+                layoutWidth = Math.max(100, g.webPageWidth - (inset.left + inset.right) / scale);
+                frame.style.width = layoutWidth + 'px';
+                await settled(doc);
+                if (!isCurrent()) return null;
+            }
+
             if (g.fitWideContent) {
                 const wide = doc.documentElement.scrollWidth;
                 if (wide > layoutWidth + 1) {
+                    widened = true;
                     layoutWidth = Math.min(wide, 4 * g.webPageWidth);
                     scale = g.content.width / layoutWidth;
                     pageHeight = g.content.height / scale;
@@ -662,7 +677,7 @@
                 }
             }
 
-            const m = makeMeasurer(doc);
+            const m = makeMeasurer(doc, { keepLinesTogether: g.keepLinesTogether });
             let pageTop = 0;
             let pages = 1;
             for (let guard = 0; guard < 500; guard++) {
@@ -687,10 +702,46 @@
             // the pages are shown in mustn't run them again.
             doc.querySelectorAll('script').forEach(s => s.remove());
             const doctype = doc.doctype ? `<!DOCTYPE ${doc.doctype.name}${doc.doctype.publicId ? ` PUBLIC "${doc.doctype.publicId}"` : ''}${doc.doctype.systemId ? ` "${doc.doctype.systemId}"` : ''}>` : '';
-            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium };
+            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium, inset, widened };
         } finally {
             frame.remove();
         }
+    }
+
+    // The left and right margins of the document's @page rules (those for every
+    // page: no :first, :left or :right), in px on the paper (CSS px at 96dpi,
+    // as the sheets are drawn). A length is measured by the document itself, so
+    // mm, pt, in and px all come out right.
+    function pageSideMargins(doc) {
+        const out = { left: 0, right: 0 };
+        const measure = value => {
+            if (!value || value === 'auto') return 0;
+            const probe = doc.createElement('div');
+            probe.style.cssText = 'position:absolute;visibility:hidden;height:0;width:' + value;
+            (doc.body || doc.documentElement).appendChild(probe);
+            const width = probe.getBoundingClientRect().width;
+            probe.remove();
+            return Number.isFinite(width) ? width : 0;
+        };
+        const visit = rules => {
+            for (const rule of Array.from(rules || [])) {
+                try {
+                    const isPage = (root.CSSPageRule && rule instanceof doc.defaultView.CSSPageRule) || rule.type === 6;
+                    if (isPage && !String(rule.selectorText || '').trim()) {
+                        const left = rule.style.getPropertyValue('margin-left');
+                        const right = rule.style.getPropertyValue('margin-right');
+                        if (left) out.left = measure(left);
+                        if (right) out.right = measure(right);
+                    } else if (rule.cssRules) {
+                        visit(rule.cssRules);
+                    }
+                } catch (err) { /* a rule that can't be read; leave it */ }
+            }
+        };
+        for (const sheet of Array.from(doc.styleSheets)) {
+            try { visit(sheet.cssRules); } catch (err) { /* a sheet from elsewhere can't be read */ }
+        }
+        return out;
     }
 
     function el(tag, className, style) {
@@ -722,9 +773,10 @@
             const sheet = el('div', 'lp-sheet', { width: px(g.page.width), height: px(sheetHeight) });
             sheet.setAttribute('aria-label', `Page ${number} of ${result.pages}`);
 
+            const inset = result.inset || { left: 0, right: 0 };
             const win = el('div', 'lp-sheet-content', {
-                left: px(g.content.left), top: px(g.content.top),
-                width: px(g.content.width), height: px(windowHeight)
+                left: px(g.content.left + inset.left), top: px(g.content.top),
+                width: px(g.content.width - inset.left - inset.right), height: px(windowHeight)
             });
             const frame = el('iframe', null, {
                 width: px(result.layoutWidth), height: px(result.pageHeight),
@@ -872,7 +924,9 @@
         { name: 'footer', label: 'Footer height', unit: 'pt', kind: 'band', min: 0, step: 0.5 },
         { name: 'cssMediaType', label: 'CSS media', kind: 'select', options: () => ['Screen', 'Print'] },
         { name: 'fitWideContent', label: 'Fit wide content', kind: 'check' },
-        { name: 'allowContentHeightResize', label: 'Shorten the last page', kind: 'check' }
+        { name: 'allowContentHeightResize', label: 'Shorten the last page', kind: 'check' },
+        { name: 'keepLinesTogether', label: 'Keep 2 lines together at a break', kind: 'check' },
+        { name: 'pageMarginSides', label: 'Use @page side margins', kind: 'check' }
     ];
 
     // The toolbar's description of the page, for the values being tried.
@@ -1111,10 +1165,15 @@
         root.scrollTo(root.scrollX, y);
         lastCount = result.pages;
         // FitWideContent can change the scale from the one the toolbar gives.
-        const fitted = result.layoutWidth !== config.geometry.webPageWidth
+        const fitted = result.widened
             ? ` · wide content: laid out ${Math.round(result.layoutWidth)}px wide, at ${Math.round(result.scale * 100)}%`
             : '';
-        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${fitted}`);
+        // The @page side margins narrow the column, and say by how much.
+        const mm = value => Math.round(value * 25.4 / 96 * 10) / 10;
+        const sides = result.inset && (result.inset.left || result.inset.right)
+            ? ` · @page side margins ${mm(result.inset.left)} and ${mm(result.inset.right)}mm`
+            : '';
+        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${sides}${fitted}`);
     }
 
     // The view was turned off: stop any paging under way and let the pages go
