@@ -50,7 +50,8 @@ const DEFAULTS = {
     header: null,
     footer: null,
     keepLinesTogether: true,
-    pageMarginSides: false
+    pageMarginSides: false,
+    textSpacing: 0
 };
 
 function number(value, fallback, min, max) {
@@ -97,7 +98,8 @@ function normalizeSelectPdfSettings(raw = {}) {
         header: band(raw.header),
         footer: band(raw.footer),
         keepLinesTogether: raw.keepLinesTogether !== false,
-        pageMarginSides: raw.pageMarginSides === true
+        pageMarginSides: raw.pageMarginSides === true,
+        textSpacing: number(raw.textSpacing, DEFAULTS.textSpacing, -2, 2)
     };
 }
 
@@ -151,7 +153,12 @@ function pageGeometry(rawSettings) {
         // orphans and widows (2 lines each side unless set), and whether the
         // CSS's @page left and right margins narrow the text column.
         keepLinesTogether: settings.keepLinesTogether,
-        pageMarginSides: settings.pageMarginSides
+        pageMarginSides: settings.pageMarginSides,
+        // Extra space between letters, in layout px: a calibration for an
+        // engine that sets text a little wider than Chromium (one rounding
+        // each letter's width to a whole pixel, say), so lines wrap where its
+        // do. Not a SelectPdf option; 0 leaves the text as Chromium sets it.
+        textSpacing: settings.textSpacing
     };
 }
 

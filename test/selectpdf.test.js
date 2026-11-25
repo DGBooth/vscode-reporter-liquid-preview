@@ -632,3 +632,23 @@ test('with the @page side margins, what is wider than the column is fitted into 
     assert.match(script, /item\.element\.style\.setProperty\('max-width', '100%', 'important'\)/);
     assert.match(script, /fitted to the column: /);
 });
+
+test('text spacing is a calibration setting: letter-spacing on the body, 0 by default, in the panel', async () => {
+    assert.strictEqual(pageGeometry({}).textSpacing, 0);
+    assert.strictEqual(pageGeometry({ textSpacing: 0.35 }).textSpacing, 0.35);
+    assert.strictEqual(pageGeometry({ textSpacing: 9 }).textSpacing, 2, 'held to a sensible range');
+    assert.strictEqual(pageGeometry({ textSpacing: 0.35 }).scale, pageGeometry({}).scale, 'it changes no page measure');
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /body \{ letter-spacing: \$\{g\.textSpacing\}px; \}/);
+    const { page } = await htmlPreview('<p>hi</p>', { textSpacing: 0.3 });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="textSpacing"]').value, '0.3');
+        live.set('textSpacing', 0.4);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings').map(m => m.settings))), [{ textSpacing: 0.4 }]);
+    } finally {
+        live.dom.window.close();
+    }
+});

@@ -649,6 +649,9 @@
             addStyle(doc, config.css);
             addStyle(doc, g.customCss, true);
             addStyle(doc, PAGE_STYLES, true);
+            // The text spacing calibration: on the body, so an element that
+            // sets its own letter-spacing keeps it.
+            if (g.textSpacing) addStyle(doc, `body { letter-spacing: ${g.textSpacing}px; }`, true);
             applyMedia(doc, medium);
             await settled(doc);
             if (!isCurrent()) return null;
@@ -1010,7 +1013,8 @@
         { name: 'fitWideContent', label: 'Fit wide content', kind: 'check' },
         { name: 'allowContentHeightResize', label: 'Shorten the last page', kind: 'check' },
         { name: 'keepLinesTogether', label: 'Keep 2 lines together at a break', kind: 'check' },
-        { name: 'pageMarginSides', label: 'Use @page side margins', kind: 'check' }
+        { name: 'pageMarginSides', label: 'Use @page side margins', kind: 'check' },
+        { name: 'textSpacing', label: 'Text spacing', unit: 'px', kind: 'number', min: -2, step: 0.05 }
     ];
 
     // The toolbar's description of the page, for the values being tried.

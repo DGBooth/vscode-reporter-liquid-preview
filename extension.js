@@ -654,7 +654,7 @@ const SELECT_PDF_SETTINGS = [
     'pageSize', 'customPageSize', 'orientation',
     'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
     'webPageWidth', 'cssMediaType', 'fitWideContent', 'allowContentHeightResize',
-    'customCss', 'header', 'footer', 'keepLinesTogether', 'pageMarginSides'
+    'customCss', 'header', 'footer', 'keepLinesTogether', 'pageMarginSides', 'textSpacing'
 ];
 
 // The settings the PDF preview's page settings panel can try, and save.
@@ -662,7 +662,7 @@ const TUNABLE_SELECT_PDF_SETTINGS = [
     'pageSize', 'orientation', 'webPageWidth',
     'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
     'header', 'footer', 'cssMediaType', 'fitWideContent', 'allowContentHeightResize',
-    'keepLinesTogether', 'pageMarginSides'
+    'keepLinesTogether', 'pageMarginSides', 'textSpacing'
 ];
 
 // Save page settings tried in the PDF preview to the workspace's settings

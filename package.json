@@ -286,6 +286,13 @@
                     "default": false,
                     "markdownDescription": "SelectPdf pages: the CSS's `@page` left and right margins narrow the text column, kept clear on the paper, at the same scale. Reporter's engine evidently applies them, but not the `@page` top and bottom margins."
                 },
+                "reporterLiquidPreview.selectPdf.textSpacing": {
+                    "type": "number",
+                    "default": 0,
+                    "minimum": -2,
+                    "maximum": 2,
+                    "markdownDescription": "SelectPdf pages: extra space between letters, in px of the layout, so lines wrap where a production PDF's do. A calibration for an engine that sets text a little wider than Chromium; not a SelectPdf option. Leave it at 0 unless the line wraps are otherwise right and still differ."
+                },
                 "reporterLiquidPreview.selectPdf.customCss": {
                     "type": "string",
                     "default": "",
