@@ -169,7 +169,7 @@
         return '';
     }
 
-    function makeMeasurer(doc) {
+    function makeMeasurer(doc, { keepLinesTogether = true } = {}) {
         const win = doc.defaultView;
         const styleOf = el => win.getComputedStyle(el);
         const scrollY = () => win.scrollY || 0;
@@ -367,8 +367,10 @@
                         }
                     } else if (item.top < pageBottom && item.bottom > pageBottom) {
                         const style = styleOf(el);
-                        const orphans = parseInt(style.orphans, 10) || 2;
-                        const widows = parseInt(style.widows, 10) || 2;
+                        // Without keeping lines together (the engine Reporter
+                        // uses doesn't), one line may be left either side.
+                        const orphans = keepLinesTogether ? parseInt(style.orphans, 10) || 2 : 1;
+                        const widows = keepLinesTogether ? parseInt(style.widows, 10) || 2 : 1;
                         const ls = lines(item.nodes);
                         for (let j = 1; j < ls.length; j++) {
                             const boundary = (ls[j - 1].bottom + ls[j].top) / 2;
@@ -647,13 +649,52 @@
             addStyle(doc, config.css);
             addStyle(doc, g.customCss, true);
             addStyle(doc, PAGE_STYLES, true);
+            // The text spacing calibration: on the body, so an element that
+            // sets its own letter-spacing keeps it.
+            if (g.textSpacing) addStyle(doc, `body { letter-spacing: ${g.textSpacing}px; }`, true);
             applyMedia(doc, medium);
             await settled(doc);
             if (!isCurrent()) return null;
 
+            // The CSS's @page left and right margins, kept clear on the
+            // paper: the text is laid out in the column between them, at the
+            // same scale.
+            const inset = g.pageMarginSides ? pageSideMargins(doc) : { left: 0, right: 0 };
+            let widened = false;
+            if (inset.left || inset.right) {
+                layoutWidth = Math.max(100, g.webPageWidth - (inset.left + inset.right) / scale);
+                frame.style.width = layoutWidth + 'px';
+                await settled(doc);
+                if (!isCurrent()) return null;
+            }
+
+            // With the @page side margins, what's wider than the column is
+            // fitted into it, as production evidently does: a letter whose
+            // section is fixed at 1024px wraps there at the column between the
+            // margins, rather than being cut off at it. Each is held to the
+            // width it's in (max-width: 100%, its padding and border inside),
+            // in its own style, so the pages drawn from this copy match.
+            const fitted = [];
+            if (inset.left || inset.right) {
+                for (let round = 0; round < 5; round++) {
+                    const wide = widerThanLayout(doc, layoutWidth);
+                    if (!wide.length) break;
+                    for (const item of wide) {
+                        item.element.style.setProperty('max-width', '100%', 'important');
+                        item.element.style.setProperty('box-sizing', 'border-box', 'important');
+                        if (!fitted.some(f => f.element === item.element)) fitted.push(item);
+                    }
+                }
+            }
+
+            // What runs past the layout's right edge, before FitWideContent
+            // widens the layout to take it in.
+            const overflow = widerThanLayout(doc, layoutWidth);
+
             if (g.fitWideContent) {
                 const wide = doc.documentElement.scrollWidth;
                 if (wide > layoutWidth + 1) {
+                    widened = true;
                     layoutWidth = Math.min(wide, 4 * g.webPageWidth);
                     scale = g.content.width / layoutWidth;
                     pageHeight = g.content.height / scale;
@@ -662,7 +703,7 @@
                 }
             }
 
-            const m = makeMeasurer(doc);
+            const m = makeMeasurer(doc, { keepLinesTogether: g.keepLinesTogether });
             let pageTop = 0;
             let pages = 1;
             for (let guard = 0; guard < 500; guard++) {
@@ -687,10 +728,107 @@
             // the pages are shown in mustn't run them again.
             doc.querySelectorAll('script').forEach(s => s.remove());
             const doctype = doc.doctype ? `<!DOCTYPE ${doc.doctype.name}${doc.doctype.publicId ? ` PUBLIC "${doc.doctype.publicId}"` : ''}${doc.doctype.systemId ? ` "${doc.doctype.systemId}"` : ''}>` : '';
-            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium };
+            const describe = list => list.map(({ name, width, declared }) => ({ name, width, declared }));
+            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium, inset, widened, overflow: describe(overflow), fitted: describe(fitted) };
         } finally {
             frame.remove();
         }
+    }
+
+    // The outermost elements whose right edge runs past the layout width, as
+    // { name, width, right, declared }: the ones whose own box is too wide,
+    // not their children, which only follow them. A box set in a fixed width
+    // doesn't narrow with the layout, so its text doesn't re-wrap, and the
+    // part past the page's edge is cut off, in production as here. `declared`
+    // is the width its CSS gives it (width, min-width), when not auto.
+    function widerThanLayout(doc, layoutWidth) {
+        if (!doc.body) return [];
+        const win = doc.defaultView;
+        const found = [];
+        const visit = (el, parentWide) => {
+            for (const child of Array.from(el.children)) {
+                const rect = child.getBoundingClientRect();
+                const right = rect.right + win.scrollX;
+                const wide = rect.width > 0 && right > layoutWidth + 1;
+                if (wide && !parentWide && found.length < 3) {
+                    const style = win.getComputedStyle(child);
+                    const declared = ['width', 'min-width'].map(prop => {
+                        const inline = child.style && child.style.getPropertyValue(prop);
+                        return inline ? `${prop}: ${inline}` : '';
+                    }).filter(Boolean);
+                    if (!declared.length) declared.push(...cssWidths(doc, child));
+                    if (!declared.length && child.getAttribute('width')) declared.push(`width="${child.getAttribute('width')}"`);
+                    if (!declared.length && style.minWidth && style.minWidth !== '0px' && style.minWidth !== 'auto') declared.push(`min-width: ${style.minWidth}`);
+                    const id = child.id ? '#' + child.id : '';
+                    const classes = child.classList && child.classList.length ? '.' + Array.from(child.classList).slice(0, 2).join('.') : '';
+                    found.push({ element: child, name: child.tagName.toLowerCase() + id + classes, width: Math.round(rect.width), right: Math.round(right), declared: declared.join(', ') });
+                }
+                if (found.length < 3) visit(child, parentWide || wide);
+            }
+        };
+        visit(doc.body, false);
+        return found;
+    }
+
+    // The width and min-width the stylesheets give an element, last rule
+    // winning, as "selector { width: … }".
+    function cssWidths(doc, element) {
+        const hits = {};
+        const visit = rules => {
+            for (const rule of Array.from(rules || [])) {
+                try {
+                    if (rule.selectorText && rule.style) {
+                        if (!element.matches(rule.selectorText)) continue;
+                        for (const prop of ['width', 'min-width']) {
+                            const value = rule.style.getPropertyValue(prop);
+                            if (value && value !== 'auto') hits[prop] = `${rule.selectorText} { ${prop}: ${value} }`;
+                        }
+                    } else if (rule.cssRules) {
+                        visit(rule.cssRules);
+                    }
+                } catch (err) { /* a selector or rule this engine can't read */ }
+            }
+        };
+        for (const sheet of Array.from(doc.styleSheets)) {
+            try { visit(sheet.cssRules); } catch (err) { /* a sheet from elsewhere can't be read */ }
+        }
+        return Object.values(hits);
+    }
+
+    // The left and right margins of the document's @page rules (those for every
+    // page: no :first, :left or :right), in px on the paper (CSS px at 96dpi,
+    // as the sheets are drawn). A length is measured by the document itself, so
+    // mm, pt, in and px all come out right.
+    function pageSideMargins(doc) {
+        const out = { left: 0, right: 0 };
+        const measure = value => {
+            if (!value || value === 'auto') return 0;
+            const probe = doc.createElement('div');
+            probe.style.cssText = 'position:absolute;visibility:hidden;height:0;width:' + value;
+            (doc.body || doc.documentElement).appendChild(probe);
+            const width = probe.getBoundingClientRect().width;
+            probe.remove();
+            return Number.isFinite(width) ? width : 0;
+        };
+        const visit = rules => {
+            for (const rule of Array.from(rules || [])) {
+                try {
+                    const isPage = (root.CSSPageRule && rule instanceof doc.defaultView.CSSPageRule) || rule.type === 6;
+                    if (isPage && !String(rule.selectorText || '').trim()) {
+                        const left = rule.style.getPropertyValue('margin-left');
+                        const right = rule.style.getPropertyValue('margin-right');
+                        if (left) out.left = measure(left);
+                        if (right) out.right = measure(right);
+                    } else if (rule.cssRules) {
+                        visit(rule.cssRules);
+                    }
+                } catch (err) { /* a rule that can't be read; leave it */ }
+            }
+        };
+        for (const sheet of Array.from(doc.styleSheets)) {
+            try { visit(sheet.cssRules); } catch (err) { /* a sheet from elsewhere can't be read */ }
+        }
+        return out;
     }
 
     function el(tag, className, style) {
@@ -722,9 +860,10 @@
             const sheet = el('div', 'lp-sheet', { width: px(g.page.width), height: px(sheetHeight) });
             sheet.setAttribute('aria-label', `Page ${number} of ${result.pages}`);
 
+            const inset = result.inset || { left: 0, right: 0 };
             const win = el('div', 'lp-sheet-content', {
-                left: px(g.content.left), top: px(g.content.top),
-                width: px(g.content.width), height: px(windowHeight)
+                left: px(g.content.left + inset.left), top: px(g.content.top),
+                width: px(g.content.width - inset.left - inset.right), height: px(windowHeight)
             });
             const frame = el('iframe', null, {
                 width: px(result.layoutWidth), height: px(result.pageHeight),
@@ -829,11 +968,243 @@
     let timer = null;
     let lastCount = null;
 
+    // What to page, as the extension sent it, with the page worked out again
+    // from any settings being tried in the page settings panel.
     function readConfig() {
         const node = document.getElementById('lp-selectpdf-config');
         if (!node) return null;
-        try { return JSON.parse(node.textContent); } catch (err) { return null; }
+        let config;
+        try { config = JSON.parse(node.textContent); } catch (err) { return null; }
+        if (trial && config.settings && geometryApi()) {
+            // A value tried and since saved is the setting now, not a trial.
+            for (const name of Object.keys(trial)) {
+                if (JSON.stringify(trial[name]) === JSON.stringify(config.settings[name])) delete trial[name];
+            }
+            if (!Object.keys(trial).length) trial = null;
+            else config.geometry = geometryApi().pageGeometry(Object.assign({}, config.settings, trial));
+        }
+        return config;
     }
+
+    // ---- trying page settings ----
+    // The page settings panel: values tried there page this view as if they
+    // were the reporterLiquidPreview.selectPdf settings, so they can be dialled
+    // in beside a PDF from production, until they're saved (the extension
+    // writes them to the workspace settings) or reverted. They last as long as
+    // the panel does. The page is worked out by the same code the extension
+    // uses (selectpdf-page.js, inlined before this script).
+
+    let trial = null;
+    // The width the docked panel takes, its margin included (see the CSS).
+    const TUNE_PANEL_ROOM = 304;
+    const geometryApi = () => root.__rlpPageGeometry || null;
+
+    const TUNE_FIELDS = [
+        { name: 'pageSize', label: 'Page size', kind: 'select', options: () => Object.keys(geometryApi().PAGE_SIZES) },
+        { name: 'orientation', label: 'Orientation', kind: 'select', options: () => ['Portrait', 'Landscape'] },
+        { name: 'webPageWidth', label: 'Layout width', unit: 'px', kind: 'number', min: 100, step: 1 },
+        { name: 'marginTop', label: 'Margin top', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'marginRight', label: 'Margin right', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'marginBottom', label: 'Margin bottom', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'marginLeft', label: 'Margin left', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'header', label: 'Header height', unit: 'pt', kind: 'band', min: 0, step: 0.5 },
+        { name: 'footer', label: 'Footer height', unit: 'pt', kind: 'band', min: 0, step: 0.5 },
+        { name: 'cssMediaType', label: 'CSS media', kind: 'select', options: () => ['Screen', 'Print'] },
+        { name: 'fitWideContent', label: 'Fit wide content', kind: 'check' },
+        { name: 'allowContentHeightResize', label: 'Shorten the last page', kind: 'check' },
+        { name: 'keepLinesTogether', label: 'Keep 2 lines together at a break', kind: 'check' },
+        { name: 'pageMarginSides', label: 'Use @page side margins', kind: 'check' },
+        { name: 'textSpacing', label: 'Text spacing', unit: 'px', kind: 'number', min: -2, step: 0.05 }
+    ];
+
+    // The toolbar's description of the page, for the values being tried.
+    function showGeometry(config) {
+        const node = document.getElementById('lp-selectpdf-geometry');
+        if (!node || !config || !geometryApi()) return;
+        node.textContent = geometryApi().describeGeometry(config.geometry)
+            + (config.definition ? ' \u00b7 page from definition.json' : config.definitionError ? ' \u00b7 definition.json can\u2019t be read' : '')
+            + (trial ? ' \u00b7 trying, not saved' : '');
+        node.classList.toggle('lp-trying', !!trial);
+    }
+
+    const tunePanel = () => document.getElementById('lp-tune');
+
+    function buildTunePanel() {
+        const panel = document.createElement('div');
+        panel.id = 'lp-tune';
+        panel.className = 'lp-tune';
+        panel.hidden = true;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-label', 'Page settings');
+        const rows = TUNE_FIELDS.map(field => {
+            const id = 'lp-tune-' + field.name;
+            let control;
+            if (field.kind === 'select') {
+                control = `<select id="${id}" data-tune-field="${field.name}">`
+                    + field.options().map(option => `<option value="${option}">${option}</option>`).join('') + '</select>';
+            } else if (field.kind === 'check') {
+                control = `<input type="checkbox" id="${id}" data-tune-field="${field.name}">`;
+            } else {
+                control = `<span class="lp-tune-number"><input type="number" id="${id}" data-tune-field="${field.name}" min="${field.min}" step="${field.step}"><span>${field.unit}</span></span>`;
+            }
+            return `<label for="${id}">${field.label}</label>${control}`;
+        }).join('');
+        panel.innerHTML = '<div class="lp-tune-head"><b>Page settings</b><button type="button" class="lp-tune-close" data-tune="close" title="Close" aria-label="Close">\u00d7</button></div>'
+            + '<p class="lp-tune-hint">Change these until the pages match a PDF from production: where each line wraps and each page ends. They page this view only, until saved.</p>'
+            + '<p class="lp-tune-definition" id="lp-tune-definition" hidden></p>'
+            + `<div class="lp-tune-grid">${rows}</div>`
+            + '<div class="lp-tune-readout" id="lp-tune-readout"></div>'
+            + '<div class="lp-tune-actions"><button type="button" data-tune="save">Save to workspace settings</button><button type="button" data-tune="revert">Revert</button></div>';
+        document.body.appendChild(panel);
+        return panel;
+    }
+
+    // Put the values in effect (the settings, and any being tried) into the
+    // panel's controls.
+    function fillTunePanel(config) {
+        const panel = tunePanel();
+        if (!panel || !config || !geometryApi()) return;
+        const settings = geometryApi().normalizeSelectPdfSettings(Object.assign({}, config.settings || {}, trial || {}));
+        for (const field of TUNE_FIELDS) {
+            const input = panel.querySelector(`[data-tune-field="${field.name}"]`);
+            if (!input) continue;
+            if (field.kind === 'check') input.checked = !!settings[field.name];
+            else if (field.kind === 'band') input.value = settings[field.name] ? settings[field.name].height : 0;
+            else input.value = settings[field.name];
+        }
+        const custom = !!settings.customPageSize;
+        const size = panel.querySelector('[data-tune-field="pageSize"]');
+        // A custom size is shown as itself, not as the named size it overrides.
+        let customOption = size.querySelector('option[data-custom]');
+        if (custom) {
+            if (!customOption) {
+                customOption = document.createElement('option');
+                customOption.setAttribute('data-custom', '');
+                customOption.value = '';
+                size.insertBefore(customOption, size.firstChild);
+            }
+            customOption.textContent = `${settings.customPageSize.width} \u00d7 ${settings.customPageSize.height}pt`;
+            size.value = '';
+        } else if (customOption) {
+            customOption.remove();
+        }
+        size.disabled = custom;
+        size.title = !custom ? ''
+            : config.definition ? 'The page size is the template\u2019s definition.json\u2019s (select.widthPoints \u00d7 select.heightPoints)'
+            : 'reporterLiquidPreview.selectPdf.customPageSize is set, and wins over this';
+        const note = document.getElementById('lp-tune-definition');
+        if (note && !config.definition) {
+            note.hidden = !config.definitionPath;
+            note.textContent = config.definitionError
+                ? `${config.definitionError}. Fix it and save, and the preview pages again.`
+                : `No definition.json was found beside this template (looked for ${config.definitionPath}), so the whole page comes from the workspace settings.`;
+        } else if (note) {
+            note.hidden = !config.definition;
+            const defaulted = config.definition && config.definition.defaulted && config.definition.defaulted.length
+                ? ' ' + config.definition.defaulted.map(d => `Its ${d.band} is enabled with no height, so it is SelectPdf\u2019s default of ${d.height}pt.`).join(' ')
+                : '';
+            note.textContent = config.definition
+                ? 'This template has a definition.json, which sets its page size, header and footer in Reporter (its select.* settings). Try them here, but change them there to keep them: Save leaves them out.' + defaulted
+                : '';
+        }
+        showReadout(config);
+    }
+
+    function showReadout(config) {
+        const node = document.getElementById('lp-tune-readout');
+        if (!node || !config) return;
+        const g = config.geometry;
+        const pt = value => Math.round(value * 0.75 * 10) / 10;
+        const off = [];
+        const m = g.margins;
+        if (m.top || m.right || m.bottom || m.left) off.push(`margins of ${pt(m.top)}, ${pt(m.right)}, ${pt(m.bottom)} and ${pt(m.left)}pt`);
+        if (g.header) off.push(`a ${pt(g.header.height)}pt header`);
+        if (g.footer) off.push(`a ${pt(g.footer.height)}pt footer`);
+        node.textContent = `The page is ${pt(g.page.width)} \u00d7 ${pt(g.page.height)}pt`
+            + (off.length ? `; less ${off.join(' and ')}, the content area is ${pt(g.content.width)} \u00d7 ${pt(g.content.height)}pt. ` : ', all of it content. ')
+            + `The ${g.webPageWidth}px layout is shrunk to ${Math.round(g.scale * 1000) / 10}% to fit its width, so each page holds ${Math.round(g.layoutPageHeight)}px of it.`;
+        const save = tunePanel() && tunePanel().querySelector('[data-tune="save"]');
+        const revert = tunePanel() && tunePanel().querySelector('[data-tune="revert"]');
+        if (save) save.disabled = !savable(config);
+        if (revert) revert.disabled = !trial;
+    }
+
+    // What Save would write: the values tried that aren't the definition's.
+    function savable(config) {
+        if (!trial) return null;
+        const own = config && config.definition ? config.definition.controls : [];
+        const out = {};
+        for (const name of Object.keys(trial)) if (!own.includes(name)) out[name] = trial[name];
+        return Object.keys(out).length ? out : null;
+    }
+
+    // A control was changed: try its value.
+    function tryValue(input) {
+        const config = readConfig();
+        const field = TUNE_FIELDS.find(f => f.name === input.getAttribute('data-tune-field'));
+        if (!config || !field) return;
+        let value;
+        if (field.kind === 'check') value = input.checked;
+        else if (field.kind === 'select') value = input.value;
+        else {
+            value = Number(input.value);
+            if (input.value === '' || !Number.isFinite(value) || value < field.min) return;
+            if (field.kind === 'band') {
+                const saved = config.settings && config.settings[field.name] && typeof config.settings[field.name] === 'object' ? config.settings[field.name] : null;
+                value = value > 0
+                    ? Object.assign({}, saved || {}, { display: true, height: value })
+                    : (saved ? Object.assign({}, saved, { display: false }) : null);
+            }
+        }
+        trial = Object.assign({}, trial || {}, { [field.name]: value });
+        const now = readConfig();
+        showGeometry(now);
+        showReadout(now);
+        schedule(300);
+    }
+
+    // The panel is docked at the side: while it's open the pages make room
+    // for it, so none of a page is hidden behind it while it's compared.
+    function setTunePanelOpen(open) {
+        const panel = tunePanel() || buildTunePanel();
+        panel.hidden = !open;
+        document.body.classList.toggle('lp-tuning', open);
+        if (open) fillTunePanel(readConfig());
+        refit();
+    }
+
+    function openTunePanel() {
+        const panel = tunePanel();
+        setTunePanelOpen(!panel || panel.hidden);
+    }
+
+    document.addEventListener('click', event => {
+        const target = event.target && event.target.closest ? event.target : null;
+        if (!target) return;
+        if (target.closest('[data-lp-local="tune-pages"]')) { openTunePanel(); return; }
+        const action = target.closest('[data-tune]');
+        if (!action || !tunePanel() || !tunePanel().contains(action)) return;
+        const what = action.getAttribute('data-tune');
+        if (what === 'close') setTunePanelOpen(false);
+        else if (what === 'revert') {
+            trial = null;
+            const config = readConfig();
+            fillTunePanel(config);
+            showGeometry(config);
+            schedule(0);
+        } else if (what === 'save') {
+            const settings = savable(readConfig());
+            const api = root.__rlpVsCodeApi;
+            if (api && settings) api.postMessage({ type: 'action', action: 'saveSelectPdfSettings', settings });
+        }
+    });
+    document.addEventListener('input', event => {
+        const input = event.target;
+        if (input && input.getAttribute && input.getAttribute('data-tune-field') && tunePanel() && tunePanel().contains(input)) tryValue(input);
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && tunePanel() && !tunePanel().hidden) setTunePanelOpen(false);
+    });
 
     function setStatus(text) {
         const node = document.getElementById('lp-selectpdf-pages');
@@ -844,7 +1215,8 @@
     // transform, not CSS zoom: zoom carries into the iframes and changes the
     // width the document is laid out at, which would move every line break.
     function fitZoom(sheets, config) {
-        const room = Math.max(100, document.documentElement.clientWidth - 40);
+        const docked = document.body.classList.contains('lp-tuning') ? TUNE_PANEL_ROOM : 0;
+        const room = Math.max(100, document.documentElement.clientWidth - 40 - docked);
         const z = Math.min(1, room / config.geometry.page.width);
         sheets.style.transform = z < 1 ? `scale(${z})` : '';
         // A transform leaves the layout box full size; take back the height.
@@ -857,6 +1229,7 @@
         const config = readConfig();
         const target = host();
         if (!config || !target) return;
+        showGeometry(config);
         setStatus(lastCount == null ? '· paging…' : `· ${lastCount} page${lastCount === 1 ? '' : 's'}…`);
         let result;
         try {
@@ -880,10 +1253,24 @@
         root.scrollTo(root.scrollX, y);
         lastCount = result.pages;
         // FitWideContent can change the scale from the one the toolbar gives.
-        const fitted = result.layoutWidth !== config.geometry.webPageWidth
+        const fitted = result.widened
             ? ` · wide content: laid out ${Math.round(result.layoutWidth)}px wide, at ${Math.round(result.scale * 100)}%`
             : '';
-        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${fitted}`);
+        // The @page side margins narrow the column, and say by how much.
+        const mm = value => Math.round(value * 25.4 / 96 * 10) / 10;
+        const sides = result.inset && (result.inset.left || result.inset.right)
+            ? ` · @page side margins ${mm(result.inset.left)} and ${mm(result.inset.right)}mm`
+            : '';
+        // Content wider than the layout is cut off at the page's edge, and
+        // doesn't re-wrap to a narrower column: say what it is.
+        const wide = result.overflow && result.overflow.length && !result.widened
+            ? ` · wider than the ${Math.round(result.layoutWidth)}px layout, so cut off: `
+                + result.overflow.map(o => `${o.name} ${o.width}px${o.declared ? ` (${o.declared})` : ''}`).join(', ')
+            : '';
+        const narrowed = result.fitted && result.fitted.length
+            ? ` · fitted to the column: ${result.fitted.map(o => `${o.name} ${o.width}px${o.declared ? ` (${o.declared})` : ''}`).join(', ')}`
+            : '';
+        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${sides}${narrowed}${fitted}${wide}`);
     }
 
     // The view was turned off: stop any paging under way and let the pages go
@@ -914,14 +1301,69 @@
     // state is restored by the update handler, which runs before this one.
     root.addEventListener('message', event => {
         const msg = event.data;
-        if (!msg || msg.type !== 'update' || !active()) return;
+        if (!msg || msg.type !== 'update') return;
+        // The toolbar was replaced: describe the page being tried again, and
+        // show the settings as they now are in a panel not being typed in.
+        const config = readConfig();
+        showGeometry(config);
+        const panel = tunePanel();
+        if (panel && !panel.hidden && !panel.contains(document.activeElement)) fillTunePanel(config);
+        else if (panel) showReadout(config);
+        if (!active()) return;
         setStatus(lastCount == null ? '' : `· ${lastCount} page${lastCount === 1 ? '' : 's'}…`);
         schedule(250);
     });
 
-    root.addEventListener('resize', () => {
+    function refit() {
         const config = readConfig();
         if (config && host()) host().querySelectorAll('.lp-sheets').forEach(sheets => fitZoom(sheets, config));
+    }
+
+    root.addEventListener('resize', refit);
+
+    // ---- the ruler ----
+    // Over a page, where the pointer is from the page's top and left edges, in
+    // inches and points, as a PDF viewer's measuring tool gives them, with a
+    // guide across the page: to measure the preview as a production PDF is
+    // measured. The sheets may be drawn smaller to fit the panel, so the
+    // distance is taken from the page's size, not the screen's.
+    const PX_PER_PT = 96 / 72;
+    function ruler() {
+        let tip = document.getElementById('lp-ruler');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'lp-ruler';
+            tip.className = 'lp-ruler';
+            tip.hidden = true;
+            const guide = document.createElement('div');
+            guide.id = 'lp-ruler-guide';
+            guide.className = 'lp-ruler-guide';
+            guide.hidden = true;
+            document.body.appendChild(guide);
+            document.body.appendChild(tip);
+        }
+        return { tip, guide: document.getElementById('lp-ruler-guide') };
+    }
+    document.addEventListener('mousemove', event => {
+        const sheet = event.target && event.target.closest ? event.target.closest('.lp-sheet') : null;
+        const { tip, guide } = ruler();
+        const config = sheet && active() ? readConfig() : null;
+        if (!sheet || !config) { tip.hidden = true; guide.hidden = true; return; }
+        const rect = sheet.getBoundingClientRect();
+        const perPx = config.geometry.page.width / rect.width;
+        const pt = value => value * perPx / PX_PER_PT;
+        const top = pt(event.clientY - rect.top);
+        const left = pt(event.clientX - rect.left);
+        const at = value => `${(value / 72).toFixed(2)}in (${value.toFixed(1)}pt)`;
+        const number = sheet.getAttribute('aria-label') || '';
+        tip.textContent = `${at(top)} from the top · ${at(left)} from the left${number ? ' · ' + number.toLowerCase() : ''}`;
+        tip.style.left = Math.min(event.clientX + 14, root.innerWidth - 330) + 'px';
+        tip.style.top = (event.clientY + 16) + 'px';
+        guide.style.left = rect.left + 'px';
+        guide.style.width = rect.width + 'px';
+        guide.style.top = event.clientY + 'px';
+        tip.hidden = false;
+        guide.hidden = false;
     });
 
     if (active()) schedule(0);

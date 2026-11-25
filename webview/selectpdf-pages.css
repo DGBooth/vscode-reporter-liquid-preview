@@ -3,6 +3,28 @@
    "Show HTML source" toggle does. */
 .lp-pages-status { display: none; font: 12px sans-serif; color: #666; align-self: center; }
 body:has(#lp-selectpdf:checked) .lp-pages-status { display: inline; }
+#lp-selectpdf-geometry.lp-trying { color: #a35200; font-weight: bold; }
+
+/* The page settings panel (see "trying page settings" in selectpdf-pages.js),
+   shown with the PDF preview tab. */
+.lp-pages-tune { display: none; }
+body:has(#lp-selectpdf:checked) .lp-pages-tune { display: inline-block; }
+.lp-tune { display: none; position: fixed; top: 44px; right: 12px; z-index: 9500; width: 280px; max-height: calc(100vh - 60px); overflow: auto; box-sizing: border-box; padding: 10px 12px; background: white; color: #222; border: 1px solid #c8c8c8; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); font: 12px sans-serif; }
+body:has(#lp-selectpdf:checked) .lp-tune:not([hidden]) { display: block; }
+/* Docked: the pages keep clear of it (TUNE_PANEL_ROOM in the script). */
+body.lp-tuning #lp-pages { margin-right: 296px; }
+.lp-tune-head { display: flex; align-items: center; justify-content: space-between; }
+.lp-tune-close { border: 0; background: none; font-size: 16px; line-height: 1; cursor: pointer; color: #555; }
+.lp-tune-hint { margin: 6px 0; color: #555; line-height: 1.4; }
+.lp-tune-definition { margin: 6px 0; padding: 5px 7px; background: #fff7e6; border-left: 3px solid #d18616; color: #5a3d00; line-height: 1.4; }
+.lp-tune-grid { display: grid; grid-template-columns: 1fr 120px; gap: 5px 8px; align-items: center; margin: 8px 0; }
+.lp-tune-grid select, .lp-tune-number input { width: 100%; box-sizing: border-box; font: 12px sans-serif; }
+.lp-tune-number { display: flex; align-items: center; gap: 4px; }
+.lp-tune-number span { color: #777; width: 16px; }
+.lp-tune-readout { margin: 8px 0; color: #444; line-height: 1.4; }
+.lp-tune-actions { display: flex; gap: 8px; }
+.lp-tune-actions button { font: 12px sans-serif; padding: 3px 10px; cursor: pointer; }
+.lp-tune-actions button[disabled] { opacity: 0.5; cursor: default; }
 #lp-pages { display: none; }
 body:has(#lp-selectpdf:checked) #lp-rendered-root { display: none; }
 body:has(#lp-selectpdf:checked) #lp-pages { display: block; }
@@ -17,4 +39,7 @@ body:has(#lp-selectpdf:checked) { background-color: #e4e4e4; }
 .lp-sheet-content iframe { position: absolute; left: 0; top: 0; border: 0; transform-origin: 0 0; background: transparent; pointer-events: none; }
 .lp-band { position: absolute; box-sizing: border-box; display: flex; align-items: center; justify-content: center; overflow: hidden; font: 10px sans-serif; color: #777; background: repeating-linear-gradient(45deg, #f5f5f5 0 6px, #ececec 6px 12px); }
 .lp-band-hidden { background: none; outline: 1px dashed #ddd; color: #bbb; }
+.lp-ruler { position: fixed; z-index: 9600; pointer-events: none; font: 11px sans-serif; color: #fff; background: rgba(30, 30, 30, 0.85); padding: 2px 6px; border-radius: 3px; white-space: nowrap; }
+.lp-ruler-guide { position: fixed; z-index: 9550; pointer-events: none; height: 0; border-top: 1px solid rgba(209, 52, 56, 0.8); }
+body:not(:has(#lp-selectpdf:checked)) .lp-ruler, body:not(:has(#lp-selectpdf:checked)) .lp-ruler-guide { display: none; }
 .lp-sheet-number { position: absolute; right: 0; bottom: -18px; font: 11px sans-serif; color: #666; }

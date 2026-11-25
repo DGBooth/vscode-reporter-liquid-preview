@@ -92,7 +92,7 @@ test('every page size the settings offer is known', () => {
 });
 
 test('the toolbar says what page it is drawing', () => {
-    assert.strictEqual(describeGeometry(pageGeometry({})), 'A4 portrait · 1024px at 78%');
+    assert.strictEqual(describeGeometry(pageGeometry({})), 'A4 portrait · 1024px layout at 78% on the page', 'the shrink onto the page, not a zoom');
     assert.match(describeGeometry(pageGeometry({ cssMediaType: 'Print', customPageSize: { width: 300, height: 400 } })), /^300×400pt portrait .* print media$/);
 });
 
@@ -273,4 +273,391 @@ test('the PDF preview tab stays chosen across a live edit, and choosing it leave
     } finally {
         dom.window.close();
     }
+});
+
+// ---- trying page settings ----
+
+// The preview's page, live: its scripts run, as in the webview, with what it
+// posts to the extension collected. jsdom can't lay out, so the PDF preview
+// tab is left unchosen and nothing is paged; the panel and the page it works
+// out are what's tested.
+function livePage(page) {
+    const posted = [];
+    const dom = new JSDOM(page, {
+        runScripts: 'dangerously',
+        virtualConsole: new VirtualConsole(),
+        beforeParse(window) { window.acquireVsCodeApi = () => ({ postMessage: message => posted.push(message) }); }
+    });
+    const { document, Event } = dom.window;
+    const set = (name, value) => {
+        const input = document.querySelector(`[data-tune-field="${name}"]`);
+        if (input.type === 'checkbox') input.checked = value; else input.value = String(value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const click = selector => document.querySelector(selector).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const label = () => document.getElementById('lp-selectpdf-geometry').textContent;
+    return { dom, document, posted, set, click, label };
+}
+
+test('the preview carries the settings, a description of the page it can change, and the panel\u2019s button', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { marginLeft: 29, marginRight: 29 });
+    const config = configIn(page);
+    assert.strictEqual(config.settings.marginLeft, 29, 'the settings, to try others against');
+    assert.ok(chromeOf(page).includes('<span id="lp-selectpdf-geometry">A4 portrait · 1024px layout at 70% on the page</span>'));
+    assert.ok(chromeOf(page).includes('data-lp-local="tune-pages"'));
+    assert.ok(page.includes('window.__rlpPageGeometry = module.exports'), 'the page geometry goes with the paging script');
+});
+
+test('values tried in the panel page the view as if they were the settings, until reverted', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { marginLeft: 29, marginRight: 29, webPageWidth: 1024 });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        const panel = live.document.getElementById('lp-tune');
+        assert.ok(panel && !panel.hidden, 'the panel opens');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="marginLeft"]').value, '29', 'with the settings in it');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="pageSize"]').value, 'A4');
+        assert.ok(live.document.querySelector('[data-tune="save"]').disabled, 'nothing to save yet');
+
+        live.set('marginLeft', 0);
+        live.set('marginRight', 0);
+        assert.strictEqual(live.label(), 'A4 portrait · 1024px layout at 78% on the page · trying, not saved');
+        assert.match(live.document.getElementById('lp-tune-readout').textContent, /shrunk to 77\.5% .* each page holds 1448px of it/);
+        live.set('webPageWidth', 1000);
+        assert.match(live.label(), /1000px layout at 79% on the page · trying/);
+        assert.ok(!live.document.querySelector('[data-tune="save"]').disabled);
+
+        live.click('[data-tune="revert"]');
+        assert.strictEqual(live.label(), 'A4 portrait · 1024px layout at 70% on the page', 'back to the settings');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="marginLeft"]').value, '29');
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('a header or footer height is tried as its band, and 0 turns it off', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { header: { display: true, height: 50, displayOnFirstPage: false } });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="header"]').value, '50');
+        live.set('header', 30);
+        live.set('footer', 20);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings'))), [{
+            type: 'action', action: 'saveSelectPdfSettings',
+            settings: { header: { display: true, height: 30, displayOnFirstPage: false }, footer: { display: true, height: 20 } }
+        }], 'what was tried, keeping the band\u2019s other options');
+        live.set('header', 0);
+        assert.match(live.label(), /trying/);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted[live.posted.length - 1].settings.header)), { display: false, height: 50, displayOnFirstPage: false });
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('once saved, the values are the settings and no longer being tried', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { marginLeft: 29, marginRight: 29 });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        live.set('marginLeft', 0);
+        assert.match(live.label(), /trying/);
+        // The extension saves them; the settings change, and the preview is
+        // rendered again with them (an update message, as in the webview).
+        stub.settings.set('reporterLiquidPreview.selectPdf.marginLeft', 0);
+        const again = await htmlPreview('<p>hi</p>');
+        const chrome = chromeOf(again.page);
+        live.document.getElementById('lp-chrome').innerHTML = chrome;
+        live.dom.window.dispatchEvent(new live.dom.window.MessageEvent('message', { data: { type: 'update', chrome, rendered: '<p>hi</p>' } }));
+        assert.strictEqual(live.label(), 'A4 portrait · 1024px layout at 74% on the page');
+        assert.ok(live.document.querySelector('[data-tune="save"]').disabled);
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('saving writes the values that changed to the workspace settings', async () => {
+    stub.vscode.workspace.workspaceFolders = [{ uri: stub.vscode.Uri.file('/w'), name: 'w', index: 0 }];
+    try {
+        stub.settings.set('reporterLiquidPreview.selectPdf.marginLeft', 29);
+        stub.settings.set('reporterLiquidPreview.selectPdf.webPageWidth', 1024);
+        await extension.saveSelectPdfSettings({ marginLeft: 0, webPageWidth: 1024, header: { display: true, height: 50 }, notASetting: 1 });
+        assert.deepStrictEqual(stub.settingUpdates, [
+            { key: 'reporterLiquidPreview.selectPdf.marginLeft', value: 0, target: stub.vscode.ConfigurationTarget.Workspace },
+            { key: 'reporterLiquidPreview.selectPdf.header', value: { display: true, height: 50 }, target: stub.vscode.ConfigurationTarget.Workspace }
+        ], 'only what changed, and only the page settings');
+        assert.match(stub.shownMessages[0], /Saved 2 page settings to the workspace settings \(\.vscode\/settings\.json\): selectPdf\.marginLeft, selectPdf\.header\./);
+    } finally {
+        stub.vscode.workspace.workspaceFolders = [];
+    }
+});
+
+test('with no folder open, saving goes to the user\u2019s settings', async () => {
+    await extension.saveSelectPdfSettings({ marginTop: 10 });
+    assert.deepStrictEqual(stub.settingUpdates.map(u => u.target), [stub.vscode.ConfigurationTarget.Global]);
+    assert.match(stub.shownMessages[0], /to your user settings/);
+});
+
+// ---- a template's definition.json ----
+
+// Reporter's definition.json for the small pot letter, as it is.
+const LETTER_DEFINITION = {
+    name: 'money-out-3_letter_l3066-select-pension-ufpls-small-pot-letter',
+    renderer: 'selectwin8',
+    fileName: 'L3066.pdf',
+    settings: [
+        { key: 'select.header.enabled', value: true },
+        { key: 'select.footer.enabled', value: true },
+        { key: 'select.footer.height', value: 60 }
+    ]
+};
+
+const { definitionPageSettings } = require('../selectpdf-page');
+
+test('a definition.json’s select.* settings are the page, with Reporter’s defaults for the rest', () => {
+    const { settings, keys, defaulted } = definitionPageSettings(JSON.stringify(LETTER_DEFINITION));
+    assert.deepStrictEqual(settings, {
+        customPageSize: { width: 595, height: 842 },
+        orientation: 'Portrait',
+        header: { display: true, height: 45, displayOnFirstPage: true },
+        footer: { display: true, height: 60, displayOnFirstPage: true }
+    });
+    assert.deepStrictEqual(keys, ['select.header.enabled', 'select.footer.enabled', 'select.footer.height']);
+    assert.deepStrictEqual(defaulted, ['header'], 'enabled with no height: SelectPdf’s own height, which production pages match');
+    const g = pageGeometry(settings);
+    close(g.content.height * 0.75, 842 - 45 - 60, 'the content area is the page less the header and footer');
+    close(g.page.width * 0.75, 595, 'Reporter’s page width');
+});
+
+test('a definition with no select.* settings is Reporter’s default page: 595 x 842, no bands', () => {
+    assert.deepStrictEqual(definitionPageSettings({ name: 'x' }).settings, {
+        customPageSize: { width: 595, height: 842 }, orientation: 'Portrait', header: null, footer: null
+    });
+    const set = definitionPageSettings({ settings: [
+        { key: 'select.widthPoints', value: '842' }, { key: 'select.heightPoints', value: 595 },
+        { key: 'select.header.enabled', value: 'true' }, { key: 'select.header.height', value: '40' },
+        { key: 'select.header.displayOnFirstPage', value: false },
+        { key: 'select.footer.height', value: 30 },
+        { key: 'select.header.pageNumbers.enabled', value: true }, { key: 'other', value: 1 }
+    ] }).settings;
+    assert.deepStrictEqual(set.customPageSize, { width: 842, height: 595 }, 'text values are read');
+    assert.deepStrictEqual(set.header, { display: true, height: 40, displayOnFirstPage: false });
+    assert.strictEqual(set.footer, null, 'a height without enabled is no footer');
+    assert.strictEqual(definitionPageSettings({ settings: [{ key: 'select.footer.enabled', value: true }] }).settings.footer.height, 35, 'SelectPdf’s footer height');
+    assert.strictEqual(definitionPageSettings({ settings: [{ key: 'select.header.enabled', value: true }, { key: 'select.header.height', value: 0 }] }).settings.header.height, 0, 'a height of 0 given is 0');
+    assert.strictEqual(definitionPageSettings('{ not json'), null);
+    assert.strictEqual(definitionPageSettings('[1]'), null);
+});
+
+// A template on disk with a definition.json beside it, as Reporter's are.
+function templateWithDefinition(definition) {
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rlp-definition-'));
+    const template = path.join(dir, 'template.liquid');
+    fs.writeFileSync(template, '<p>hi</p>');
+    if (definition) fs.writeFileSync(path.join(dir, 'definition.json'), JSON.stringify(definition));
+    return { template, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
+}
+
+test('the preview pages a template on the page its definition.json sets, over the workspace settings', async () => {
+    const { template, cleanup } = templateWithDefinition(LETTER_DEFINITION);
+    try {
+        for (const [name, value] of Object.entries({ pageSize: 'Letter', header: { display: true, height: 60 }, footer: { display: true, height: 60 }, marginLeft: 10 })) {
+            stub.settings.set('reporterLiquidPreview.selectPdf.' + name, value);
+        }
+        const config = extension.selectPdfConfig(template, '<p>hi</p>');
+        close(config.geometry.page.widthPt, 595, 'the definition’s page, not the workspace’s Letter');
+        assert.strictEqual(config.geometry.header.heightPt, 45);
+        assert.strictEqual(config.geometry.footer.heightPt, 60);
+        close(config.geometry.margins.left * 0.75, 10, 'what the definition doesn’t set stays the workspace’s');
+        assert.deepStrictEqual(config.definition, { file: 'definition.json', controls: ['pageSize', 'customPageSize', 'orientation', 'header', 'footer'], defaulted: [{ band: 'header', height: 45 }] });
+
+        stub.workspaceFiles.set(template, '<p>hi</p>');
+        const panel = makePanel();
+        await extension.refreshHtmlPanel(makePreview({ templateUri: template }), panel);
+        assert.match(chromeOf(panel.webview.html), /<span id="lp-selectpdf-geometry">595×842pt portrait · 1024px layout at \d+% on the page · page from definition\.json<\/span>/);
+    } finally {
+        cleanup();
+    }
+});
+
+test('without a definition.json the workspace settings are the page, as before', () => {
+    const { template, cleanup } = templateWithDefinition(null);
+    try {
+        stub.settings.set('reporterLiquidPreview.selectPdf.footer', { display: true, height: 50 });
+        const config = extension.selectPdfConfig(template, '<p>hi</p>');
+        assert.strictEqual(config.definition, null);
+        assert.strictEqual(config.geometry.footer.heightPt, 50);
+        assert.strictEqual(config.definitionPath, require('path').join(require('path').dirname(template), 'definition.json'), 'where it was looked for');
+    } finally {
+        cleanup();
+    }
+});
+
+test('for a template with a definition.json, the panel says where its page comes from and Save leaves it out', async () => {
+    const { template, cleanup } = templateWithDefinition(LETTER_DEFINITION);
+    try {
+        stub.workspaceFiles.set(template, '<p>hi</p>');
+        const panel = makePanel();
+        await extension.refreshHtmlPanel(makePreview({ templateUri: template }), panel);
+        const live = livePage(panel.webview.html);
+        try {
+            live.click('[data-lp-local="tune-pages"]');
+            const note = live.document.getElementById('lp-tune-definition');
+            assert.ok(!note.hidden && /definition\.json, which sets its page size, header and footer/.test(note.textContent));
+            assert.match(note.textContent, /Its header is enabled with no height, so it is SelectPdf’s default of 45pt\./);
+            const size = live.document.querySelector('[data-tune-field="pageSize"]');
+            assert.ok(size.disabled);
+            assert.strictEqual(size.selectedOptions[0].textContent, '595 × 842pt', 'shown as the definition\u2019s size, not a named one');
+            assert.strictEqual(live.document.querySelector('[data-tune-field="footer"]').value, '60', 'the definition’s footer');
+            assert.match(live.document.getElementById('lp-tune-readout').textContent, /^The page is 595 × 842pt; less a 45pt header and a 60pt footer, the content area is 595 × 737pt\./);
+
+            live.set('footer', 70);
+            assert.match(live.label(), /page from definition\.json · trying, not saved/, 'tried');
+            assert.ok(live.document.querySelector('[data-tune="save"]').disabled, 'but there’s nothing the workspace settings decide to save');
+            live.set('marginTop', 12);
+            live.click('[data-tune="save"]');
+            assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings').map(m => m.settings))), [{ marginTop: 12 }]);
+        } finally {
+            live.dom.window.close();
+        }
+
+        await extension.saveSelectPdfSettings({ marginTop: 12, footer: { display: true, height: 70 } }, template);
+        assert.deepStrictEqual(stub.settingUpdates.map(u => u.key), ['reporterLiquidPreview.selectPdf.marginTop'], 'the extension leaves it out too');
+        assert.match(stub.shownMessages[0], /The footer tried come from this template's definition\.json, so weren't saved/);
+    } finally {
+        cleanup();
+    }
+});
+
+test('a definition.json saved with a byte-order mark, comments or trailing commas is read', () => {
+    const text = '\uFEFF{\n  // the letter\n  "settings": [\n    { "key": "select.footer.enabled", "value": true }, /* on */\n    { "key": "select.footer.height", "value": 60 },\n  ],\n  "notes": "a // in a string stays",\n}';
+    assert.strictEqual(definitionPageSettings(text).settings.footer.height, 60);
+    const { readDefinition } = require('../selectpdf-page');
+    assert.strictEqual(readDefinition(text).value.notes, 'a // in a string stays');
+});
+
+test('a definition.json that can’t be read is said to be, not quietly passed over', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const { template, cleanup } = templateWithDefinition(null);
+    try {
+        fs.writeFileSync(path.join(path.dirname(template), 'definition.json'), '{ "settings": [ { "key": ');
+        stub.settings.set('reporterLiquidPreview.selectPdf.footer', { display: true, height: 50 });
+        const config = extension.selectPdfConfig(template, '<p>hi</p>');
+        assert.strictEqual(config.definition, null);
+        assert.strictEqual(config.geometry.footer.heightPt, 50, 'paged on the workspace settings meanwhile');
+        assert.match(config.definitionError, /^definition\.json can't be read \(.+\), so this template is paged on the workspace's page settings, not its own$/);
+
+        stub.workspaceFiles.set(template, '<p>hi</p>');
+        const panel = makePanel();
+        await extension.refreshHtmlPanel(makePreview({ templateUri: template }), panel);
+        assert.match(chromeOf(panel.webview.html), /<span id="lp-selectpdf-geometry">[^<]*· definition\.json can’t be read<\/span>/);
+        const published = stub.publishedDiagnostics.get(path.join(path.dirname(template), 'definition.json')) || [];
+        assert.strictEqual(published.length, 1, 'in the Problems panel, against the file');
+        assert.match(published[0].message, /definition\.json can't be read/);
+    } finally {
+        cleanup();
+    }
+});
+
+// ---- how the engine pages ----
+// Reporter's engine (selectwin8) differs from Chromium in two ways a
+// production PDF shows: a break can leave one line alone at the top of a page,
+// and the CSS's @page left and right margins narrow the column (its top and
+// bottom margins don't move the text). Both are settings, off by default so
+// the view pages as Chromium does unless told otherwise. Their paging was
+// checked in Chromium; jsdom can't lay out.
+
+test('keeping lines together and @page side margins are settings, as Chromium pages by default', () => {
+    const g = pageGeometry({});
+    assert.strictEqual(g.keepLinesTogether, true);
+    assert.strictEqual(g.pageMarginSides, false);
+    const reporter = pageGeometry({ keepLinesTogether: false, pageMarginSides: true });
+    assert.strictEqual(reporter.keepLinesTogether, false);
+    assert.strictEqual(reporter.pageMarginSides, true);
+    assert.strictEqual(reporter.scale, g.scale, 'the side margins narrow the column, not the scale');
+    const offered = require('../package.json').contributes.configuration.properties;
+    assert.strictEqual(offered['reporterLiquidPreview.selectPdf.keepLinesTogether'].default, true);
+    assert.strictEqual(offered['reporterLiquidPreview.selectPdf.pageMarginSides'].default, false);
+});
+
+test('the settings reach the view, and the panel tries and saves them', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { keepLinesTogether: false });
+    assert.strictEqual(configIn(page).geometry.keepLinesTogether, false);
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="keepLinesTogether"]').checked, false);
+        assert.strictEqual(live.document.querySelector('[data-tune-field="pageMarginSides"]').checked, false);
+        live.set('pageMarginSides', true);
+        assert.match(live.label(), /trying, not saved/);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings').map(m => m.settings))), [{ pageMarginSides: true }]);
+    } finally {
+        live.dom.window.close();
+    }
+    await extension.saveSelectPdfSettings({ pageMarginSides: true, keepLinesTogether: false });
+    assert.deepStrictEqual(stub.settingUpdates.map(u => u.key), ['reporterLiquidPreview.selectPdf.pageMarginSides'], 'only what changed');
+});
+
+test('the paging script reads the @page side margins and keeps lines by the setting', () => {
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /keepLinesTogether \? parseInt\(style\.orphans, 10\) \|\| 2 : 1/, 'one line either side allowed when off');
+    assert.match(script, /function pageSideMargins\(doc\)/);
+    assert.match(script, /@page side margins/, 'and the status says it applied them');
+});
+
+test('content wider than the layout is named in the status, with the CSS that sets its width', () => {
+    // Checked in Chromium: a .letter { width: 280mm } and a <table width="1200">
+    // give "wider than the 1024px layout, so cut off: div.letter 1058px
+    // (.letter { width: 280mm }), table 1200px (width="1200")".
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /function widerThanLayout\(doc, layoutWidth\)/);
+    assert.match(script, /function cssWidths\(doc, element\)/);
+    assert.match(script, /wider than the \$\{Math\.round\(result\.layoutWidth\)\}px layout, so cut off: /);
+});
+
+test('with the @page side margins, what is wider than the column is fitted into it, and said to be', () => {
+    // Checked in Chromium: with section { width: 1024px } and @page { margin:
+    // 12mm }, the section is held to the 907px column and its text wraps
+    // there (891px inside the body's margin), and the status says "fitted to
+    // the column: section 1024px (section { width: 1024px })". Without the
+    // side margins it's said to be cut off instead.
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /item\.element\.style\.setProperty\('max-width', '100%', 'important'\)/);
+    assert.match(script, /fitted to the column: /);
+});
+
+test('text spacing is a calibration setting: letter-spacing on the body, 0 by default, in the panel', async () => {
+    assert.strictEqual(pageGeometry({}).textSpacing, 0);
+    assert.strictEqual(pageGeometry({ textSpacing: 0.35 }).textSpacing, 0.35);
+    assert.strictEqual(pageGeometry({ textSpacing: 9 }).textSpacing, 2, 'held to a sensible range');
+    assert.strictEqual(pageGeometry({ textSpacing: 0.35 }).scale, pageGeometry({}).scale, 'it changes no page measure');
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /body \{ letter-spacing: \$\{g\.textSpacing\}px; \}/);
+    const { page } = await htmlPreview('<p>hi</p>', { textSpacing: 0.3 });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="textSpacing"]').value, '0.3');
+        live.set('textSpacing', 0.4);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings').map(m => m.settings))), [{ textSpacing: 0.4 }]);
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('the PDF preview has a ruler: distances from the page edges, in inches and points', () => {
+    // Checked in Chromium: hovering the top of a letter's address gives
+    // "1.75in (126.0pt) from the top", against 126.5pt worked out from the
+    // layout, and half the page's width at its middle.
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /from the top · \$\{at\(left\)\} from the left/);
+    assert.match(script, /config\.geometry\.page\.width \/ rect\.width/, 'measured on the page, whatever size it is drawn at');
 });

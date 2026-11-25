@@ -14,6 +14,22 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-11-25
+
+### Added
+- A **Page settings** panel in the PDF preview, to match the pages to a PDF from production without the code that converts them: page size, orientation, layout width, margins, header and footer heights, CSS media and the two fit options. A change pages the view again straight away, docked beside the pages so none of a page is hidden, and the toolbar marks the page "trying, not saved" until **Save to workspace settings** writes the changed values to `.vscode/settings.json` (or **Revert** drops them). The panel shows the scale they come to and how much of the layout each page holds.
+
+- The PDF preview pages a template on the page its **`definition.json`** sets, as Reporter does: `select.widthPoints` × `select.heightPoints`, and `select.header.*` and `select.footer.*` (enabled, height, display on the first page), with Reporter's defaults (595 × 842, no bands) for what it leaves out. These win over the workspace's page settings for that template; the rest (layout width, margins, CSS media) still come from the workspace. The toolbar adds "page from definition.json", the page settings panel says which values come from it and doesn't save them, and saving the `definition.json` pages the preview again. A header or footer it enables with no height is SelectPdf's own default height (45pt and 35pt), which is how production pages them, rather than the 0 Reporter's docs give. A `definition.json` with a byte-order mark, comments or trailing commas is read; one that can't be is a warning in the Problems panel and the toolbar, rather than quietly ignored, and the panel says where it looked when there's none.
+
+- Two settings for where Reporter's engine pages differently from Chromium, found against a production PDF, each in the page settings panel: **Keep 2 lines together at a break** (`selectPdf.keepLinesTogether`, on by default; off breaks as production does, leaving a single line alone at the top of a page when that's what fits) and **Use @page side margins** (`selectPdf.pageMarginSides`, off by default; on lays the text out in the column between the CSS's `@page` left and right margins, at the same scale, as production does). The status says the side margins it applied. With them, anything wider than the column (a section fixed at 1024px) is fitted into it, as production does, and the status names it.
+- **Text spacing** in the page settings panel (`selectPdf.textSpacing`, px, 0 by default): extra letter spacing that calibrates for production's engine setting text a few percent wider than Chromium, so long lines wrap at the same words. Not a SelectPdf option; tune it last, once the page, margins and column match.
+- A **ruler** in the PDF preview: hovering over a page shows the pointer's distance from its top and left edges in inches and points, with a guide line, to measure the preview as a production PDF is measured.
+- The PDF preview's status names content wider than the layout, which is cut off at the page's edge and doesn't re-wrap to a narrower column: the outermost elements too wide, their width, and the CSS rule or attribute that sets it.
+
+### Changed
+- The page settings panel describes the page plainly: the page size, what comes off it (margins, header, footer), and the content area left, so a content area smaller than the page isn't mistaken for the wrong page size.
+- The PDF preview's toolbar says `1024px layout at 78% on the page` where it said `1024px at 78%`, which read like a zoom level. It's how much the layout is shrunk onto the page.
+
 ## [1.18.2] - 2026-11-13
 
 ### Fixed
