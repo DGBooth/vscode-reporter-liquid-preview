@@ -621,3 +621,14 @@ test('content wider than the layout is named in the status, with the CSS that se
     assert.match(script, /function cssWidths\(doc, element\)/);
     assert.match(script, /wider than the \$\{Math\.round\(result\.layoutWidth\)\}px layout, so cut off: /);
 });
+
+test('with the @page side margins, what is wider than the column is fitted into it, and said to be', () => {
+    // Checked in Chromium: with section { width: 1024px } and @page { margin:
+    // 12mm }, the section is held to the 907px column and its text wraps
+    // there (891px inside the body's margin), and the status says "fitted to
+    // the column: section 1024px (section { width: 1024px })". Without the
+    // side margins it's said to be cut off instead.
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /item\.element\.style\.setProperty\('max-width', '100%', 'important'\)/);
+    assert.match(script, /fitted to the column: /);
+});

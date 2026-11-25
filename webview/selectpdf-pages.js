@@ -665,6 +665,25 @@
                 if (!isCurrent()) return null;
             }
 
+            // With the @page side margins, what's wider than the column is
+            // fitted into it, as production evidently does: a letter whose
+            // section is fixed at 1024px wraps there at the column between the
+            // margins, rather than being cut off at it. Each is held to the
+            // width it's in (max-width: 100%, its padding and border inside),
+            // in its own style, so the pages drawn from this copy match.
+            const fitted = [];
+            if (inset.left || inset.right) {
+                for (let round = 0; round < 5; round++) {
+                    const wide = widerThanLayout(doc, layoutWidth);
+                    if (!wide.length) break;
+                    for (const item of wide) {
+                        item.element.style.setProperty('max-width', '100%', 'important');
+                        item.element.style.setProperty('box-sizing', 'border-box', 'important');
+                        if (!fitted.some(f => f.element === item.element)) fitted.push(item);
+                    }
+                }
+            }
+
             // What runs past the layout's right edge, before FitWideContent
             // widens the layout to take it in.
             const overflow = widerThanLayout(doc, layoutWidth);
@@ -706,7 +725,8 @@
             // the pages are shown in mustn't run them again.
             doc.querySelectorAll('script').forEach(s => s.remove());
             const doctype = doc.doctype ? `<!DOCTYPE ${doc.doctype.name}${doc.doctype.publicId ? ` PUBLIC "${doc.doctype.publicId}"` : ''}${doc.doctype.systemId ? ` "${doc.doctype.systemId}"` : ''}>` : '';
-            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium, inset, widened, overflow };
+            const describe = list => list.map(({ name, width, declared }) => ({ name, width, declared }));
+            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium, inset, widened, overflow: describe(overflow), fitted: describe(fitted) };
         } finally {
             frame.remove();
         }
@@ -738,7 +758,7 @@
                     if (!declared.length && style.minWidth && style.minWidth !== '0px' && style.minWidth !== 'auto') declared.push(`min-width: ${style.minWidth}`);
                     const id = child.id ? '#' + child.id : '';
                     const classes = child.classList && child.classList.length ? '.' + Array.from(child.classList).slice(0, 2).join('.') : '';
-                    found.push({ name: child.tagName.toLowerCase() + id + classes, width: Math.round(rect.width), right: Math.round(right), declared: declared.join(', ') });
+                    found.push({ element: child, name: child.tagName.toLowerCase() + id + classes, width: Math.round(rect.width), right: Math.round(right), declared: declared.join(', ') });
                 }
                 if (found.length < 3) visit(child, parentWide || wide);
             }
@@ -1243,7 +1263,10 @@
             ? ` · wider than the ${Math.round(result.layoutWidth)}px layout, so cut off: `
                 + result.overflow.map(o => `${o.name} ${o.width}px${o.declared ? ` (${o.declared})` : ''}`).join(', ')
             : '';
-        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${sides}${fitted}${wide}`);
+        const narrowed = result.fitted && result.fitted.length
+            ? ` · fitted to the column: ${result.fitted.map(o => `${o.name} ${o.width}px${o.declared ? ` (${o.declared})` : ''}`).join(', ')}`
+            : '';
+        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${sides}${narrowed}${fitted}${wide}`);
     }
 
     // The view was turned off: stop any paging under way and let the pages go
