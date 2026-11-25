@@ -665,6 +665,10 @@
                 if (!isCurrent()) return null;
             }
 
+            // What runs past the layout's right edge, before FitWideContent
+            // widens the layout to take it in.
+            const overflow = widerThanLayout(doc, layoutWidth);
+
             if (g.fitWideContent) {
                 const wide = doc.documentElement.scrollWidth;
                 if (wide > layoutWidth + 1) {
@@ -702,10 +706,70 @@
             // the pages are shown in mustn't run them again.
             doc.querySelectorAll('script').forEach(s => s.remove());
             const doctype = doc.doctype ? `<!DOCTYPE ${doc.doctype.name}${doc.doctype.publicId ? ` PUBLIC "${doc.doctype.publicId}"` : ''}${doc.doctype.systemId ? ` "${doc.doctype.systemId}"` : ''}>` : '';
-            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium, inset, widened };
+            return { html: doctype + doc.documentElement.outerHTML, pages, pageHeight, lastHeight, scale, layoutWidth, medium, inset, widened, overflow };
         } finally {
             frame.remove();
         }
+    }
+
+    // The outermost elements whose right edge runs past the layout width, as
+    // { name, width, right, declared }: the ones whose own box is too wide,
+    // not their children, which only follow them. A box set in a fixed width
+    // doesn't narrow with the layout, so its text doesn't re-wrap, and the
+    // part past the page's edge is cut off, in production as here. `declared`
+    // is the width its CSS gives it (width, min-width), when not auto.
+    function widerThanLayout(doc, layoutWidth) {
+        if (!doc.body) return [];
+        const win = doc.defaultView;
+        const found = [];
+        const visit = (el, parentWide) => {
+            for (const child of Array.from(el.children)) {
+                const rect = child.getBoundingClientRect();
+                const right = rect.right + win.scrollX;
+                const wide = rect.width > 0 && right > layoutWidth + 1;
+                if (wide && !parentWide && found.length < 3) {
+                    const style = win.getComputedStyle(child);
+                    const declared = ['width', 'min-width'].map(prop => {
+                        const inline = child.style && child.style.getPropertyValue(prop);
+                        return inline ? `${prop}: ${inline}` : '';
+                    }).filter(Boolean);
+                    if (!declared.length) declared.push(...cssWidths(doc, child));
+                    if (!declared.length && child.getAttribute('width')) declared.push(`width="${child.getAttribute('width')}"`);
+                    if (!declared.length && style.minWidth && style.minWidth !== '0px' && style.minWidth !== 'auto') declared.push(`min-width: ${style.minWidth}`);
+                    const id = child.id ? '#' + child.id : '';
+                    const classes = child.classList && child.classList.length ? '.' + Array.from(child.classList).slice(0, 2).join('.') : '';
+                    found.push({ name: child.tagName.toLowerCase() + id + classes, width: Math.round(rect.width), right: Math.round(right), declared: declared.join(', ') });
+                }
+                if (found.length < 3) visit(child, parentWide || wide);
+            }
+        };
+        visit(doc.body, false);
+        return found;
+    }
+
+    // The width and min-width the stylesheets give an element, last rule
+    // winning, as "selector { width: … }".
+    function cssWidths(doc, element) {
+        const hits = {};
+        const visit = rules => {
+            for (const rule of Array.from(rules || [])) {
+                try {
+                    if (rule.selectorText && rule.style) {
+                        if (!element.matches(rule.selectorText)) continue;
+                        for (const prop of ['width', 'min-width']) {
+                            const value = rule.style.getPropertyValue(prop);
+                            if (value && value !== 'auto') hits[prop] = `${rule.selectorText} { ${prop}: ${value} }`;
+                        }
+                    } else if (rule.cssRules) {
+                        visit(rule.cssRules);
+                    }
+                } catch (err) { /* a selector or rule this engine can't read */ }
+            }
+        };
+        for (const sheet of Array.from(doc.styleSheets)) {
+            try { visit(sheet.cssRules); } catch (err) { /* a sheet from elsewhere can't be read */ }
+        }
+        return Object.values(hits);
     }
 
     // The left and right margins of the document's @page rules (those for every
@@ -1173,7 +1237,13 @@
         const sides = result.inset && (result.inset.left || result.inset.right)
             ? ` · @page side margins ${mm(result.inset.left)} and ${mm(result.inset.right)}mm`
             : '';
-        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${sides}${fitted}`);
+        // Content wider than the layout is cut off at the page's edge, and
+        // doesn't re-wrap to a narrower column: say what it is.
+        const wide = result.overflow && result.overflow.length && !result.widened
+            ? ` · wider than the ${Math.round(result.layoutWidth)}px layout, so cut off: `
+                + result.overflow.map(o => `${o.name} ${o.width}px${o.declared ? ` (${o.declared})` : ''}`).join(', ')
+            : '';
+        setStatus(`· ${result.pages} page${result.pages === 1 ? '' : 's'}${sides}${fitted}${wide}`);
     }
 
     // The view was turned off: stop any paging under way and let the pages go

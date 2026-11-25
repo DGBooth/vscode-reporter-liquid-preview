@@ -611,3 +611,13 @@ test('the paging script reads the @page side margins and keeps lines by the sett
     assert.match(script, /function pageSideMargins\(doc\)/);
     assert.match(script, /@page side margins/, 'and the status says it applied them');
 });
+
+test('content wider than the layout is named in the status, with the CSS that sets its width', () => {
+    // Checked in Chromium: a .letter { width: 280mm } and a <table width="1200">
+    // give "wider than the 1024px layout, so cut off: div.letter 1058px
+    // (.letter { width: 280mm }), table 1200px (width="1200")".
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /function widerThanLayout\(doc, layoutWidth\)/);
+    assert.match(script, /function cssWidths\(doc, element\)/);
+    assert.match(script, /wider than the \$\{Math\.round\(result\.layoutWidth\)\}px layout, so cut off: /);
+});
