@@ -1321,5 +1321,50 @@
 
     root.addEventListener('resize', refit);
 
+    // ---- the ruler ----
+    // Over a page, where the pointer is from the page's top and left edges, in
+    // inches and points, as a PDF viewer's measuring tool gives them, with a
+    // guide across the page: to measure the preview as a production PDF is
+    // measured. The sheets may be drawn smaller to fit the panel, so the
+    // distance is taken from the page's size, not the screen's.
+    const PX_PER_PT = 96 / 72;
+    function ruler() {
+        let tip = document.getElementById('lp-ruler');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'lp-ruler';
+            tip.className = 'lp-ruler';
+            tip.hidden = true;
+            const guide = document.createElement('div');
+            guide.id = 'lp-ruler-guide';
+            guide.className = 'lp-ruler-guide';
+            guide.hidden = true;
+            document.body.appendChild(guide);
+            document.body.appendChild(tip);
+        }
+        return { tip, guide: document.getElementById('lp-ruler-guide') };
+    }
+    document.addEventListener('mousemove', event => {
+        const sheet = event.target && event.target.closest ? event.target.closest('.lp-sheet') : null;
+        const { tip, guide } = ruler();
+        const config = sheet && active() ? readConfig() : null;
+        if (!sheet || !config) { tip.hidden = true; guide.hidden = true; return; }
+        const rect = sheet.getBoundingClientRect();
+        const perPx = config.geometry.page.width / rect.width;
+        const pt = value => value * perPx / PX_PER_PT;
+        const top = pt(event.clientY - rect.top);
+        const left = pt(event.clientX - rect.left);
+        const at = value => `${(value / 72).toFixed(2)}in (${value.toFixed(1)}pt)`;
+        const number = sheet.getAttribute('aria-label') || '';
+        tip.textContent = `${at(top)} from the top · ${at(left)} from the left${number ? ' · ' + number.toLowerCase() : ''}`;
+        tip.style.left = Math.min(event.clientX + 14, root.innerWidth - 330) + 'px';
+        tip.style.top = (event.clientY + 16) + 'px';
+        guide.style.left = rect.left + 'px';
+        guide.style.width = rect.width + 'px';
+        guide.style.top = event.clientY + 'px';
+        tip.hidden = false;
+        guide.hidden = false;
+    });
+
     if (active()) schedule(0);
 })(this);

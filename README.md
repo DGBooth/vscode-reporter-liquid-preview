@@ -94,6 +94,8 @@ Set the page to match the code that converts your documents, using the `reporter
 
 - **Text spacing** (`…textSpacing`, px, 0 by default). Even with the page, margins and column right, production's text comes out a few percent wider than Chromium's, so a long line can hold a word fewer: older engines round each letter's width up to a whole pixel, where Chromium places letters at fractions of one. Extra letter spacing on the body reproduces that closely. It's a calibration, not a SelectPdf option: once everything else matches, raise it in small steps (0.05px) until long lines wrap at the same words as production's, then save.
 
+**The ruler.** Hovering over a page in the PDF preview shows the pointer's distance from the page's top and left edges, in inches and points, with a guide line across the page, as a PDF viewer's measuring tool does. Measure the same thing in a production PDF and in the preview, such as where the address starts on page 1 and where the text starts on page 2, to see which setting is out and by how much.
+
 **Content wider than the layout** is cut off at the page's edge, as SelectPdf cuts it, and its text doesn't re-wrap when the column narrows. The status names the outermost elements that are too wide and what sets their width, for example `wider than the 1024px layout, so cut off: div.letter 1058px (.letter { width: 280mm })`.
 
 The preview pages as SelectPdf's Chromium-based engine does. A definition's `renderer` (such as `selectwin8`) isn't read: if it names one of SelectPdf's older engines (its original engine is WebKit-based), text can measure slightly differently there, so a long paragraph can now and then wrap a word differently from the preview, even with the page set right.

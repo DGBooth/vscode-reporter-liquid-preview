@@ -21,6 +21,7 @@ version bump, so a version can include work committed before its bump.
 
 - Two settings for where Reporter's engine pages differently from Chromium, found against a production PDF, each in the page settings panel: **Keep 2 lines together at a break** (`selectPdf.keepLinesTogether`, on by default; off breaks as production does, leaving a single line alone at the top of a page when that's what fits) and **Use @page side margins** (`selectPdf.pageMarginSides`, off by default; on lays the text out in the column between the CSS's `@page` left and right margins, at the same scale, as production does). The status says the side margins it applied. With them, anything wider than the column (a section fixed at 1024px) is fitted into it, as production does, and the status names it.
 - **Text spacing** in the page settings panel (`selectPdf.textSpacing`, px, 0 by default): extra letter spacing that calibrates for production's engine setting text a few percent wider than Chromium, so long lines wrap at the same words. Not a SelectPdf option; tune it last, once the page, margins and column match.
+- A **ruler** in the PDF preview: hovering over a page shows the pointer's distance from its top and left edges in inches and points, with a guide line, to measure the preview as a production PDF is measured.
 - The PDF preview's status names content wider than the layout, which is cut off at the page's edge and doesn't re-wrap to a narrower column: the outermost elements too wide, their width, and the CSS rule or attribute that sets it.
 
 ### Changed

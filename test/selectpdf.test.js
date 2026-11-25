@@ -652,3 +652,12 @@ test('text spacing is a calibration setting: letter-spacing on the body, 0 by de
         live.dom.window.close();
     }
 });
+
+test('the PDF preview has a ruler: distances from the page edges, in inches and points', () => {
+    // Checked in Chromium: hovering the top of a letter's address gives
+    // "1.75in (126.0pt) from the top", against 126.5pt worked out from the
+    // layout, and half the page's width at its middle.
+    const script = require('fs').readFileSync(require('path').join(__dirname, '..', 'webview', 'selectpdf-pages.js'), 'utf8');
+    assert.match(script, /from the top · \$\{at\(left\)\} from the left/);
+    assert.match(script, /config\.geometry\.page\.width \/ rect\.width/, 'measured on the page, whatever size it is drawn at');
+});
