@@ -417,17 +417,17 @@ const LETTER_DEFINITION = {
 const { definitionPageSettings } = require('../selectpdf-page');
 
 test('a definition.json’s select.* settings are the page, with Reporter’s defaults for the rest', () => {
-    const { settings, keys } = definitionPageSettings(JSON.stringify(LETTER_DEFINITION));
+    const { settings, keys, defaulted } = definitionPageSettings(JSON.stringify(LETTER_DEFINITION));
     assert.deepStrictEqual(settings, {
         customPageSize: { width: 595, height: 842 },
         orientation: 'Portrait',
-        header: { display: true, height: 0, displayOnFirstPage: true },
+        header: { display: true, height: 45, displayOnFirstPage: true },
         footer: { display: true, height: 60, displayOnFirstPage: true }
     });
     assert.deepStrictEqual(keys, ['select.header.enabled', 'select.footer.enabled', 'select.footer.height']);
+    assert.deepStrictEqual(defaulted, ['header'], 'enabled with no height: SelectPdf’s own height, which production pages match');
     const g = pageGeometry(settings);
-    assert.strictEqual(g.header, null, 'a header enabled with no height takes no room');
-    close(g.content.height * 0.75, 842 - 60, 'the content area is the page less the footer');
+    close(g.content.height * 0.75, 842 - 45 - 60, 'the content area is the page less the header and footer');
     close(g.page.width * 0.75, 595, 'Reporter’s page width');
 });
 
@@ -445,6 +445,8 @@ test('a definition with no select.* settings is Reporter’s default page: 595 x
     assert.deepStrictEqual(set.customPageSize, { width: 842, height: 595 }, 'text values are read');
     assert.deepStrictEqual(set.header, { display: true, height: 40, displayOnFirstPage: false });
     assert.strictEqual(set.footer, null, 'a height without enabled is no footer');
+    assert.strictEqual(definitionPageSettings({ settings: [{ key: 'select.footer.enabled', value: true }] }).settings.footer.height, 35, 'SelectPdf’s footer height');
+    assert.strictEqual(definitionPageSettings({ settings: [{ key: 'select.header.enabled', value: true }, { key: 'select.header.height', value: 0 }] }).settings.header.height, 0, 'a height of 0 given is 0');
     assert.strictEqual(definitionPageSettings('{ not json'), null);
     assert.strictEqual(definitionPageSettings('[1]'), null);
 });
@@ -469,10 +471,10 @@ test('the preview pages a template on the page its definition.json sets, over th
         }
         const config = extension.selectPdfConfig(template, '<p>hi</p>');
         close(config.geometry.page.widthPt, 595, 'the definition’s page, not the workspace’s Letter');
-        assert.strictEqual(config.geometry.header, null);
+        assert.strictEqual(config.geometry.header.heightPt, 45);
         assert.strictEqual(config.geometry.footer.heightPt, 60);
         close(config.geometry.margins.left * 0.75, 10, 'what the definition doesn’t set stays the workspace’s');
-        assert.deepStrictEqual(config.definition, { file: 'definition.json', controls: ['pageSize', 'customPageSize', 'orientation', 'header', 'footer'] });
+        assert.deepStrictEqual(config.definition, { file: 'definition.json', controls: ['pageSize', 'customPageSize', 'orientation', 'header', 'footer'], defaulted: [{ band: 'header', height: 45 }] });
 
         stub.workspaceFiles.set(template, '<p>hi</p>');
         const panel = makePanel();
@@ -490,6 +492,7 @@ test('without a definition.json the workspace settings are the page, as before',
         const config = extension.selectPdfConfig(template, '<p>hi</p>');
         assert.strictEqual(config.definition, null);
         assert.strictEqual(config.geometry.footer.heightPt, 50);
+        assert.strictEqual(config.definitionPath, require('path').join(require('path').dirname(template), 'definition.json'), 'where it was looked for');
     } finally {
         cleanup();
     }
@@ -506,11 +509,12 @@ test('for a template with a definition.json, the panel says where its page comes
             live.click('[data-lp-local="tune-pages"]');
             const note = live.document.getElementById('lp-tune-definition');
             assert.ok(!note.hidden && /definition\.json, which sets its page size, header and footer/.test(note.textContent));
+            assert.match(note.textContent, /Its header is enabled with no height, so it is SelectPdf’s default of 45pt\./);
             const size = live.document.querySelector('[data-tune-field="pageSize"]');
             assert.ok(size.disabled);
             assert.strictEqual(size.selectedOptions[0].textContent, '595 × 842pt', 'shown as the definition\u2019s size, not a named one');
             assert.strictEqual(live.document.querySelector('[data-tune-field="footer"]').value, '60', 'the definition’s footer');
-            assert.match(live.document.getElementById('lp-tune-readout').textContent, /^The page is 595 × 842pt; less a 60pt footer, the content area is 595 × 782pt\./);
+            assert.match(live.document.getElementById('lp-tune-readout').textContent, /^The page is 595 × 842pt; less a 45pt header and a 60pt footer, the content area is 595 × 737pt\./);
 
             live.set('footer', 70);
             assert.match(live.label(), /page from definition\.json · trying, not saved/, 'tried');
@@ -525,6 +529,37 @@ test('for a template with a definition.json, the panel says where its page comes
         await extension.saveSelectPdfSettings({ marginTop: 12, footer: { display: true, height: 70 } }, template);
         assert.deepStrictEqual(stub.settingUpdates.map(u => u.key), ['reporterLiquidPreview.selectPdf.marginTop'], 'the extension leaves it out too');
         assert.match(stub.shownMessages[0], /The footer tried come from this template's definition\.json, so weren't saved/);
+    } finally {
+        cleanup();
+    }
+});
+
+test('a definition.json saved with a byte-order mark, comments or trailing commas is read', () => {
+    const text = '\uFEFF{\n  // the letter\n  "settings": [\n    { "key": "select.footer.enabled", "value": true }, /* on */\n    { "key": "select.footer.height", "value": 60 },\n  ],\n  "notes": "a // in a string stays",\n}';
+    assert.strictEqual(definitionPageSettings(text).settings.footer.height, 60);
+    const { readDefinition } = require('../selectpdf-page');
+    assert.strictEqual(readDefinition(text).value.notes, 'a // in a string stays');
+});
+
+test('a definition.json that can’t be read is said to be, not quietly passed over', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const { template, cleanup } = templateWithDefinition(null);
+    try {
+        fs.writeFileSync(path.join(path.dirname(template), 'definition.json'), '{ "settings": [ { "key": ');
+        stub.settings.set('reporterLiquidPreview.selectPdf.footer', { display: true, height: 50 });
+        const config = extension.selectPdfConfig(template, '<p>hi</p>');
+        assert.strictEqual(config.definition, null);
+        assert.strictEqual(config.geometry.footer.heightPt, 50, 'paged on the workspace settings meanwhile');
+        assert.match(config.definitionError, /^definition\.json can't be read \(.+\), so this template is paged on the workspace's page settings, not its own$/);
+
+        stub.workspaceFiles.set(template, '<p>hi</p>');
+        const panel = makePanel();
+        await extension.refreshHtmlPanel(makePreview({ templateUri: template }), panel);
+        assert.match(chromeOf(panel.webview.html), /<span id="lp-selectpdf-geometry">[^<]*· definition\.json can’t be read<\/span>/);
+        const published = stub.publishedDiagnostics.get(path.join(path.dirname(template), 'definition.json')) || [];
+        assert.strictEqual(published.length, 1, 'in the Problems panel, against the file');
+        assert.match(published[0].message, /definition\.json can't be read/);
     } finally {
         cleanup();
     }

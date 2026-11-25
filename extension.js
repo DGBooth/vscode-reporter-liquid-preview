@@ -23,7 +23,7 @@ const PAGES_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview', 
 const PAGE_GEOMETRY_SCRIPT = '(function () { var module = { exports: {} };\n'
     + require('fs').readFileSync(path.join(__dirname, 'selectpdf-page.js'), 'utf8')
     + '\nwindow.__rlpPageGeometry = module.exports; })();\n';
-const { pageGeometry, describeGeometry, definitionPageSettings, DEFINITION_SETTINGS } = require('./selectpdf-page');
+const { pageGeometry, describeGeometry, definitionPageSettings, readDefinition, DEFINITION_SETTINGS, SELECTPDF_BAND_HEIGHT } = require('./selectpdf-page');
 const {
     liquidEngine,
     parseTagArgs,
@@ -617,6 +617,11 @@ async function refreshHtmlPanel(preview, panel) {
         rendered = preview.lastRenderedHtml || '';
     }
 
+    // A definition.json that's there but can't be read pages the template on
+    // the wrong page, so say so, against the file.
+    const definition = templateDefinition(preview.templateUri);
+    if (definition && definition.error) diagnostics.push(diagnostic('warning', 'Page settings', `${definition.error}.`, definition.file, { line: 1, col: 1, snippet: '' }));
+
     publishDiagnostics(preview, diagnostics);
     const defaultName = preview.dataUri ? path.basename(preview.dataUri, path.extname(preview.dataUri)) : '';
     // The Edit tab shows the document as it is filled in. The PDF is made from
@@ -667,7 +672,8 @@ const TUNABLE_SELECT_PDF_SETTINGS = [
 // it, so those aren't saved for it: saved, they'd do nothing for it.
 async function saveSelectPdfSettings(values, templateUri = null) {
     if (!values || typeof values !== 'object') return;
-    const fromDefinition = templateDefinition(templateUri) ? DEFINITION_SETTINGS : [];
+    const found = templateDefinition(templateUri);
+    const fromDefinition = found && !found.error ? DEFINITION_SETTINGS : [];
     const skipped = fromDefinition.filter(name => Object.prototype.hasOwnProperty.call(values, name));
     const config = vscode.workspace.getConfiguration('reporterLiquidPreview');
     const toWorkspace = (vscode.workspace.workspaceFolders || []).length > 0;
@@ -717,28 +723,39 @@ function selectPdfConfig(templateUri, rendered, webview = null) {
     // A template's own definition.json sets its page in Reporter, over the
     // workspace settings. The settings go too, for the page settings panel to
     // try others against.
-    const definition = templateDefinition(templateUri);
+    const found = templateDefinition(templateUri);
+    const definition = found && !found.error ? found : null;
     const settings = Object.assign({}, readSelectPdfSettings(), definition ? definition.settings : {});
     return {
         geometry: pageGeometry(settings),
         settings,
-        definition: definition ? { file: 'definition.json', controls: DEFINITION_SETTINGS } : null,
+        definition: definition
+            ? { file: 'definition.json', controls: DEFINITION_SETTINGS, defaulted: definition.defaulted.map(name => ({ band: name, height: SELECTPDF_BAND_HEIGHT[name] })) }
+            : null,
+        definitionError: found && found.error ? found.error : null,
+        // Where it was looked for, for the panel to say when there's none.
+        definitionPath: templateUri ? path.join(path.dirname(templateUri), 'definition.json') : null,
         css,
         html: rendered || ''
     };
 }
 
-// The page a template's definition.json sets (see definitionPageSettings), or
-// null when it has none, or one that can't be read.
+// The page a template's definition.json sets (see definitionPageSettings), with
+// the file's path; { file, error } when there is one but it can't be read, so
+// the preview can say so rather than quietly page on the workspace settings;
+// or null when there is none.
 function templateDefinition(templateUri) {
     if (!templateUri) return null;
+    const file = path.join(path.dirname(templateUri), 'definition.json');
     let text;
     try {
-        text = require('fs').readFileSync(path.join(path.dirname(templateUri), 'definition.json'), 'utf8');
+        text = require('fs').readFileSync(file, 'utf8');
     } catch (err) {
         return null;
     }
-    return definitionPageSettings(text);
+    const read = readDefinition(text);
+    if (read.error) return { file, error: `definition.json can't be read (${read.error}), so this template is paged on the workspace's page settings, not its own` };
+    return Object.assign({ file }, definitionPageSettings(read.value));
 }
 
 // JSON that can sit inside a <script> element: no "</script>" can end it early.
@@ -764,7 +781,7 @@ function buildHtmlPreviewChrome(rendered, selectPdf = null, { answered = 0 } = {
         ? `<button type="button" class="lp-action lp-reset" data-lp-action="resetFields" title="Go back to the answers in the data file">Reset ${pluralize(answered, 'answer')}</button>`
         : '';
     const pages = selectPdf
-        ? `<span class="lp-pages-status"><span id="lp-selectpdf-geometry">${escapeHtml(describeGeometry(selectPdf.geometry) + (selectPdf.definition ? ' \u00b7 page from definition.json' : ''))}</span> <span id="lp-selectpdf-pages"></span></span>`
+        ? `<span class="lp-pages-status"><span id="lp-selectpdf-geometry">${escapeHtml(describeGeometry(selectPdf.geometry) + (selectPdf.definition ? ' \u00b7 page from definition.json' : selectPdf.definitionError ? ' \u00b7 definition.json can\u2019t be read' : ''))}</span> <span id="lp-selectpdf-pages"></span></span>`
             + `<button type="button" class="lp-action lp-pages-tune" data-lp-local="tune-pages" title="Try other page settings here, to match a PDF from production, and save them when they do">Page settings&hellip;</button>`
             + `<script type="application/json" id="lp-selectpdf-config">${scriptSafeJson(selectPdf)}</script>`
         : '';

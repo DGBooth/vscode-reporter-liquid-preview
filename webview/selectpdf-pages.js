@@ -880,7 +880,7 @@
         const node = document.getElementById('lp-selectpdf-geometry');
         if (!node || !config || !geometryApi()) return;
         node.textContent = geometryApi().describeGeometry(config.geometry)
-            + (config.definition ? ' \u00b7 page from definition.json' : '')
+            + (config.definition ? ' \u00b7 page from definition.json' : config.definitionError ? ' \u00b7 definition.json can\u2019t be read' : '')
             + (trial ? ' \u00b7 trying, not saved' : '');
         node.classList.toggle('lp-trying', !!trial);
     }
@@ -951,10 +951,18 @@
             : config.definition ? 'The page size is the template\u2019s definition.json\u2019s (select.widthPoints \u00d7 select.heightPoints)'
             : 'reporterLiquidPreview.selectPdf.customPageSize is set, and wins over this';
         const note = document.getElementById('lp-tune-definition');
-        if (note) {
+        if (note && !config.definition) {
+            note.hidden = !config.definitionPath;
+            note.textContent = config.definitionError
+                ? `${config.definitionError}. Fix it and save, and the preview pages again.`
+                : `No definition.json was found beside this template (looked for ${config.definitionPath}), so the whole page comes from the workspace settings.`;
+        } else if (note) {
             note.hidden = !config.definition;
+            const defaulted = config.definition && config.definition.defaulted && config.definition.defaulted.length
+                ? ' ' + config.definition.defaulted.map(d => `Its ${d.band} is enabled with no height, so it is SelectPdf\u2019s default of ${d.height}pt.`).join(' ')
+                : '';
             note.textContent = config.definition
-                ? 'This template has a definition.json, which sets its page size, header and footer in Reporter (its select.* settings). Try them here, but change them there to keep them: Save leaves them out.'
+                ? 'This template has a definition.json, which sets its page size, header and footer in Reporter (its select.* settings). Try them here, but change them there to keep them: Save leaves them out.' + defaulted
                 : '';
         }
         showReadout(config);
