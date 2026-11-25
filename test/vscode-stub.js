@@ -32,6 +32,8 @@ const openedLinks = [];
 const statusMessages = [];
 // Settings, by full key ("section.name").
 const settings = new Map();
+// Every configuration update, in order: { key, value, target }.
+const settingUpdates = [];
 // Every test controller the extension created, with what its runs reported.
 const testControllers = [];
 // Answers for the next showQuickPick / showInputBox calls, in order. A quick
@@ -206,6 +208,7 @@ const vscode = {
     DiagnosticSeverity: { Error: 'Error', Warning: 'Warning', Information: 'Information', Hint: 'Hint' },
     TextEditorRevealType: { Default: 0, InCenter: 1, InCenterIfOutsideViewport: 2, AtTop: 3 },
     ViewColumn: { Active: -1, Beside: -2, One: 1, Two: 2, Three: 3 },
+    ConfigurationTarget: { Global: 1, Workspace: 2, WorkspaceFolder: 3 },
     StatusBarAlignment: { Left: 1, Right: 2 },
 
     Uri: {
@@ -287,7 +290,11 @@ const vscode = {
         // unsaved edits.
         textDocuments: [],
         getConfiguration: section => ({
-            get: (name, fallback) => (settings.has(`${section}.${name}`) ? settings.get(`${section}.${name}`) : fallback)
+            get: (name, fallback) => (settings.has(`${section}.${name}`) ? settings.get(`${section}.${name}`) : fallback),
+            update: async (name, value, target) => {
+                settingUpdates.push({ key: `${section}.${name}`, value, target });
+                settings.set(`${section}.${name}`, value);
+            }
         }),
         // workspaceFiles stands in for open editors and wins; anything else is
         // read from disk, as VS Code would, so files the extension writes with
@@ -375,6 +382,7 @@ function reset() {
     statusMessages.length = 0;
     openedLinks.length = 0;
     settings.clear();
+    settingUpdates.length = 0;
     inputBoxAnswers.length = 0;
     saveDialogAnswers.length = 0;
     for (const panel of createdPanels.splice(0)) if (!panel.disposed) panel.dispose();
@@ -401,6 +409,7 @@ module.exports = {
     executedCommands,
     openedLinks,
     settings,
+    settingUpdates,
     inputBoxAnswers,
     saveDialogAnswers,
     createdPanels,

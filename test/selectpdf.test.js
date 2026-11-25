@@ -92,7 +92,7 @@ test('every page size the settings offer is known', () => {
 });
 
 test('the toolbar says what page it is drawing', () => {
-    assert.strictEqual(describeGeometry(pageGeometry({})), 'A4 portrait · 1024px at 78%');
+    assert.strictEqual(describeGeometry(pageGeometry({})), 'A4 portrait · 1024px layout at 78% on the page', 'the shrink onto the page, not a zoom');
     assert.match(describeGeometry(pageGeometry({ cssMediaType: 'Print', customPageSize: { width: 300, height: 400 } })), /^300×400pt portrait .* print media$/);
 });
 
@@ -273,4 +273,129 @@ test('the PDF preview tab stays chosen across a live edit, and choosing it leave
     } finally {
         dom.window.close();
     }
+});
+
+// ---- trying page settings ----
+
+// The preview's page, live: its scripts run, as in the webview, with what it
+// posts to the extension collected. jsdom can't lay out, so the PDF preview
+// tab is left unchosen and nothing is paged; the panel and the page it works
+// out are what's tested.
+function livePage(page) {
+    const posted = [];
+    const dom = new JSDOM(page, {
+        runScripts: 'dangerously',
+        virtualConsole: new VirtualConsole(),
+        beforeParse(window) { window.acquireVsCodeApi = () => ({ postMessage: message => posted.push(message) }); }
+    });
+    const { document, Event } = dom.window;
+    const set = (name, value) => {
+        const input = document.querySelector(`[data-tune-field="${name}"]`);
+        if (input.type === 'checkbox') input.checked = value; else input.value = String(value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const click = selector => document.querySelector(selector).dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }));
+    const label = () => document.getElementById('lp-selectpdf-geometry').textContent;
+    return { dom, document, posted, set, click, label };
+}
+
+test('the preview carries the settings, a description of the page it can change, and the panel\u2019s button', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { marginLeft: 29, marginRight: 29 });
+    const config = configIn(page);
+    assert.strictEqual(config.settings.marginLeft, 29, 'the settings, to try others against');
+    assert.ok(chromeOf(page).includes('<span id="lp-selectpdf-geometry">A4 portrait · 1024px layout at 70% on the page</span>'));
+    assert.ok(chromeOf(page).includes('data-lp-local="tune-pages"'));
+    assert.ok(page.includes('window.__rlpPageGeometry = module.exports'), 'the page geometry goes with the paging script');
+});
+
+test('values tried in the panel page the view as if they were the settings, until reverted', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { marginLeft: 29, marginRight: 29, webPageWidth: 1024 });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        const panel = live.document.getElementById('lp-tune');
+        assert.ok(panel && !panel.hidden, 'the panel opens');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="marginLeft"]').value, '29', 'with the settings in it');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="pageSize"]').value, 'A4');
+        assert.ok(live.document.querySelector('[data-tune="save"]').disabled, 'nothing to save yet');
+
+        live.set('marginLeft', 0);
+        live.set('marginRight', 0);
+        assert.strictEqual(live.label(), 'A4 portrait · 1024px layout at 78% on the page · trying, not saved');
+        assert.match(live.document.getElementById('lp-tune-readout').textContent, /shrunk to 77\.5% .* each page holds 1448px of it/);
+        live.set('webPageWidth', 1000);
+        assert.match(live.label(), /1000px layout at 79% on the page · trying/);
+        assert.ok(!live.document.querySelector('[data-tune="save"]').disabled);
+
+        live.click('[data-tune="revert"]');
+        assert.strictEqual(live.label(), 'A4 portrait · 1024px layout at 70% on the page', 'back to the settings');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="marginLeft"]').value, '29');
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('a header or footer height is tried as its band, and 0 turns it off', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { header: { display: true, height: 50, displayOnFirstPage: false } });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        assert.strictEqual(live.document.querySelector('[data-tune-field="header"]').value, '50');
+        live.set('header', 30);
+        live.set('footer', 20);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted.filter(m => m.action === 'saveSelectPdfSettings'))), [{
+            type: 'action', action: 'saveSelectPdfSettings',
+            settings: { header: { display: true, height: 30, displayOnFirstPage: false }, footer: { display: true, height: 20 } }
+        }], 'what was tried, keeping the band\u2019s other options');
+        live.set('header', 0);
+        assert.match(live.label(), /trying/);
+        live.click('[data-tune="save"]');
+        assert.deepStrictEqual(JSON.parse(JSON.stringify(live.posted[live.posted.length - 1].settings.header)), { display: false, height: 50, displayOnFirstPage: false });
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('once saved, the values are the settings and no longer being tried', async () => {
+    const { page } = await htmlPreview('<p>hi</p>', { marginLeft: 29, marginRight: 29 });
+    const live = livePage(page);
+    try {
+        live.click('[data-lp-local="tune-pages"]');
+        live.set('marginLeft', 0);
+        assert.match(live.label(), /trying/);
+        // The extension saves them; the settings change, and the preview is
+        // rendered again with them (an update message, as in the webview).
+        stub.settings.set('reporterLiquidPreview.selectPdf.marginLeft', 0);
+        const again = await htmlPreview('<p>hi</p>');
+        const chrome = chromeOf(again.page);
+        live.document.getElementById('lp-chrome').innerHTML = chrome;
+        live.dom.window.dispatchEvent(new live.dom.window.MessageEvent('message', { data: { type: 'update', chrome, rendered: '<p>hi</p>' } }));
+        assert.strictEqual(live.label(), 'A4 portrait · 1024px layout at 74% on the page');
+        assert.ok(live.document.querySelector('[data-tune="save"]').disabled);
+    } finally {
+        live.dom.window.close();
+    }
+});
+
+test('saving writes the values that changed to the workspace settings', async () => {
+    stub.vscode.workspace.workspaceFolders = [{ uri: stub.vscode.Uri.file('/w'), name: 'w', index: 0 }];
+    try {
+        stub.settings.set('reporterLiquidPreview.selectPdf.marginLeft', 29);
+        stub.settings.set('reporterLiquidPreview.selectPdf.webPageWidth', 1024);
+        await extension.saveSelectPdfSettings({ marginLeft: 0, webPageWidth: 1024, header: { display: true, height: 50 }, notASetting: 1 });
+        assert.deepStrictEqual(stub.settingUpdates, [
+            { key: 'reporterLiquidPreview.selectPdf.marginLeft', value: 0, target: stub.vscode.ConfigurationTarget.Workspace },
+            { key: 'reporterLiquidPreview.selectPdf.header', value: { display: true, height: 50 }, target: stub.vscode.ConfigurationTarget.Workspace }
+        ], 'only what changed, and only the page settings');
+        assert.match(stub.shownMessages[0], /Saved 2 page settings to the workspace settings \(\.vscode\/settings\.json\): selectPdf\.marginLeft, selectPdf\.header\./);
+    } finally {
+        stub.vscode.workspace.workspaceFolders = [];
+    }
+});
+
+test('with no folder open, saving goes to the user\u2019s settings', async () => {
+    await extension.saveSelectPdfSettings({ marginTop: 10 });
+    assert.deepStrictEqual(stub.settingUpdates.map(u => u.target), [stub.vscode.ConfigurationTarget.Global]);
+    assert.match(stub.shownMessages[0], /to your user settings/);
 });

@@ -70,13 +70,20 @@ Reporter's documents become PDFs through [SelectPdf](https://selectpdf.com/), an
 
 It works the way SelectPdf.Universal does, which lays the page out in Chromium (the browser VS Code is built on):
 
-- The document is laid out in a window `webPageWidth` px wide (1024 by default) and scaled so that width fills the page between the margins. The toolbar shows the scale: `A4 portrait · 1024px at 78%`.
+- The document is laid out in a window `webPageWidth` px wide (1024 by default) and scaled so that width fills the page between the margins. The toolbar shows that scale: `A4 portrait · 1024px layout at 78% on the page`. It's how much the layout shrinks onto the page, not how large the view is drawn: the sheets are only made smaller to fit the panel, which changes nothing on them.
 - Pages end where Chromium ends them when it prints: at a forced break (`break-before`/`break-after: page`, `page-break-*: always`, nested ones too), otherwise at the last place that fits between blocks, table rows or lines of text. A line is never cut. A table row that doesn't fit is broken inside, each cell between its own lines, as Chromium breaks it; add `tr { break-inside: avoid }` to keep rows whole. Places inside `break-inside: avoid`, next to `break-after: avoid`, or that would leave fewer than `orphans`/`widows` lines are passed over unless nothing else fits. Something that can't break (an image) and is taller than a page is cut.
 - With `cssMediaType` set to `Print`, `@media print` styles apply, and a table's `thead` (`display: table-header-group`) repeats at the top of each page the table continues onto.
 - Header and footer bands, when on, take their height off every page and are marked on the sheets. What goes in them is set in code and isn't drawn.
 - The last page is shortened to where the content ends, as SelectPdf's `AllowContentHeightResize` does unless it's turned off.
 
 Set the page to match the code that converts your documents, using the `reporterLiquidPreview.selectPdf.*` settings ([below](#settings-and-shortcuts)). They are named after the `HtmlToPdfOptions` they mirror: `PdfPageSize`, `PdfPageOrientation`, `MarginTop`…, `WebPageWidth`, `CssMediaType`, `FitWideContent`, `AllowContentHeightResize`, `CustomCSS`, and the header and footer heights. The margins default to 0: set them to whatever your conversion sets.
+
+**Dialling the settings in.** If you can't see the conversion's settings, match the pages to a PDF from production instead. **Page settings…** in the PDF preview's toolbar opens a panel beside the pages with the page size, orientation, layout width, margins, header and footer heights, CSS media and the two fit options. Changing one pages the view again straight away, and the toolbar marks the page "trying, not saved". Use a production PDF made with the same data, and change values until each line wraps and each page ends where it does there:
+
+- If lines hold more words than in production, everything is drawn too small: lower the layout width, or the left and right margins. If they hold fewer, it's the other way round. The panel shows the scale this comes to.
+- With the lines right, if pages end earlier or later, it's the top and bottom margins, or the header and footer heights.
+
+**Save to workspace settings** writes the values that changed to `.vscode/settings.json`, so everyone working in the folder pages the same way (to your user settings if no folder is open). **Revert** goes back to the settings. Values tried and not saved last until the preview is closed.
 
 It's a close match, not an exact one. When it was built it was checked against Chromium's own print-to-PDF at the same scale. Page breaks matched word for word, except where a paragraph wrapped differently: Chromium measures text slightly differently when it prints, so a long paragraph can now and then wrap one word differently and move a break by a line. Some other things to know:
 

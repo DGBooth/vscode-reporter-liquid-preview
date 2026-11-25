@@ -145,12 +145,14 @@ function pageGeometry(rawSettings) {
     };
 }
 
-// "A4 portrait · 1024px at 78%": what the toolbar says the pages are.
+// "A4 portrait · 1024px layout at 78% on the page": what the toolbar says the
+// pages are. The percentage is how much the layout is shrunk to fit between
+// the margins, not how large the view is drawn.
 function describeGeometry(geometry) {
     const size = geometry.pageSizeName === 'Custom'
         ? `${Math.round(geometry.page.widthPt)}×${Math.round(geometry.page.heightPt)}pt`
         : geometry.pageSizeName;
-    return `${size} ${geometry.orientation.toLowerCase()} · ${geometry.webPageWidth}px at ${Math.round(geometry.scale * 100)}%`
+    return `${size} ${geometry.orientation.toLowerCase()} · ${geometry.webPageWidth}px layout at ${Math.round(geometry.scale * 100)}% on the page`
         + (geometry.cssMediaType === 'Print' ? ' · print media' : '');
 }
 

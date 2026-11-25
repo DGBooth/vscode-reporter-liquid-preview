@@ -16,6 +16,13 @@ const BUILDER_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview'
 // and selectpdf-page.js), likewise.
 const PAGES_SCRIPT = require('fs').readFileSync(path.join(__dirname, 'webview', 'selectpdf-pages.js'), 'utf8');
 const PAGES_STYLES = require('fs').readFileSync(path.join(__dirname, 'webview', 'selectpdf-pages.css'), 'utf8');
+// The page geometry (selectpdf-page.js) as a script for the same view, so its
+// page settings panel can work out the page for values being tried without
+// asking the extension. The module has no dependencies; it's wrapped to hand
+// its exports to the view.
+const PAGE_GEOMETRY_SCRIPT = '(function () { var module = { exports: {} };\n'
+    + require('fs').readFileSync(path.join(__dirname, 'selectpdf-page.js'), 'utf8')
+    + '\nwindow.__rlpPageGeometry = module.exports; })();\n';
 const { pageGeometry, describeGeometry } = require('./selectpdf-page');
 const {
     liquidEngine,
@@ -506,7 +513,9 @@ async function openHtmlPreview(preview) {
         resetFields: () => {
             preview.fieldAnswers = {};
             return queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
-        }
+        },
+        // Page settings tried in the PDF preview's panel, to keep.
+        saveSelectPdfSettings: message => saveSelectPdfSettings(message.settings)
     });
 
     await queueRefresh(preview, () => refreshHtmlPanel(preview, panel));
@@ -629,6 +638,41 @@ const SELECT_PDF_SETTINGS = [
     'customCss', 'header', 'footer'
 ];
 
+// The settings the PDF preview's page settings panel can try, and save.
+const TUNABLE_SELECT_PDF_SETTINGS = [
+    'pageSize', 'orientation', 'webPageWidth',
+    'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+    'header', 'footer', 'cssMediaType', 'fitWideContent', 'allowContentHeightResize'
+];
+
+// Save page settings tried in the PDF preview to the workspace's settings
+// (.vscode/settings.json), so everyone working in it pages the same way; to
+// the user's own when no folder is open. Only the ones that differ are
+// written. Changing them pages every open preview again (see activate).
+async function saveSelectPdfSettings(values) {
+    if (!values || typeof values !== 'object') return;
+    const config = vscode.workspace.getConfiguration('reporterLiquidPreview');
+    const toWorkspace = (vscode.workspace.workspaceFolders || []).length > 0;
+    const target = toWorkspace ? vscode.ConfigurationTarget.Workspace : vscode.ConfigurationTarget.Global;
+    const changed = [];
+    try {
+        for (const name of TUNABLE_SELECT_PDF_SETTINGS) {
+            if (!Object.prototype.hasOwnProperty.call(values, name)) continue;
+            const value = values[name];
+            if (JSON.stringify(config.get('selectPdf.' + name)) === JSON.stringify(value)) continue;
+            await config.update('selectPdf.' + name, value, target);
+            changed.push(name);
+        }
+    } catch (err) {
+        vscode.window.showErrorMessage(`Reporter Liquid Preview: could not save the page settings (${err.message})`);
+        return;
+    }
+    const where = toWorkspace ? 'the workspace settings (.vscode/settings.json)' : 'your user settings';
+    vscode.window.showInformationMessage(changed.length
+        ? `Saved ${pluralize(changed.length, 'page setting')} to ${where}: ${changed.map(name => 'selectPdf.' + name).join(', ')}.`
+        : 'The page settings were already saved.');
+}
+
 function readSelectPdfSettings() {
     const config = vscode.workspace.getConfiguration('reporterLiquidPreview');
     const out = {};
@@ -649,7 +693,9 @@ function selectPdfConfig(templateUri, rendered, webview = null) {
     } catch (err) {
         css = '';
     }
-    return { geometry: pageGeometry(readSelectPdfSettings()), css, html: rendered || '' };
+    const settings = readSelectPdfSettings();
+    // The settings go too, for the page settings panel to try others against.
+    return { geometry: pageGeometry(settings), settings, css, html: rendered || '' };
 }
 
 // JSON that can sit inside a <script> element: no "</script>" can end it early.
@@ -675,7 +721,8 @@ function buildHtmlPreviewChrome(rendered, selectPdf = null, { answered = 0 } = {
         ? `<button type="button" class="lp-action lp-reset" data-lp-action="resetFields" title="Go back to the answers in the data file">Reset ${pluralize(answered, 'answer')}</button>`
         : '';
     const pages = selectPdf
-        ? `<span class="lp-pages-status">${escapeHtml(describeGeometry(selectPdf.geometry))} <span id="lp-selectpdf-pages"></span></span>`
+        ? `<span class="lp-pages-status"><span id="lp-selectpdf-geometry">${escapeHtml(describeGeometry(selectPdf.geometry))}</span> <span id="lp-selectpdf-pages"></span></span>`
+            + `<button type="button" class="lp-action lp-pages-tune" data-lp-local="tune-pages" title="Try other page settings here, to match a PDF from production, and save them when they do">Page settings&hellip;</button>`
             + `<script type="application/json" id="lp-selectpdf-config">${scriptSafeJson(selectPdf)}</script>`
         : '';
     const toolbar = `<div class="lp-toolbar">${tabs}${reset}${pages}`
@@ -1240,7 +1287,7 @@ ${pages ? '<div id="lp-pages"></div>' : ''}
     });
 </script>
 ${builder ? `<script nonce="${nonce}">${BUILDER_SCRIPT}</script>` : ''}
-${pages ? `<script nonce="${nonce}">${PAGES_SCRIPT}</script>` : ''}
+${pages ? `<script nonce="${nonce}">${PAGE_GEOMETRY_SCRIPT}${PAGES_SCRIPT}</script>` : ''}
 </body>
 </html>`;
 }
@@ -2328,6 +2375,7 @@ Object.assign(module.exports, {
     renderForTest,
     runTemplateTests,
     saveBuiltTest,
+    saveSelectPdfSettings,
     acceptCheckResult,
     checkForUpdates,
     installUpdate,

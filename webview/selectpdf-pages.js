@@ -829,11 +829,190 @@
     let timer = null;
     let lastCount = null;
 
+    // What to page, as the extension sent it, with the page worked out again
+    // from any settings being tried in the page settings panel.
     function readConfig() {
         const node = document.getElementById('lp-selectpdf-config');
         if (!node) return null;
-        try { return JSON.parse(node.textContent); } catch (err) { return null; }
+        let config;
+        try { config = JSON.parse(node.textContent); } catch (err) { return null; }
+        if (trial && config.settings && geometryApi()) {
+            // A value tried and since saved is the setting now, not a trial.
+            for (const name of Object.keys(trial)) {
+                if (JSON.stringify(trial[name]) === JSON.stringify(config.settings[name])) delete trial[name];
+            }
+            if (!Object.keys(trial).length) trial = null;
+            else config.geometry = geometryApi().pageGeometry(Object.assign({}, config.settings, trial));
+        }
+        return config;
     }
+
+    // ---- trying page settings ----
+    // The page settings panel: values tried there page this view as if they
+    // were the reporterLiquidPreview.selectPdf settings, so they can be dialled
+    // in beside a PDF from production, until they're saved (the extension
+    // writes them to the workspace settings) or reverted. They last as long as
+    // the panel does. The page is worked out by the same code the extension
+    // uses (selectpdf-page.js, inlined before this script).
+
+    let trial = null;
+    // The width the docked panel takes, its margin included (see the CSS).
+    const TUNE_PANEL_ROOM = 304;
+    const geometryApi = () => root.__rlpPageGeometry || null;
+
+    const TUNE_FIELDS = [
+        { name: 'pageSize', label: 'Page size', kind: 'select', options: () => Object.keys(geometryApi().PAGE_SIZES) },
+        { name: 'orientation', label: 'Orientation', kind: 'select', options: () => ['Portrait', 'Landscape'] },
+        { name: 'webPageWidth', label: 'Layout width', unit: 'px', kind: 'number', min: 100, step: 1 },
+        { name: 'marginTop', label: 'Margin top', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'marginRight', label: 'Margin right', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'marginBottom', label: 'Margin bottom', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'marginLeft', label: 'Margin left', unit: 'pt', kind: 'number', min: 0, step: 0.5 },
+        { name: 'header', label: 'Header height', unit: 'pt', kind: 'band', min: 0, step: 0.5 },
+        { name: 'footer', label: 'Footer height', unit: 'pt', kind: 'band', min: 0, step: 0.5 },
+        { name: 'cssMediaType', label: 'CSS media', kind: 'select', options: () => ['Screen', 'Print'] },
+        { name: 'fitWideContent', label: 'Fit wide content', kind: 'check' },
+        { name: 'allowContentHeightResize', label: 'Shorten the last page', kind: 'check' }
+    ];
+
+    // The toolbar's description of the page, for the values being tried.
+    function showGeometry(config) {
+        const node = document.getElementById('lp-selectpdf-geometry');
+        if (!node || !config || !geometryApi()) return;
+        node.textContent = geometryApi().describeGeometry(config.geometry) + (trial ? ' \u00b7 trying, not saved' : '');
+        node.classList.toggle('lp-trying', !!trial);
+    }
+
+    const tunePanel = () => document.getElementById('lp-tune');
+
+    function buildTunePanel() {
+        const panel = document.createElement('div');
+        panel.id = 'lp-tune';
+        panel.className = 'lp-tune';
+        panel.hidden = true;
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-label', 'Page settings');
+        const rows = TUNE_FIELDS.map(field => {
+            const id = 'lp-tune-' + field.name;
+            let control;
+            if (field.kind === 'select') {
+                control = `<select id="${id}" data-tune-field="${field.name}">`
+                    + field.options().map(option => `<option value="${option}">${option}</option>`).join('') + '</select>';
+            } else if (field.kind === 'check') {
+                control = `<input type="checkbox" id="${id}" data-tune-field="${field.name}">`;
+            } else {
+                control = `<span class="lp-tune-number"><input type="number" id="${id}" data-tune-field="${field.name}" min="${field.min}" step="${field.step}"><span>${field.unit}</span></span>`;
+            }
+            return `<label for="${id}">${field.label}</label>${control}`;
+        }).join('');
+        panel.innerHTML = '<div class="lp-tune-head"><b>Page settings</b><button type="button" class="lp-tune-close" data-tune="close" title="Close" aria-label="Close">\u00d7</button></div>'
+            + '<p class="lp-tune-hint">Change these until the pages match a PDF from production: where each line wraps and each page ends. They page this view only, until saved.</p>'
+            + `<div class="lp-tune-grid">${rows}</div>`
+            + '<div class="lp-tune-readout" id="lp-tune-readout"></div>'
+            + '<div class="lp-tune-actions"><button type="button" data-tune="save">Save to workspace settings</button><button type="button" data-tune="revert">Revert</button></div>';
+        document.body.appendChild(panel);
+        return panel;
+    }
+
+    // Put the values in effect (the settings, and any being tried) into the
+    // panel's controls.
+    function fillTunePanel(config) {
+        const panel = tunePanel();
+        if (!panel || !config || !geometryApi()) return;
+        const settings = geometryApi().normalizeSelectPdfSettings(Object.assign({}, config.settings || {}, trial || {}));
+        for (const field of TUNE_FIELDS) {
+            const input = panel.querySelector(`[data-tune-field="${field.name}"]`);
+            if (!input) continue;
+            if (field.kind === 'check') input.checked = !!settings[field.name];
+            else if (field.kind === 'band') input.value = settings[field.name] ? settings[field.name].height : 0;
+            else input.value = settings[field.name];
+        }
+        const custom = !!settings.customPageSize;
+        const size = panel.querySelector('[data-tune-field="pageSize"]');
+        size.disabled = custom;
+        size.title = custom ? 'reporterLiquidPreview.selectPdf.customPageSize is set, and wins over this' : '';
+        showReadout(config);
+    }
+
+    function showReadout(config) {
+        const node = document.getElementById('lp-tune-readout');
+        if (!node || !config) return;
+        const g = config.geometry;
+        const pt = value => Math.round(value * 0.75 * 10) / 10;
+        node.textContent = `The ${g.webPageWidth}px layout is shrunk to ${Math.round(g.scale * 1000) / 10}% to fit between the margins, `
+            + `so each page holds ${Math.round(g.layoutPageHeight)}px of it, in a content area of ${pt(g.content.width)} \u00d7 ${pt(g.content.height)}pt.`;
+        const save = tunePanel() && tunePanel().querySelector('[data-tune="save"]');
+        const revert = tunePanel() && tunePanel().querySelector('[data-tune="revert"]');
+        if (save) save.disabled = !trial;
+        if (revert) revert.disabled = !trial;
+    }
+
+    // A control was changed: try its value.
+    function tryValue(input) {
+        const config = readConfig();
+        const field = TUNE_FIELDS.find(f => f.name === input.getAttribute('data-tune-field'));
+        if (!config || !field) return;
+        let value;
+        if (field.kind === 'check') value = input.checked;
+        else if (field.kind === 'select') value = input.value;
+        else {
+            value = Number(input.value);
+            if (input.value === '' || !Number.isFinite(value) || value < field.min) return;
+            if (field.kind === 'band') {
+                const saved = config.settings && config.settings[field.name] && typeof config.settings[field.name] === 'object' ? config.settings[field.name] : null;
+                value = value > 0
+                    ? Object.assign({}, saved || {}, { display: true, height: value })
+                    : (saved ? Object.assign({}, saved, { display: false }) : null);
+            }
+        }
+        trial = Object.assign({}, trial || {}, { [field.name]: value });
+        const now = readConfig();
+        showGeometry(now);
+        showReadout(now);
+        schedule(300);
+    }
+
+    // The panel is docked at the side: while it's open the pages make room
+    // for it, so none of a page is hidden behind it while it's compared.
+    function setTunePanelOpen(open) {
+        const panel = tunePanel() || buildTunePanel();
+        panel.hidden = !open;
+        document.body.classList.toggle('lp-tuning', open);
+        if (open) fillTunePanel(readConfig());
+        refit();
+    }
+
+    function openTunePanel() {
+        const panel = tunePanel();
+        setTunePanelOpen(!panel || panel.hidden);
+    }
+
+    document.addEventListener('click', event => {
+        const target = event.target && event.target.closest ? event.target : null;
+        if (!target) return;
+        if (target.closest('[data-lp-local="tune-pages"]')) { openTunePanel(); return; }
+        const action = target.closest('[data-tune]');
+        if (!action || !tunePanel() || !tunePanel().contains(action)) return;
+        const what = action.getAttribute('data-tune');
+        if (what === 'close') setTunePanelOpen(false);
+        else if (what === 'revert') {
+            trial = null;
+            const config = readConfig();
+            fillTunePanel(config);
+            showGeometry(config);
+            schedule(0);
+        } else if (what === 'save' && trial) {
+            const api = root.__rlpVsCodeApi;
+            if (api) api.postMessage({ type: 'action', action: 'saveSelectPdfSettings', settings: trial });
+        }
+    });
+    document.addEventListener('input', event => {
+        const input = event.target;
+        if (input && input.getAttribute && input.getAttribute('data-tune-field') && tunePanel() && tunePanel().contains(input)) tryValue(input);
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && tunePanel() && !tunePanel().hidden) setTunePanelOpen(false);
+    });
 
     function setStatus(text) {
         const node = document.getElementById('lp-selectpdf-pages');
@@ -844,7 +1023,8 @@
     // transform, not CSS zoom: zoom carries into the iframes and changes the
     // width the document is laid out at, which would move every line break.
     function fitZoom(sheets, config) {
-        const room = Math.max(100, document.documentElement.clientWidth - 40);
+        const docked = document.body.classList.contains('lp-tuning') ? TUNE_PANEL_ROOM : 0;
+        const room = Math.max(100, document.documentElement.clientWidth - 40 - docked);
         const z = Math.min(1, room / config.geometry.page.width);
         sheets.style.transform = z < 1 ? `scale(${z})` : '';
         // A transform leaves the layout box full size; take back the height.
@@ -857,6 +1037,7 @@
         const config = readConfig();
         const target = host();
         if (!config || !target) return;
+        showGeometry(config);
         setStatus(lastCount == null ? '· paging…' : `· ${lastCount} page${lastCount === 1 ? '' : 's'}…`);
         let result;
         try {
@@ -914,15 +1095,25 @@
     // state is restored by the update handler, which runs before this one.
     root.addEventListener('message', event => {
         const msg = event.data;
-        if (!msg || msg.type !== 'update' || !active()) return;
+        if (!msg || msg.type !== 'update') return;
+        // The toolbar was replaced: describe the page being tried again, and
+        // show the settings as they now are in a panel not being typed in.
+        const config = readConfig();
+        showGeometry(config);
+        const panel = tunePanel();
+        if (panel && !panel.hidden && !panel.contains(document.activeElement)) fillTunePanel(config);
+        else if (panel) showReadout(config);
+        if (!active()) return;
         setStatus(lastCount == null ? '' : `· ${lastCount} page${lastCount === 1 ? '' : 's'}…`);
         schedule(250);
     });
 
-    root.addEventListener('resize', () => {
+    function refit() {
         const config = readConfig();
         if (config && host()) host().querySelectorAll('.lp-sheets').forEach(sheets => fitZoom(sheets, config));
-    });
+    }
+
+    root.addEventListener('resize', refit);
 
     if (active()) schedule(0);
 })(this);

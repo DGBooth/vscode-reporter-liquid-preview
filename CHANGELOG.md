@@ -14,6 +14,12 @@ version bump, so a version can include work committed before its bump.
 
 ## [Unreleased]
 
+### Added
+- A **Page settings** panel in the PDF preview, to match the pages to a PDF from production without the code that converts them: page size, orientation, layout width, margins, header and footer heights, CSS media and the two fit options. A change pages the view again straight away, docked beside the pages so none of a page is hidden, and the toolbar marks the page "trying, not saved" until **Save to workspace settings** writes the changed values to `.vscode/settings.json` (or **Revert** drops them). The panel shows the scale they come to and how much of the layout each page holds.
+
+### Changed
+- The PDF preview's toolbar says `1024px layout at 78% on the page` where it said `1024px at 78%`, which read like a zoom level. It's how much the layout is shrunk onto the page.
+
 ## [1.18.2] - 2026-11-13
 
 ### Fixed

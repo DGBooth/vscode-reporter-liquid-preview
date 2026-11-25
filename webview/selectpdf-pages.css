@@ -3,6 +3,27 @@
    "Show HTML source" toggle does. */
 .lp-pages-status { display: none; font: 12px sans-serif; color: #666; align-self: center; }
 body:has(#lp-selectpdf:checked) .lp-pages-status { display: inline; }
+#lp-selectpdf-geometry.lp-trying { color: #a35200; font-weight: bold; }
+
+/* The page settings panel (see "trying page settings" in selectpdf-pages.js),
+   shown with the PDF preview tab. */
+.lp-pages-tune { display: none; }
+body:has(#lp-selectpdf:checked) .lp-pages-tune { display: inline-block; }
+.lp-tune { display: none; position: fixed; top: 44px; right: 12px; z-index: 9500; width: 280px; max-height: calc(100vh - 60px); overflow: auto; box-sizing: border-box; padding: 10px 12px; background: white; color: #222; border: 1px solid #c8c8c8; border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); font: 12px sans-serif; }
+body:has(#lp-selectpdf:checked) .lp-tune:not([hidden]) { display: block; }
+/* Docked: the pages keep clear of it (TUNE_PANEL_ROOM in the script). */
+body.lp-tuning #lp-pages { margin-right: 296px; }
+.lp-tune-head { display: flex; align-items: center; justify-content: space-between; }
+.lp-tune-close { border: 0; background: none; font-size: 16px; line-height: 1; cursor: pointer; color: #555; }
+.lp-tune-hint { margin: 6px 0; color: #555; line-height: 1.4; }
+.lp-tune-grid { display: grid; grid-template-columns: 1fr 120px; gap: 5px 8px; align-items: center; margin: 8px 0; }
+.lp-tune-grid select, .lp-tune-number input { width: 100%; box-sizing: border-box; font: 12px sans-serif; }
+.lp-tune-number { display: flex; align-items: center; gap: 4px; }
+.lp-tune-number span { color: #777; width: 16px; }
+.lp-tune-readout { margin: 8px 0; color: #444; line-height: 1.4; }
+.lp-tune-actions { display: flex; gap: 8px; }
+.lp-tune-actions button { font: 12px sans-serif; padding: 3px 10px; cursor: pointer; }
+.lp-tune-actions button[disabled] { opacity: 0.5; cursor: default; }
 #lp-pages { display: none; }
 body:has(#lp-selectpdf:checked) #lp-rendered-root { display: none; }
 body:has(#lp-selectpdf:checked) #lp-pages { display: block; }
